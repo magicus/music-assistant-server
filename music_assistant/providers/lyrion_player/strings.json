@@ -1,0 +1,15 @@
+{
+  "config_entries": {
+    "lms_host": {
+      "label": "Lyrion host",
+      "description": "IP address or hostname of your Lyrion/LMS server."
+    },
+    "port": {
+      "label": "Lyrion JSON-RPC port",
+      "description": "Configured via Reconfigure flow."
+    }
+  },
+  "manifest": {
+    "description": "Control Lyrion/Logitech Media Server players from Music Assistant via LMS JSON-RPC."
+  }
+}

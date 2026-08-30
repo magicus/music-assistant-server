@@ -1,0 +1,11 @@
+{
+  "type": "music",
+  "domain": "lyrion_music",
+  "name": "Lyrion Music Library",
+  "stage": "experimental",
+  "description": "Expose a Lyrion/Logitech Media Server library to Music Assistant.",
+  "codeowners": ["@ihse"],
+  "requirements": [],
+  "documentation": "https://lyrion.org/reference/cli/jsonrpc/",
+  "multi_instance": true
+}

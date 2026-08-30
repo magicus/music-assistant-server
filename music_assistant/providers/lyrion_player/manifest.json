@@ -1,0 +1,11 @@
+{
+  "type": "player",
+  "domain": "lyrion_player",
+  "name": "Lyrion Players",
+  "stage": "experimental",
+  "description": "Control Lyrion/Logitech Media Server players from Music Assistant via LMS JSON-RPC.",
+  "codeowners": ["@ihse"],
+  "requirements": [],
+  "documentation": "https://lyrion.org/reference/cli/jsonrpc/",
+  "multi_instance": true
+}

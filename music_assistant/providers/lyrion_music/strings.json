@@ -1,0 +1,43 @@
+{
+  "config_entries": {
+    "lms_host": {
+      "label": "Lyrion host",
+      "description": "IP address or hostname of your Lyrion/LMS server."
+    },
+    "port": {
+      "label": "Lyrion JSON-RPC port",
+      "description": "Configured via Reconfigure flow."
+    },
+    "rotate_artwork_cache_token": {
+      "label": "Rotate artwork cache token",
+      "description": "Rotate Lyrion artwork cache token for this provider. Artwork refreshes on the next regular sync/scan."
+    }
+  },
+  "config_actions": {
+    "rotate_artwork_cache_token": {
+      "result": "Artwork cache token rotated. Artwork will refresh on the next regular sync/scan."
+    }
+  },
+  "media": {
+    "folder": {
+      "artists": {
+        "name": "Artist"
+      },
+      "albums": {
+        "name": "Album"
+      },
+      "tracks": {
+        "name": "Track"
+      },
+      "playlists": {
+        "name": "Playlist"
+      },
+      "genres": {
+        "name": "Genre"
+      }
+    }
+  },
+  "manifest": {
+    "description": "Expose a Lyrion/Logitech Media Server library to Music Assistant."
+  }
+}
