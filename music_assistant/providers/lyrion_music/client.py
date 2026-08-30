@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncGenerator, Iterable
 from dataclasses import dataclass
+from time import monotonic
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from aiohttp import ClientError, ClientTimeout
@@ -16,6 +17,7 @@ from . import artwork, parsers
 from .constants import (
     ALBUM_TAGS,
     ARTIST_TAGS,
+    ARTWORK_WORKER_COUNT,
     BATCH_LOOKUP_SIZE,
     BROWSE_PAGE_SIZE,
     CONF_LMS_HOST,
@@ -355,6 +357,7 @@ async def _decode_worker(
     raw_queue: asyncio.Queue[dict[str, Any] | object],
     decoded_queue: asyncio.Queue[Artist | Album | Track | object],
     stop_sentinel: object,
+    artwork_worker_count: int,
     error_box: list[Exception],
 ) -> None:
     try:
@@ -367,7 +370,8 @@ async def _decode_worker(
     except Exception as err:
         error_box.append(err)
     finally:
-        await decoded_queue.put(stop_sentinel)
+        for _ in range(artwork_worker_count):
+            await decoded_queue.put(stop_sentinel)
 
 
 async def _artwork_worker(
@@ -385,10 +389,29 @@ async def _artwork_worker(
                 break
             entity = cast("Artist | Album | Track", decoded)
             if spec.key in ("artist", "album"):
-                await artwork.ensure_preferred_artwork_size(
+                artwork_started = monotonic()
+                attempted_artwork_urls = await artwork.ensure_preferred_artwork_size(
                     provider,
                     cast("Artist | Album", entity),
                 )
+                artwork_elapsed_ms = (monotonic() - artwork_started) * 1000
+                provider.logger.debug(
+                    "Lyrion %s artwork validation <- id %s (%s) (elapsed: %.1f ms)",
+                    spec.key,
+                    entity.item_id,
+                    entity.name,
+                    artwork_elapsed_ms,
+                )
+                if artwork_elapsed_ms > 99 and attempted_artwork_urls:
+                    provider.logger.debug(
+                        "Lyrion %s artwork validation slow <- id %s (%s) "
+                        "(elapsed: %.1f ms) (urls: %s)",
+                        spec.key,
+                        entity.item_id,
+                        entity.name,
+                        artwork_elapsed_ms,
+                        " | ".join(attempted_artwork_urls),
+                    )
             await output_queue.put(entity)
     except Exception as err:
         error_box.append(err)
@@ -411,7 +434,10 @@ async def _iter_entities(
         raw_item = await _get_entity_data(provider, spec, ordered_ids[0])
         entity = await _decode_entity(provider, spec, raw_item)
         if spec.key in ("artist", "album"):
-            await artwork.ensure_preferred_artwork_size(provider, cast("Artist | Album", entity))
+            await artwork.ensure_preferred_artwork_size(
+                provider,
+                cast("Artist | Album", entity),
+            )
         yield entity
         return
 
@@ -420,23 +446,52 @@ async def _iter_entities(
     output_queue: asyncio.Queue[Artist | Album | Track | object] = asyncio.Queue(maxsize=2)
     stop_sentinel = object()
     error_box: list[Exception] = []
+    artwork_worker_count = max(1, ARTWORK_WORKER_COUNT)
+
+    provider.logger.debug(
+        "Lyrion %s artwork pipeline concurrency -> %s workers",
+        spec.key,
+        artwork_worker_count,
+    )
 
     tasks = [
         asyncio.create_task(
             _fetch_worker(provider, spec, ordered_ids, raw_queue, stop_sentinel, error_box)
         ),
         asyncio.create_task(
-            _decode_worker(provider, spec, raw_queue, decoded_queue, stop_sentinel, error_box)
-        ),
-        asyncio.create_task(
-            _artwork_worker(provider, spec, decoded_queue, output_queue, stop_sentinel, error_box)
+            _decode_worker(
+                provider,
+                spec,
+                raw_queue,
+                decoded_queue,
+                stop_sentinel,
+                artwork_worker_count,
+                error_box,
+            )
         ),
     ]
+    for _ in range(artwork_worker_count):
+        tasks.append(
+            asyncio.create_task(
+                _artwork_worker(
+                    provider,
+                    spec,
+                    decoded_queue,
+                    output_queue,
+                    stop_sentinel,
+                    error_box,
+                )
+            )
+        )
     try:
+        completed_workers = 0
         while True:
             item = await output_queue.get()
             if item is stop_sentinel:
-                break
+                completed_workers += 1
+                if completed_workers >= artwork_worker_count:
+                    break
+                continue
             if error_box:
                 raise error_box[0]
             yield cast("Artist | Album | Track", item)
@@ -469,22 +524,22 @@ async def _iter_raw_entities(
     item_ids: list[str],
 ) -> AsyncGenerator[dict[str, Any]]:
     """Yield raw LMS entities in request order, with optional batch fallback."""
+    total_items = len(item_ids)
     if len(item_ids) == 1:
         item_id = item_ids[0]
-        provider.logger.debug(
-            "Lyrion %s lookup request -> id %s",
-            spec.key,
-            item_id,
-        )
+        _log_lookup_request(provider, spec, item_id, item_index=1, total_items=total_items)
+        request_started = monotonic()
         result = await rpc_request(
             provider, player_id="", command=_create_lookup_command(spec, item_ids)
         )
+        request_elapsed_ms = (monotonic() - request_started) * 1000
         for raw_item in _split_lookup_reply(spec, result, item_ids):
             _log_lookup_response(
                 provider,
                 spec,
                 raw_item,
                 requested_id=item_id,
+                request_elapsed_ms=request_elapsed_ms,
             )
             yield raw_item
         return
@@ -506,45 +561,89 @@ async def _iter_raw_entities(
 
     try:
         if use_batch:
+            processed_items = 0
             for chunk in _chunked(item_ids, BATCH_LOOKUP_SIZE):
+                chunk_start = processed_items + 1
+                chunk_end = processed_items + len(chunk)
                 provider.logger.debug(
-                    "Lyrion %s lookup request -> %s ids (%s ... %s)",
+                    "Lyrion %s lookup request -> batch %s-%s/%s (%s ids)",
                     spec.key,
+                    chunk_start,
+                    chunk_end,
+                    total_items,
                     len(chunk),
-                    chunk[0],
-                    chunk[-1],
                 )
+                for index_offset, item_id in enumerate(chunk, start=chunk_start):
+                    _log_lookup_request(
+                        provider,
+                        spec,
+                        item_id,
+                        item_index=index_offset,
+                        total_items=total_items,
+                    )
+                request_started = monotonic()
                 result = await rpc_request(
                     provider,
                     player_id="",
                     command=_create_lookup_command(spec, chunk),
                 )
-                for raw_item in _split_lookup_reply(spec, result, chunk):
-                    _log_lookup_response(provider, spec, raw_item)
+                request_elapsed_ms = (monotonic() - request_started) * 1000
+                for _index_offset, raw_item in enumerate(
+                    _split_lookup_reply(spec, result, chunk),
+                    start=chunk_start,
+                ):
+                    _log_lookup_response(
+                        provider,
+                        spec,
+                        raw_item,
+                        request_elapsed_ms=request_elapsed_ms,
+                    )
                     yield raw_item
+                processed_items += len(chunk)
             return
     except (ProviderUnavailableError, ValueError) as err:
         _disable_batch_lookup(provider, spec, err)
 
-    for item_id in item_ids:
-        provider.logger.debug(
-            "Lyrion %s lookup request -> id %s",
-            spec.key,
+    for item_index, item_id in enumerate(item_ids, start=1):
+        _log_lookup_request(
+            provider,
+            spec,
             item_id,
+            item_index=item_index,
+            total_items=total_items,
         )
+        request_started = monotonic()
         result = await rpc_request(
             provider,
             player_id="",
             command=_create_lookup_command(spec, [item_id]),
         )
+        request_elapsed_ms = (monotonic() - request_started) * 1000
         for raw_item in _split_lookup_reply(spec, result, [item_id]):
             _log_lookup_response(
                 provider,
                 spec,
                 raw_item,
                 requested_id=item_id,
+                request_elapsed_ms=request_elapsed_ms,
             )
             yield raw_item
+
+
+def _log_lookup_request(
+    provider: LyrionMusicProvider,
+    spec: LmsEntitySpec,
+    item_id: str,
+    item_index: int,
+    total_items: int,
+) -> None:
+    """Log one lookup request line with progress details."""
+    provider.logger.debug(
+        "Lyrion %s lookup request -> id %s (%s)",
+        spec.key,
+        item_id,
+        _format_lookup_progress(item_index, total_items),
+    )
 
 
 def _log_lookup_response(
@@ -552,6 +651,7 @@ def _log_lookup_response(
     spec: LmsEntitySpec,
     raw_item: dict[str, Any],
     requested_id: str | None = None,
+    request_elapsed_ms: float | None = None,
 ) -> None:
     """Log one lookup response line with id and best-effort display name."""
     response_id = parsers.extract_item_id(raw_item, id_keys=spec.id_keys) or requested_id
@@ -563,12 +663,25 @@ def _log_lookup_response(
         name = str(raw_item.get("album") or raw_item.get("title") or response_id)
     else:
         name = str(raw_item.get("title") or raw_item.get("track") or response_id)
+    timing_str = ""
+    if request_elapsed_ms is not None:
+        timing_str = f" (rpc: {request_elapsed_ms:.1f} ms)"
+
     provider.logger.debug(
-        "Lyrion %s lookup response <- id %s (%s)",
+        "Lyrion %s lookup response <- id %s (%s)%s",
         spec.key,
         response_id,
         name,
+        timing_str,
     )
+
+
+def _format_lookup_progress(item_index: int, total_items: int) -> str:
+    """Format lookup progress as item counters plus percentage."""
+    if total_items <= 0:
+        return "progress: unknown"
+    progress_pct = (item_index / total_items) * 100
+    return f"item {item_index}/{total_items}, progress: {progress_pct:.1f}%"
 
 
 def _create_lookup_command(spec: LmsEntitySpec, item_ids: list[str]) -> list[Any]:

@@ -12,7 +12,11 @@ from music_assistant_models.errors import ProviderUnavailableError
 from music_assistant_models.media_items import UniqueList
 
 from . import parsers
-from .constants import CONF_ARTWORK_CACHE_BUSTER, RPC_TIMEOUT
+from .constants import (
+    ARTWORK_VALIDATION_TIMEOUT,
+    CONF_ARTWORK_CACHE_BUSTER,
+    RPC_TIMEOUT,
+)
 
 if TYPE_CHECKING:
     from music_assistant_models.media_items import Album, Artist
@@ -47,29 +51,34 @@ async def build_album(provider: LyrionMusicProvider, raw_album: dict[str, Any]) 
 
 async def ensure_preferred_artwork_size(
     provider: LyrionMusicProvider, item: Artist | Album
-) -> None:
+) -> tuple[str, ...]:
     """Resolve album or artist artwork by trying 600 first, then 300."""
+    attempted_urls: list[str] = []
     if not item.metadata.images:
-        return
+        return ()
     thumb_image = next(
         (img for img in item.metadata.images if img.type == ImageType.THUMB),
         None,
     )
     if thumb_image is None:
-        return
-    if await fetch_remote_image_if_ok(provider, thumb_image.path):
-        return
+        return ()
+    attempted_urls.append(thumb_image.path)
+    if await probe_remote_image(provider, thumb_image.path):
+        return tuple(attempted_urls)
     fallback_url = thumb_image.path.replace("600x600", "300x300")
-    if fallback_url != thumb_image.path and await fetch_remote_image_if_ok(provider, fallback_url):
+    if fallback_url != thumb_image.path:
+        attempted_urls.append(fallback_url)
+    if fallback_url != thumb_image.path and await probe_remote_image(provider, fallback_url):
         new_image = dataclasses.replace(thumb_image, path=fallback_url)
         item.metadata.images = UniqueList(
             new_image if img is thumb_image else img for img in (item.metadata.images or [])
         )
-        return
+        return tuple(attempted_urls)
     # Both URLs unreachable — drop the broken entry rather than storing it
     item.metadata.images = UniqueList(
         img for img in (item.metadata.images or []) if img is not thumb_image
     )
+    return tuple(attempted_urls)
 
 
 def extract_artwork_url(
@@ -190,6 +199,21 @@ async def fetch_remote_image_if_ok(provider: LyrionMusicProvider, url: str) -> b
             return data or None
     except TimeoutError, ClientError:
         return None
+
+
+async def probe_remote_image(provider: LyrionMusicProvider, url: str) -> bool:
+    """Check if a remote image endpoint is reachable without downloading payload bytes."""
+    try:
+        async with provider.mass.http_session.get(
+            url,
+            timeout=ClientTimeout(total=ARTWORK_VALIDATION_TIMEOUT),
+        ) as response:
+            if response.status != 200:
+                return False
+            content_type = response.headers.get("Content-Type", "")
+            return "image/" in content_type.lower()
+    except TimeoutError, ClientError:
+        return False
 
 
 def get_thumb_path(item: Artist | Album) -> str | None:

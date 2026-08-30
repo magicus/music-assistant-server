@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, Sequence
+from collections.abc import AsyncGenerator, Callable, Sequence
 from time import time_ns
 from typing import Any, cast
 from urllib.parse import quote, unquote
 
 from music_assistant_models.config_entries import ConfigActionResult, ConfigEntry
-from music_assistant_models.enums import ConfigEntryType, ContentType, MediaType, StreamType
+from music_assistant_models.enums import (
+    ConfigEntryType,
+    ContentType,
+    EventType,
+    MediaType,
+    StreamType,
+)
 from music_assistant_models.errors import (
     MediaNotFoundError,
     ProviderUnavailableError,
@@ -46,6 +52,7 @@ class LyrionMusicProvider(MusicProvider):
     """Music provider that reads catalog metadata from a Lyrion/LMS server."""
 
     _disabled_batch_lookup_keys: set[str]
+    _unsubscribe_music_sync_completed: Callable[[], None] | None
 
     @property
     def is_streaming_provider(self) -> bool:
@@ -136,6 +143,7 @@ class LyrionMusicProvider(MusicProvider):
     async def handle_async_init(self) -> None:
         """Validate the configured Lyrion endpoint."""
         self._disabled_batch_lookup_keys = set()
+        self._unsubscribe_music_sync_completed = None
         host = self._get_configured_host()
         port = self._get_configured_port()
         if not host:
@@ -159,6 +167,21 @@ class LyrionMusicProvider(MusicProvider):
                 err,
             )
             raise SetupFailedError(str(err)) from err
+
+    async def loaded_in_mass(self) -> None:
+        """Subscribe to sync-completed events once provider is active."""
+        await super().loaded_in_mass()
+        self._unsubscribe_music_sync_completed = self.mass.subscribe(
+            self._on_music_sync_completed,
+            EventType.MUSIC_SYNC_COMPLETED,
+        )
+
+    async def unload(self, is_removed: bool = False) -> None:
+        """Cleanup event subscriptions on provider unload."""
+        if self._unsubscribe_music_sync_completed is not None:
+            self._unsubscribe_music_sync_completed()
+            self._unsubscribe_music_sync_completed = None
+        await super().unload(is_removed)
 
     async def search(
         self,
@@ -445,6 +468,14 @@ class LyrionMusicProvider(MusicProvider):
         """Sync library tracks using shared Lyrion sync engine."""
         return await sync.sync_library_tracks(self)
 
+    async def _sync_artist_artwork_from_library(self) -> None:
+        """Backfill artist artwork for Lyrion-mapped library items."""
+        await sync.sync_artist_artwork_from_library(self)
+
+    async def _sync_album_artwork_from_library(self) -> None:
+        """Backfill album artwork for Lyrion-mapped library items."""
+        await sync.sync_album_artwork_from_library(self)
+
     @use_cache(ITEM_CACHE_TTL, allow_expired_cache=True)
     async def _get_track_data(self, track_id: str) -> dict[str, Any]:
         """Get track payload from LMS."""
@@ -460,3 +491,38 @@ class LyrionMusicProvider(MusicProvider):
     ) -> int | None:
         """Return configured port from setup data with config fallback."""
         return client.get_configured_port(self, default)
+
+    def _on_music_sync_completed(self, _event: Any) -> None:
+        """Queue artwork backfill tasks once all global music sync tasks are done."""
+        if self.unloading:
+            return
+        task_domain = "lyrion_artwork_sync"
+        self.mass.tasks.run_background_task(
+            task_id=f"{self.instance_id}_album_artwork_sync",
+            name=f"Sync {self.name} album artwork",
+            handler=self._sync_album_artwork_from_library,
+            translation_owner=self.translation_owner,
+            metadata={
+                "task_domain": task_domain,
+                "provider_domain": self.domain,
+                "provider_instance": self.instance_id,
+                "provider_name": self.name,
+                "media_type": MediaType.ALBUM.value,
+            },
+            allow_retry=True,
+            priority=True,
+        )
+        self.mass.tasks.run_background_task(
+            task_id=f"{self.instance_id}_artist_artwork_sync",
+            name=f"Sync {self.name} artist artwork",
+            handler=self._sync_artist_artwork_from_library,
+            translation_owner=self.translation_owner,
+            metadata={
+                "task_domain": task_domain,
+                "provider_domain": self.domain,
+                "provider_instance": self.instance_id,
+                "provider_name": self.name,
+                "media_type": MediaType.ARTIST.value,
+            },
+            allow_retry=True,
+        )

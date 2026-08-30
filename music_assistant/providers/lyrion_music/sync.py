@@ -5,17 +5,26 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from music_assistant_models.enums import MediaType
-from music_assistant_models.errors import MediaNotFoundError
+from music_assistant_models.errors import MediaNotFoundError, ProviderUnavailableError
+from music_assistant_models.media_items import Album, Artist, Track
+
+from music_assistant.controllers.tasks import (
+    report_current_task_failure,
+    update_current_task_progress_from_index,
+    update_current_task_progress_text,
+)
 
 from . import parsers
 
 if TYPE_CHECKING:
-    from music_assistant_models.media_items import Album, Artist, Track
-
+    from music_assistant.controllers.music.media.base import MediaControllerBase
     from music_assistant.providers.lyrion_music.provider import LyrionMusicProvider
+
+
+ArtworkItem = TypeVar("ArtworkItem", Artist, Album)
 
 
 ExtraNeedsUpdateFn = Callable[["LyrionMusicProvider", Any, Any], Awaitable[bool]]
@@ -134,6 +143,94 @@ async def sync_library_albums(provider: LyrionMusicProvider) -> set[int]:
 async def sync_library_tracks(provider: LyrionMusicProvider) -> set[int]:
     """Sync library tracks with the same generic sync engine."""
     return await _sync_library_entities(provider, TRACK_SYNC_SPEC)
+
+
+async def sync_artist_artwork_from_library(provider: LyrionMusicProvider) -> None:
+    """Refresh artist artwork for this provider based on MA library rows."""
+    await _sync_library_artwork(
+        provider,
+        media_type=MediaType.ARTIST,
+        controller=provider.mass.music.artists,
+        fetch_item=provider.get_artist,
+        needs_update=parsers.artist_metadata_needs_update,
+    )
+
+
+async def sync_album_artwork_from_library(provider: LyrionMusicProvider) -> None:
+    """Refresh album artwork for this provider based on MA library rows."""
+    await _sync_library_artwork(
+        provider,
+        media_type=MediaType.ALBUM,
+        controller=provider.mass.music.albums,
+        fetch_item=provider.get_album,
+        needs_update=parsers.album_metadata_needs_update,
+    )
+
+
+async def _sync_library_artwork(
+    provider: LyrionMusicProvider,
+    media_type: MediaType,
+    controller: MediaControllerBase[ArtworkItem],
+    fetch_item: Callable[[str], Awaitable[ArtworkItem]],
+    needs_update: Callable[[ArtworkItem, ArtworkItem], bool],
+) -> None:
+    """Backfill artwork by reloading provider items for mapped MA library entries."""
+    library_items = [
+        item async for item in controller.iter_library_items(provider=provider.instance_id)
+    ]
+    total_items = len(library_items)
+    if total_items == 0:
+        update_current_task_progress_text(f"No {media_type.value}s to backfill artwork for")
+        return
+
+    updated_items = 0
+    skipped_items = 0
+    for item_index, library_item in enumerate(library_items, 1):
+        update_current_task_progress_from_index(
+            item_index,
+            total_items,
+            f"Refreshing {media_type.value} artwork {item_index}/{total_items}: {library_item.name}",
+        )
+        provider_item_id = _resolve_provider_item_id(provider, library_item)
+        if provider_item_id is None:
+            skipped_items += 1
+            continue
+        try:
+            provider_item = await fetch_item(provider_item_id)
+            if not needs_update(library_item, provider_item):
+                continue
+            await controller.update_item_in_library(int(library_item.item_id), provider_item)
+            updated_items += 1
+        except (MediaNotFoundError, ProviderUnavailableError, ValueError) as err:
+            skipped_items += 1
+            provider.logger.warning(
+                "Skipping %s artwork refresh for %s (%s): %s",
+                media_type.value,
+                library_item.item_id,
+                library_item.name,
+                err,
+            )
+            report_current_task_failure(
+                f"Failed {media_type.value} {library_item.item_id} ({library_item.name}): {err}"
+            )
+
+    update_current_task_progress_text(
+        f"Artwork refresh done: updated {updated_items}/{total_items}, skipped {skipped_items}"
+    )
+
+
+def _resolve_provider_item_id(
+    provider: LyrionMusicProvider,
+    library_item: ArtworkItem,
+) -> str | None:
+    """Resolve provider item id for this provider from a library item mapping."""
+    for mapping in library_item.provider_mappings:
+        if mapping.provider_instance == provider.instance_id and mapping.in_library:
+            return mapping.item_id
+    for mapping in library_item.provider_mappings:
+        if mapping.provider_domain == provider.domain and mapping.in_library:
+            return mapping.item_id
+    return None
 
 
 async def _sync_library_entities(provider: LyrionMusicProvider, spec: SyncSpec) -> set[int]:
