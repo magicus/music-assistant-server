@@ -41,6 +41,12 @@
       },
       "genres": {
         "name": "Genre"
+      },
+      "next_page": {
+        "name": "Next Page"
+      },
+      "previous_page": {
+        "name": "Previous Page"
       }
     }
   },

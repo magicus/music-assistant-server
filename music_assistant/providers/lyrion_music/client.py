@@ -102,6 +102,119 @@ async def get_all_tracks(provider: LyrionMusicProvider) -> list[Track]:
     return [track async for track in iter_library_tracks(provider)]
 
 
+async def get_artists_page(
+    provider: LyrionMusicProvider,
+    offset: int = 0,
+    limit: int = BROWSE_PAGE_SIZE,
+) -> tuple[list[Artist], bool]:
+    """Return one paginated artist page from LMS plus a has-more flag."""
+    raw_artists, has_more = await _get_entity_page(
+        provider,
+        spec=ARTIST_SPEC,
+        offset=offset,
+        limit=limit,
+    )
+    artists: list[Artist] = []
+    for raw_artist in raw_artists:
+        try:
+            artists.append(parsers.parse_artist(provider, raw_artist))
+        except MediaNotFoundError:
+            continue
+    return artists, has_more
+
+
+async def get_albums_page(
+    provider: LyrionMusicProvider,
+    filter_value: str | None = None,
+    offset: int = 0,
+    limit: int = BROWSE_PAGE_SIZE,
+) -> tuple[list[Album], bool]:
+    """Return one paginated album page from LMS plus a has-more flag."""
+    raw_albums, has_more = await _get_entity_page(
+        provider,
+        spec=ALBUM_SPEC,
+        offset=offset,
+        limit=limit,
+        filter_value=filter_value,
+    )
+    albums: list[Album] = []
+    for raw_album in raw_albums:
+        try:
+            albums.append(parsers.parse_album(provider, raw_album))
+        except MediaNotFoundError:
+            continue
+    return albums, has_more
+
+
+async def get_tracks_page(
+    provider: LyrionMusicProvider,
+    filter_value: str | None = None,
+    offset: int = 0,
+    limit: int = BROWSE_PAGE_SIZE,
+) -> tuple[list[Track], bool]:
+    """Return one paginated track page from LMS plus a has-more flag."""
+    raw_tracks, has_more = await _get_entity_page(
+        provider,
+        spec=TRACK_SPEC,
+        offset=offset,
+        limit=limit,
+        filter_value=filter_value,
+    )
+    tracks: list[Track] = []
+    for raw_track in raw_tracks:
+        try:
+            tracks.append(parsers.parse_track(provider, raw_track))
+        except MediaNotFoundError:
+            continue
+    return tracks, has_more
+
+
+async def get_playlists_page(
+    provider: LyrionMusicProvider,
+    offset: int = 0,
+    limit: int = BROWSE_PAGE_SIZE,
+) -> tuple[list[dict[str, str]], bool]:
+    """Return one paginated playlist page from LMS plus a has-more flag."""
+    raw_playlists, has_more = await _get_simple_browse_page(
+        provider,
+        command="playlists",
+        loop_key="playlists_loop",
+        offset=offset,
+        limit=limit,
+    )
+    playlists: list[dict[str, str]] = []
+    for raw_playlist in raw_playlists:
+        playlist_id = parsers.extract_item_id(raw_playlist, id_keys=("id", "playlist_id"))
+        if playlist_id is None:
+            continue
+        playlist_name = str(raw_playlist.get("playlist") or raw_playlist.get("name") or playlist_id)
+        playlists.append({"id": playlist_id, "name": playlist_name})
+    return playlists, has_more
+
+
+async def get_genres_page(
+    provider: LyrionMusicProvider,
+    offset: int = 0,
+    limit: int = BROWSE_PAGE_SIZE,
+) -> tuple[list[dict[str, str]], bool]:
+    """Return one paginated genre page from LMS plus a has-more flag."""
+    raw_genres, has_more = await _get_simple_browse_page(
+        provider,
+        command="genres",
+        loop_key="genres_loop",
+        offset=offset,
+        limit=limit,
+    )
+    genres: list[dict[str, str]] = []
+    for raw_genre in raw_genres:
+        genre_id = parsers.extract_item_id(raw_genre, id_keys=("id", "genre_id"))
+        if genre_id is None:
+            continue
+        genre_name = str(raw_genre.get("genre") or raw_genre.get("name") or genre_id)
+        genres.append({"id": genre_id, "name": genre_name})
+    return genres, has_more
+
+
 async def iter_library_artists(provider: LyrionMusicProvider) -> AsyncGenerator[Artist]:
     """Yield artists from LMS incrementally for library sync."""
     async for artist in _iter_entities(
@@ -143,23 +256,11 @@ async def get_all_playlists(provider: LyrionMusicProvider) -> list[dict[str, str
     playlists: list[dict[str, str]] = []
     offset = 0
     while True:
-        result = await rpc_request(
-            provider,
-            player_id="",
-            command=["playlists", offset, BROWSE_PAGE_SIZE],
-        )
-        raw_playlists = cast("list[dict[str, Any]]", result.get("playlists_loop", []))
-        if not raw_playlists:
+        page, has_more = await get_playlists_page(provider, offset=offset)
+        if not page:
             break
-        for raw_playlist in raw_playlists:
-            playlist_id = parsers.extract_item_id(raw_playlist, id_keys=("id", "playlist_id"))
-            if playlist_id is None:
-                continue
-            playlist_name = str(
-                raw_playlist.get("playlist") or raw_playlist.get("name") or playlist_id
-            )
-            playlists.append({"id": playlist_id, "name": playlist_name})
-        if len(raw_playlists) < BROWSE_PAGE_SIZE:
+        playlists.extend(page)
+        if not has_more:
             break
         offset += BROWSE_PAGE_SIZE
     return playlists
@@ -298,24 +399,61 @@ async def get_all_genres(provider: LyrionMusicProvider) -> list[dict[str, str]]:
     genres: list[dict[str, str]] = []
     offset = 0
     while True:
-        result = await rpc_request(
-            provider,
-            player_id="",
-            command=["genres", offset, BROWSE_PAGE_SIZE],
-        )
-        raw_genres = cast("list[dict[str, Any]]", result.get("genres_loop", []))
-        if not raw_genres:
+        page, has_more = await get_genres_page(provider, offset=offset)
+        if not page:
             break
-        for raw_genre in raw_genres:
-            genre_id = parsers.extract_item_id(raw_genre, id_keys=("id", "genre_id"))
-            if genre_id is None:
-                continue
-            genre_name = str(raw_genre.get("genre") or raw_genre.get("name") or genre_id)
-            genres.append({"id": genre_id, "name": genre_name})
-        if len(raw_genres) < BROWSE_PAGE_SIZE:
+        genres.extend(page)
+        if not has_more:
             break
         offset += BROWSE_PAGE_SIZE
     return genres
+
+
+async def _get_entity_page(
+    provider: LyrionMusicProvider,
+    spec: LmsEntitySpec,
+    offset: int,
+    limit: int,
+    filter_value: str | None = None,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Return one paged entity response rowset with has-more metadata."""
+    command: list[Any] = [spec.command, offset, limit, spec.tags]
+    if filter_value:
+        command.append(filter_value)
+    result = await rpc_request(
+        provider,
+        player_id="",
+        command=command,
+    )
+    raw_items = cast("list[dict[str, Any]]", result.get(spec.loop_key, []))
+    expected_total = _extract_browse_total_count(result)
+    if expected_total is not None:
+        has_more = offset + len(raw_items) < expected_total
+    else:
+        has_more = len(raw_items) >= limit
+    return raw_items, has_more
+
+
+async def _get_simple_browse_page(
+    provider: LyrionMusicProvider,
+    command: str,
+    loop_key: str,
+    offset: int,
+    limit: int,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Return one paged simple browse response (playlists/genres)."""
+    result = await rpc_request(
+        provider,
+        player_id="",
+        command=[command, offset, limit],
+    )
+    raw_items = cast("list[dict[str, Any]]", result.get(loop_key, []))
+    expected_total = _extract_browse_total_count(result)
+    if expected_total is not None:
+        has_more = offset + len(raw_items) < expected_total
+    else:
+        has_more = len(raw_items) >= limit
+    return raw_items, has_more
 
 
 async def search_artists(provider: LyrionMusicProvider, query: str, limit: int) -> list[Artist]:
