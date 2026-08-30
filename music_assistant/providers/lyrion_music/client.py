@@ -14,7 +14,7 @@ from music_assistant_models.errors import MediaNotFoundError, ProviderUnavailabl
 from music_assistant.constants import VERBOSE_LOG_LEVEL
 from music_assistant.controllers.tasks import (
     get_current_task,
-    update_current_task_progress_from_index,
+    update_current_task_progress,
     update_current_task_progress_text,
 )
 
@@ -255,8 +255,13 @@ async def _get_browse_ids(
             seen.add(item_id)
             ids.append(item_id)
         if expected_total:
-            update_current_task_progress_text(
-                f"Getting {spec.key} ids from Lyrion: {len(ids)}/{expected_total}"
+            progress_text = f"Getting {spec.key} ids from Lyrion: {len(ids)}/{expected_total}"
+            update_current_task_progress_text(progress_text)
+            _update_weighted_sync_progress(
+                phase="id_discovery",
+                current=len(ids),
+                total=expected_total,
+                text=progress_text,
             )
         else:
             update_current_task_progress_text(
@@ -269,6 +274,12 @@ async def _get_browse_ids(
         "Lyrion %s id discovery <- %s ids",
         spec.key,
         len(ids),
+    )
+    _update_weighted_sync_progress(
+        phase="id_discovery",
+        current=1,
+        total=1,
+        text=f"Getting {spec.key} ids from Lyrion: done ({len(ids)})",
     )
     return ids
 
@@ -550,10 +561,12 @@ async def _iter_raw_entities(
         request_elapsed_ms = (monotonic() - request_started) * 1000
         for raw_item in _split_lookup_reply(spec, result, item_ids):
             if _should_report_lookup_progress():
-                update_current_task_progress_from_index(
-                    1,
-                    total_items,
-                    f"Fetching {spec.key}s from Lyrion: 1/{total_items}",
+                fetch_text = f"Fetching {spec.key}s from Lyrion: 1/{total_items}"
+                _update_weighted_sync_progress(
+                    phase="entity_fetch",
+                    current=1,
+                    total=total_items,
+                    text=fetch_text,
                 )
             _log_lookup_response(
                 provider,
@@ -614,10 +627,14 @@ async def _iter_raw_entities(
                     start=chunk_start,
                 ):
                     if _should_report_lookup_progress():
-                        update_current_task_progress_from_index(
-                            index_offset,
-                            total_items,
-                            f"Fetching {spec.key}s from Lyrion: {index_offset}/{total_items}",
+                        fetch_text = (
+                            f"Fetching {spec.key}s from Lyrion: {index_offset}/{total_items}"
+                        )
+                        _update_weighted_sync_progress(
+                            phase="entity_fetch",
+                            current=index_offset,
+                            total=total_items,
+                            text=fetch_text,
                         )
                     _log_lookup_response(
                         provider,
@@ -648,10 +665,12 @@ async def _iter_raw_entities(
         request_elapsed_ms = (monotonic() - request_started) * 1000
         for raw_item in _split_lookup_reply(spec, result, [item_id]):
             if _should_report_lookup_progress():
-                update_current_task_progress_from_index(
-                    item_index,
-                    total_items,
-                    f"Fetching {spec.key}s from Lyrion: {item_index}/{total_items}",
+                fetch_text = f"Fetching {spec.key}s from Lyrion: {item_index}/{total_items}"
+                _update_weighted_sync_progress(
+                    phase="entity_fetch",
+                    current=item_index,
+                    total=total_items,
+                    text=fetch_text,
                 )
             _log_lookup_response(
                 provider,
@@ -668,6 +687,23 @@ def _should_report_lookup_progress() -> bool:
     if not (task := get_current_task()):
         return True
     return task.metadata.get("task_domain") != "lyrion_artwork_sync"
+
+
+def _update_weighted_sync_progress(
+    phase: Literal["id_discovery", "entity_fetch"],
+    current: int,
+    total: int,
+    text: str | None = None,
+) -> None:
+    """Map sync progress across phases: ids=0..50%, fetch=50..100%."""
+    if not _should_report_lookup_progress():
+        return
+    if total <= 0:
+        return
+
+    ratio = max(0.0, min(1.0, current / total))
+    progress = int(ratio * 50) if phase == "id_discovery" else 50 + int(ratio * 50)
+    update_current_task_progress(min(100, max(0, progress)), text)
 
 
 def _log_lookup_request(

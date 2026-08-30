@@ -182,6 +182,8 @@ async def _sync_library_artwork(
 
     updated_items = 0
     skipped_items = 0
+    skipped_missing_mapping = 0
+    skipped_missing_details = 0
     for item_index, library_item in enumerate(library_items, 1):
         provider.logger.debug(
             "Lyrion %s artwork backfill progress -> item %s/%s (%s)",
@@ -198,15 +200,19 @@ async def _sync_library_artwork(
         mapping = _resolve_provider_mapping(provider, library_item)
         if mapping is None:
             skipped_items += 1
+            skipped_missing_mapping += 1
             continue
         try:
             provider_item = deepcopy(library_item)
             artwork_url = _extract_artwork_url_from_mapping(provider, media_type, mapping)
             if artwork_url is None:
                 skipped_items += 1
-                report_current_task_failure(
-                    f"Skipped {media_type.value} {library_item.item_id} ({library_item.name}): "
-                    "missing artwork details in provider mapping"
+                skipped_missing_details += 1
+                provider.logger.debug(
+                    "Skipping %s artwork refresh for %s (%s): missing artwork details in provider mapping",
+                    media_type.value,
+                    library_item.item_id,
+                    library_item.name,
                 )
                 continue
             old_thumb = artwork.get_thumb_path(provider_item)
@@ -251,7 +257,11 @@ async def _sync_library_artwork(
             )
 
     update_current_task_progress_text(
-        f"Artwork refresh done: updated {updated_items}/{total_items}, skipped {skipped_items}"
+        "Artwork refresh done: "
+        f"updated {updated_items}/{total_items}, "
+        f"skipped {skipped_items} "
+        f"(missing mapping: {skipped_missing_mapping}, "
+        f"missing details: {skipped_missing_details})"
     )
 
 
