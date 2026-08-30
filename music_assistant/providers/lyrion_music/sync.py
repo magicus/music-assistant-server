@@ -10,16 +10,16 @@ from typing import TYPE_CHECKING, Any
 from music_assistant_models.enums import MediaType
 from music_assistant_models.errors import MediaNotFoundError
 
-from music_assistant.providers.lyrion_music.provider import LyrionMusicProvider
-
 from . import parsers
 
 if TYPE_CHECKING:
     from music_assistant_models.media_items import Album, Artist, Track
 
+    from music_assistant.providers.lyrion_music.provider import LyrionMusicProvider
 
-ExtraNeedsUpdateFn = Callable[[LyrionMusicProvider, Any, Any], Awaitable[bool]]
-PostItemSyncFn = Callable[[LyrionMusicProvider, Any], Awaitable[None]]
+
+ExtraNeedsUpdateFn = Callable[["LyrionMusicProvider", Any, Any], Awaitable[bool]]
+PostItemSyncFn = Callable[["LyrionMusicProvider", Any], Awaitable[None]]
 
 
 @dataclass(slots=True)

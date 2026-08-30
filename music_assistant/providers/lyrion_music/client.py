@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from aiohttp import ClientError, ClientTimeout
 from music_assistant_models.errors import MediaNotFoundError, ProviderUnavailableError
 
+from music_assistant.constants import VERBOSE_LOG_LEVEL
+
 from . import artwork, parsers
 from .constants import (
     ALBUM_TAGS,
@@ -199,6 +201,12 @@ async def _get_browse_ids(
     filter_value: str | None = None,
 ) -> list[str]:
     """Return ids for one LMS entity using paged browse requests."""
+    provider.logger.debug(
+        "Lyrion %s id discovery -> command %s (filter: %s)",
+        spec.key,
+        spec.command,
+        filter_value or "none",
+    )
     ids: list[str] = []
     seen: set[str] = set()
     offset = 0
@@ -220,6 +228,11 @@ async def _get_browse_ids(
         if len(raw_items) < BROWSE_PAGE_SIZE:
             break
         offset += BROWSE_PAGE_SIZE
+    provider.logger.debug(
+        "Lyrion %s id discovery <- %s ids",
+        spec.key,
+        len(ids),
+    )
     return ids
 
 
@@ -457,10 +470,22 @@ async def _iter_raw_entities(
 ) -> AsyncGenerator[dict[str, Any]]:
     """Yield raw LMS entities in request order, with optional batch fallback."""
     if len(item_ids) == 1:
+        item_id = item_ids[0]
+        provider.logger.debug(
+            "Lyrion %s lookup request -> id %s",
+            spec.key,
+            item_id,
+        )
         result = await rpc_request(
             provider, player_id="", command=_create_lookup_command(spec, item_ids)
         )
         for raw_item in _split_lookup_reply(spec, result, item_ids):
+            _log_lookup_response(
+                provider,
+                spec,
+                raw_item,
+                requested_id=item_id,
+            )
             yield raw_item
         return
 
@@ -482,25 +507,68 @@ async def _iter_raw_entities(
     try:
         if use_batch:
             for chunk in _chunked(item_ids, BATCH_LOOKUP_SIZE):
+                provider.logger.debug(
+                    "Lyrion %s lookup request -> %s ids (%s ... %s)",
+                    spec.key,
+                    len(chunk),
+                    chunk[0],
+                    chunk[-1],
+                )
                 result = await rpc_request(
                     provider,
                     player_id="",
                     command=_create_lookup_command(spec, chunk),
                 )
                 for raw_item in _split_lookup_reply(spec, result, chunk):
+                    _log_lookup_response(provider, spec, raw_item)
                     yield raw_item
             return
     except (ProviderUnavailableError, ValueError) as err:
         _disable_batch_lookup(provider, spec, err)
 
     for item_id in item_ids:
+        provider.logger.debug(
+            "Lyrion %s lookup request -> id %s",
+            spec.key,
+            item_id,
+        )
         result = await rpc_request(
             provider,
             player_id="",
             command=_create_lookup_command(spec, [item_id]),
         )
         for raw_item in _split_lookup_reply(spec, result, [item_id]):
+            _log_lookup_response(
+                provider,
+                spec,
+                raw_item,
+                requested_id=item_id,
+            )
             yield raw_item
+
+
+def _log_lookup_response(
+    provider: LyrionMusicProvider,
+    spec: LmsEntitySpec,
+    raw_item: dict[str, Any],
+    requested_id: str | None = None,
+) -> None:
+    """Log one lookup response line with id and best-effort display name."""
+    response_id = parsers.extract_item_id(raw_item, id_keys=spec.id_keys) or requested_id
+    if response_id is None:
+        response_id = "unknown"
+    if spec.key == "artist":
+        name = str(raw_item.get("artist") or raw_item.get("name") or response_id)
+    elif spec.key == "album":
+        name = str(raw_item.get("album") or raw_item.get("title") or response_id)
+    else:
+        name = str(raw_item.get("title") or raw_item.get("track") or response_id)
+    provider.logger.debug(
+        "Lyrion %s lookup response <- id %s (%s)",
+        spec.key,
+        response_id,
+        name,
+    )
 
 
 def _create_lookup_command(spec: LmsEntitySpec, item_ids: list[str]) -> list[Any]:
@@ -605,7 +673,13 @@ async def rpc_request(
         "params": [player_id, command],
     }
     url = f"http://{host}:{port}/jsonrpc.js"
-    provider.logger.debug("Lyrion RPC %s -> %s:%s", command[0], host, port)
+    provider.logger.log(
+        VERBOSE_LOG_LEVEL,
+        "Lyrion RPC %s -> %s:%s",
+        command[0],
+        host,
+        port,
+    )
 
     try:
         async with provider.mass.http_session.post(
