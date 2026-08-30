@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncGenerator, Awaitable, Callable
+from copy import deepcopy
 from dataclasses import dataclass
+from time import monotonic
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from music_assistant_models.enums import MediaType
-from music_assistant_models.errors import MediaNotFoundError, ProviderUnavailableError
-from music_assistant_models.media_items import Album, Artist, Track
+from music_assistant_models.errors import MediaNotFoundError
+from music_assistant_models.media_items import Album, Artist, ProviderMapping, Track
 
 from music_assistant.controllers.tasks import (
     report_current_task_failure,
@@ -17,7 +20,7 @@ from music_assistant.controllers.tasks import (
     update_current_task_progress_text,
 )
 
-from . import parsers
+from . import artwork, parsers
 
 if TYPE_CHECKING:
     from music_assistant.controllers.music.media.base import MediaControllerBase
@@ -151,8 +154,6 @@ async def sync_artist_artwork_from_library(provider: LyrionMusicProvider) -> Non
         provider,
         media_type=MediaType.ARTIST,
         controller=provider.mass.music.artists,
-        fetch_item=provider.get_artist,
-        needs_update=parsers.artist_metadata_needs_update,
     )
 
 
@@ -162,8 +163,6 @@ async def sync_album_artwork_from_library(provider: LyrionMusicProvider) -> None
         provider,
         media_type=MediaType.ALBUM,
         controller=provider.mass.music.albums,
-        fetch_item=provider.get_album,
-        needs_update=parsers.album_metadata_needs_update,
     )
 
 
@@ -171,10 +170,8 @@ async def _sync_library_artwork(
     provider: LyrionMusicProvider,
     media_type: MediaType,
     controller: MediaControllerBase[ArtworkItem],
-    fetch_item: Callable[[str], Awaitable[ArtworkItem]],
-    needs_update: Callable[[ArtworkItem, ArtworkItem], bool],
 ) -> None:
-    """Backfill artwork by reloading provider items for mapped MA library entries."""
+    """Backfill artwork using provider-mapping details from previous LMS sync."""
     library_items = [
         item async for item in controller.iter_library_items(provider=provider.instance_id)
     ]
@@ -186,22 +183,61 @@ async def _sync_library_artwork(
     updated_items = 0
     skipped_items = 0
     for item_index, library_item in enumerate(library_items, 1):
+        provider.logger.debug(
+            "Lyrion %s artwork backfill progress -> item %s/%s (%s)",
+            media_type.value,
+            item_index,
+            total_items,
+            library_item.name,
+        )
         update_current_task_progress_from_index(
             item_index,
             total_items,
             f"Refreshing {media_type.value} artwork {item_index}/{total_items}: {library_item.name}",
         )
-        provider_item_id = _resolve_provider_item_id(provider, library_item)
-        if provider_item_id is None:
+        mapping = _resolve_provider_mapping(provider, library_item)
+        if mapping is None:
             skipped_items += 1
             continue
         try:
-            provider_item = await fetch_item(provider_item_id)
-            if not needs_update(library_item, provider_item):
+            provider_item = deepcopy(library_item)
+            artwork_url = _extract_artwork_url_from_mapping(provider, media_type, mapping)
+            if artwork_url is None:
+                skipped_items += 1
+                report_current_task_failure(
+                    f"Skipped {media_type.value} {library_item.item_id} ({library_item.name}): "
+                    "missing artwork details in provider mapping"
+                )
+                continue
+            old_thumb = artwork.get_thumb_path(provider_item)
+            artwork.set_thumb_path(provider_item, artwork_url)
+            validation_started = monotonic()
+            attempted_artwork_urls = await artwork.ensure_preferred_artwork_size(
+                provider,
+                provider_item,
+            )
+            validation_elapsed_ms = (monotonic() - validation_started) * 1000
+            provider.logger.debug(
+                "Lyrion %s artwork backfill <- id %s (%s) (elapsed: %.1f ms)",
+                media_type.value,
+                provider_item.item_id,
+                provider_item.name,
+                validation_elapsed_ms,
+            )
+            if validation_elapsed_ms > 99 and attempted_artwork_urls:
+                provider.logger.debug(
+                    "Lyrion %s artwork backfill slow <- id %s (%s) (elapsed: %.1f ms) (urls: %s)",
+                    media_type.value,
+                    provider_item.item_id,
+                    provider_item.name,
+                    validation_elapsed_ms,
+                    " | ".join(attempted_artwork_urls),
+                )
+            if artwork.get_thumb_path(provider_item) == old_thumb:
                 continue
             await controller.update_item_in_library(int(library_item.item_id), provider_item)
             updated_items += 1
-        except (MediaNotFoundError, ProviderUnavailableError, ValueError) as err:
+        except (MediaNotFoundError, ValueError) as err:
             skipped_items += 1
             provider.logger.warning(
                 "Skipping %s artwork refresh for %s (%s): %s",
@@ -219,18 +255,39 @@ async def _sync_library_artwork(
     )
 
 
-def _resolve_provider_item_id(
+def _resolve_provider_mapping(
     provider: LyrionMusicProvider,
     library_item: ArtworkItem,
-) -> str | None:
-    """Resolve provider item id for this provider from a library item mapping."""
+) -> ProviderMapping | None:
+    """Resolve provider mapping for this provider from a library item."""
     for mapping in library_item.provider_mappings:
         if mapping.provider_instance == provider.instance_id and mapping.in_library:
-            return mapping.item_id
+            return mapping
     for mapping in library_item.provider_mappings:
         if mapping.provider_domain == provider.domain and mapping.in_library:
-            return mapping.item_id
+            return mapping
     return None
+
+
+def _extract_artwork_url_from_mapping(
+    provider: LyrionMusicProvider,
+    media_type: MediaType,
+    mapping: ProviderMapping,
+) -> str | None:
+    """Build artwork URL from stored provider mapping details without LMS lookup."""
+    if not mapping.details:
+        return None
+    try:
+        details = json.loads(mapping.details)
+    except ValueError:
+        return None
+    if not isinstance(details, dict):
+        return None
+    raw = {k: str(v) for k, v in details.items() if v is not None}
+    if media_type == MediaType.ARTIST:
+        raw.setdefault("id", mapping.item_id)
+        return artwork.extract_artist_artwork_url(provider, raw)
+    return artwork.extract_artwork_url(provider, raw, fallback_id=mapping.item_id)
 
 
 async def _sync_library_entities(provider: LyrionMusicProvider, spec: SyncSpec) -> set[int]:

@@ -12,8 +12,13 @@ from aiohttp import ClientError, ClientTimeout
 from music_assistant_models.errors import MediaNotFoundError, ProviderUnavailableError
 
 from music_assistant.constants import VERBOSE_LOG_LEVEL
+from music_assistant.controllers.tasks import (
+    get_current_task,
+    update_current_task_progress_from_index,
+    update_current_task_progress_text,
+)
 
-from . import artwork, parsers
+from . import parsers
 from .constants import (
     ALBUM_TAGS,
     ARTIST_TAGS,
@@ -209,15 +214,37 @@ async def _get_browse_ids(
         spec.command,
         filter_value or "none",
     )
+    update_current_task_progress_text(f"Fetching number of {spec.key}s from Lyrion...")
     ids: list[str] = []
     seen: set[str] = set()
+    expected_total: int | None = None
     offset = 0
+    page_index = 0
     while True:
+        page_index += 1
         command: list[Any] = [spec.command, offset, BROWSE_PAGE_SIZE, spec.tags]
         if filter_value:
             command.append(filter_value)
+        provider.logger.debug(
+            "Lyrion %s id discovery request -> page %s (offset: %s, limit: %s)",
+            spec.key,
+            page_index,
+            offset,
+            BROWSE_PAGE_SIZE,
+        )
+        request_started = monotonic()
         result = await rpc_request(provider, player_id="", command=command)
+        request_elapsed_ms = (monotonic() - request_started) * 1000
+        if expected_total is None:
+            expected_total = _extract_browse_total_count(result)
         raw_items = cast("list[dict[str, Any]]", result.get(spec.loop_key, []))
+        provider.logger.debug(
+            "Lyrion %s id discovery response <- page %s (%s rows, rpc: %.1f ms)",
+            spec.key,
+            page_index,
+            len(raw_items),
+            request_elapsed_ms,
+        )
         if not raw_items:
             break
         for raw_item in raw_items:
@@ -227,6 +254,14 @@ async def _get_browse_ids(
                 continue
             seen.add(item_id)
             ids.append(item_id)
+        if expected_total:
+            update_current_task_progress_text(
+                f"Getting {spec.key} ids from Lyrion: {len(ids)}/{expected_total}"
+            )
+        else:
+            update_current_task_progress_text(
+                f"Getting {spec.key} ids from Lyrion: {len(ids)} found so far"
+            )
         if len(raw_items) < BROWSE_PAGE_SIZE:
             break
         offset += BROWSE_PAGE_SIZE
@@ -236,6 +271,15 @@ async def _get_browse_ids(
         len(ids),
     )
     return ids
+
+
+def _extract_browse_total_count(result: dict[str, Any]) -> int | None:
+    """Extract total item count from an LMS browse response when available."""
+    count = result.get("count")
+    if count is None:
+        return None
+    parsed = parsers.parse_int(count, default=0)
+    return parsed if parsed > 0 else None
 
 
 async def get_all_genres(provider: LyrionMusicProvider) -> list[dict[str, str]]:
@@ -383,36 +427,12 @@ async def _artwork_worker(
     error_box: list[Exception],
 ) -> None:
     try:
+        del provider, spec
         while True:
             decoded = await decoded_queue.get()
             if decoded is stop_sentinel:
                 break
-            entity = cast("Artist | Album | Track", decoded)
-            if spec.key in ("artist", "album"):
-                artwork_started = monotonic()
-                attempted_artwork_urls = await artwork.ensure_preferred_artwork_size(
-                    provider,
-                    cast("Artist | Album", entity),
-                )
-                artwork_elapsed_ms = (monotonic() - artwork_started) * 1000
-                provider.logger.debug(
-                    "Lyrion %s artwork validation <- id %s (%s) (elapsed: %.1f ms)",
-                    spec.key,
-                    entity.item_id,
-                    entity.name,
-                    artwork_elapsed_ms,
-                )
-                if artwork_elapsed_ms > 99 and attempted_artwork_urls:
-                    provider.logger.debug(
-                        "Lyrion %s artwork validation slow <- id %s (%s) "
-                        "(elapsed: %.1f ms) (urls: %s)",
-                        spec.key,
-                        entity.item_id,
-                        entity.name,
-                        artwork_elapsed_ms,
-                        " | ".join(attempted_artwork_urls),
-                    )
-            await output_queue.put(entity)
+            await output_queue.put(cast("Artist | Album | Track", decoded))
     except Exception as err:
         error_box.append(err)
     finally:
@@ -424,7 +444,7 @@ async def _iter_entities(
     spec: LmsEntitySpec,
     item_ids: list[str],
 ) -> AsyncGenerator[Artist | Album | Track]:
-    """Yield decoded entities via a bounded fetch -> decode -> artwork pipeline."""
+    """Yield decoded entities via a bounded fetch -> decode -> pass-through pipeline."""
     ordered_ids = _normalize_lookup_ids(provider, spec, item_ids)
     if not ordered_ids:
         return
@@ -433,11 +453,6 @@ async def _iter_entities(
     if len(ordered_ids) == 1:
         raw_item = await _get_entity_data(provider, spec, ordered_ids[0])
         entity = await _decode_entity(provider, spec, raw_item)
-        if spec.key in ("artist", "album"):
-            await artwork.ensure_preferred_artwork_size(
-                provider,
-                cast("Artist | Album", entity),
-            )
         yield entity
         return
 
@@ -449,7 +464,7 @@ async def _iter_entities(
     artwork_worker_count = max(1, ARTWORK_WORKER_COUNT)
 
     provider.logger.debug(
-        "Lyrion %s artwork pipeline concurrency -> %s workers",
+        "Lyrion %s decode pipeline concurrency -> %s workers",
         spec.key,
         artwork_worker_count,
     )
@@ -534,6 +549,12 @@ async def _iter_raw_entities(
         )
         request_elapsed_ms = (monotonic() - request_started) * 1000
         for raw_item in _split_lookup_reply(spec, result, item_ids):
+            if _should_report_lookup_progress():
+                update_current_task_progress_from_index(
+                    1,
+                    total_items,
+                    f"Fetching {spec.key}s from Lyrion: 1/{total_items}",
+                )
             _log_lookup_response(
                 provider,
                 spec,
@@ -588,10 +609,16 @@ async def _iter_raw_entities(
                     command=_create_lookup_command(spec, chunk),
                 )
                 request_elapsed_ms = (monotonic() - request_started) * 1000
-                for _index_offset, raw_item in enumerate(
+                for index_offset, raw_item in enumerate(
                     _split_lookup_reply(spec, result, chunk),
                     start=chunk_start,
                 ):
+                    if _should_report_lookup_progress():
+                        update_current_task_progress_from_index(
+                            index_offset,
+                            total_items,
+                            f"Fetching {spec.key}s from Lyrion: {index_offset}/{total_items}",
+                        )
                     _log_lookup_response(
                         provider,
                         spec,
@@ -620,6 +647,12 @@ async def _iter_raw_entities(
         )
         request_elapsed_ms = (monotonic() - request_started) * 1000
         for raw_item in _split_lookup_reply(spec, result, [item_id]):
+            if _should_report_lookup_progress():
+                update_current_task_progress_from_index(
+                    item_index,
+                    total_items,
+                    f"Fetching {spec.key}s from Lyrion: {item_index}/{total_items}",
+                )
             _log_lookup_response(
                 provider,
                 spec,
@@ -628,6 +661,13 @@ async def _iter_raw_entities(
                 request_elapsed_ms=request_elapsed_ms,
             )
             yield raw_item
+
+
+def _should_report_lookup_progress() -> bool:
+    """Return if generic lookup progress should be reported for current task."""
+    if not (task := get_current_task()):
+        return True
+    return task.metadata.get("task_domain") != "lyrion_artwork_sync"
 
 
 def _log_lookup_request(
@@ -680,6 +720,8 @@ def _format_lookup_progress(item_index: int, total_items: int) -> str:
     """Format lookup progress as item counters plus percentage."""
     if total_items <= 0:
         return "progress: unknown"
+    if total_items == 1:
+        return "single-item lookup"
     progress_pct = (item_index / total_items) * 100
     return f"item {item_index}/{total_items}, progress: {progress_pct:.1f}%"
 

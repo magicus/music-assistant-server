@@ -7,6 +7,7 @@ from time import time_ns
 from typing import Any, cast
 from urllib.parse import quote, unquote
 
+from music_assistant_models.background_task import TaskSchedule
 from music_assistant_models.config_entries import ConfigActionResult, ConfigEntry
 from music_assistant_models.enums import (
     ConfigEntryType,
@@ -16,6 +17,7 @@ from music_assistant_models.enums import (
     StreamType,
 )
 from music_assistant_models.errors import (
+    InvalidDataError,
     MediaNotFoundError,
     ProviderUnavailableError,
     SetupFailedError,
@@ -38,6 +40,7 @@ from music_assistant.models.music_provider import MusicProvider
 
 from . import artwork, client, parsers, sync
 from .constants import (
+    ACTION_RESCAN_ALBUM_AND_ARTIST_ART,
     ACTION_ROTATE_ARTWORK_CACHE_TOKEN,
     CONF_ARTWORK_CACHE_BUSTER,
     CONF_LMS_HOST,
@@ -118,6 +121,11 @@ class LyrionMusicProvider(MusicProvider):
                 type=ConfigEntryType.ACTION,
                 action=ACTION_ROTATE_ARTWORK_CACHE_TOKEN,
             ),
+            ConfigEntry(
+                key=ACTION_RESCAN_ALBUM_AND_ARTIST_ART,
+                type=ConfigEntryType.ACTION,
+                action=ACTION_RESCAN_ALBUM_AND_ARTIST_ART,
+            ),
         )
 
     async def handle_config_action(
@@ -125,20 +133,21 @@ class LyrionMusicProvider(MusicProvider):
         action: str,
     ) -> tuple[ConfigEntry, ...] | ConfigActionResult | None:
         """Handle one-shot options actions."""
-        if action != ACTION_ROTATE_ARTWORK_CACHE_TOKEN:
+        if action not in (
+            ACTION_ROTATE_ARTWORK_CACHE_TOKEN,
+            ACTION_RESCAN_ALBUM_AND_ARTIST_ART,
+        ):
             return await super().handle_config_action(action)
 
-        # Cache token is appended to image URLs, forcing a fresh download.
-        self._update_setup_data(
-            CONF_ARTWORK_CACHE_BUSTER,
-            str(time_ns()),
-            immediate=True,
+        self._rotate_artwork_cache_token()
+        if action == ACTION_RESCAN_ALBUM_AND_ARTIST_ART:
+            self._trigger_artwork_backfill_tasks()
+            return ConfigActionResult(
+                translation_key=ACTION_RESCAN_ALBUM_AND_ARTIST_ART,
+            )
+        return ConfigActionResult(
+            translation_key=ACTION_ROTATE_ARTWORK_CACHE_TOKEN,
         )
-        self.logger.info(
-            "Rotated Lyrion artwork cache token for %s",
-            self.instance_id,
-        )
-        return ConfigActionResult(translation_key=ACTION_ROTATE_ARTWORK_CACHE_TOKEN)
 
     async def handle_async_init(self) -> None:
         """Validate the configured Lyrion endpoint."""
@@ -175,12 +184,21 @@ class LyrionMusicProvider(MusicProvider):
             self._on_music_sync_completed,
             EventType.MUSIC_SYNC_COMPLETED,
         )
+        self._register_artwork_backfill_tasks()
 
     async def unload(self, is_removed: bool = False) -> None:
         """Cleanup event subscriptions on provider unload."""
         if self._unsubscribe_music_sync_completed is not None:
             self._unsubscribe_music_sync_completed()
             self._unsubscribe_music_sync_completed = None
+        self.mass.tasks.unregister_scheduled_task(
+            self._album_artwork_task_id,
+            clear_persisted_state=is_removed,
+        )
+        self.mass.tasks.unregister_scheduled_task(
+            self._artist_artwork_task_id,
+            clear_persisted_state=is_removed,
+        )
         await super().unload(is_removed)
 
     async def search(
@@ -493,14 +511,44 @@ class LyrionMusicProvider(MusicProvider):
         return client.get_configured_port(self, default)
 
     def _on_music_sync_completed(self, _event: Any) -> None:
-        """Queue artwork backfill tasks once all global music sync tasks are done."""
+        """Queue artwork backfill tasks when global music sync completes."""
         if self.unloading:
             return
+        self.logger.info("Regular music sync completed; starting Lyrion artwork backfill tasks")
+        self.logger.debug("MUSIC_SYNC_COMPLETED received; queueing Lyrion artwork backfill tasks")
+        self._trigger_artwork_backfill_tasks()
+
+    def _trigger_artwork_backfill_tasks(self) -> None:
+        """Queue album first, then artist artwork backfill tasks."""
+        try:
+            self.mass.tasks.run_task(self._album_artwork_task_id)
+            self.mass.tasks.run_task(self._artist_artwork_task_id)
+        except InvalidDataError as err:
+            self.logger.debug(
+                "Artwork backfill task scheduling skipped: %s",
+                err,
+            )
+
+    def _rotate_artwork_cache_token(self) -> None:
+        """Rotate cache token appended to Lyrion artwork URLs."""
+        self._update_setup_data(
+            CONF_ARTWORK_CACHE_BUSTER,
+            str(time_ns()),
+            immediate=True,
+        )
+        self.logger.info(
+            "Rotated Lyrion artwork cache token for %s",
+            self.instance_id,
+        )
+
+    def _register_artwork_backfill_tasks(self) -> None:
+        """Register visible artwork tasks and keep them disabled by default."""
         task_domain = "lyrion_artwork_sync"
-        self.mass.tasks.run_background_task(
-            task_id=f"{self.instance_id}_album_artwork_sync",
-            name=f"Sync {self.name} album artwork",
+        self.mass.tasks.register_scheduled_task(
+            task_id=self._album_artwork_task_id,
+            name="Sync Album Artwork for Lyrion Music Library",
             handler=self._sync_album_artwork_from_library,
+            schedule=TaskSchedule.hourly(every=12),
             translation_owner=self.translation_owner,
             metadata={
                 "task_domain": task_domain,
@@ -510,12 +558,12 @@ class LyrionMusicProvider(MusicProvider):
                 "media_type": MediaType.ALBUM.value,
             },
             allow_retry=True,
-            priority=True,
         )
-        self.mass.tasks.run_background_task(
-            task_id=f"{self.instance_id}_artist_artwork_sync",
-            name=f"Sync {self.name} artist artwork",
+        self.mass.tasks.register_scheduled_task(
+            task_id=self._artist_artwork_task_id,
+            name="Sync Artist Artwork for Lyrion Music Library",
             handler=self._sync_artist_artwork_from_library,
+            schedule=TaskSchedule.hourly(every=12),
             translation_owner=self.translation_owner,
             metadata={
                 "task_domain": task_domain,
@@ -526,3 +574,15 @@ class LyrionMusicProvider(MusicProvider):
             },
             allow_retry=True,
         )
+        self.mass.tasks.set_task_enabled(self._album_artwork_task_id, False)
+        self.mass.tasks.set_task_enabled(self._artist_artwork_task_id, False)
+
+    @property
+    def _album_artwork_task_id(self) -> str:
+        """Return deterministic task id for album artwork backfill."""
+        return f"{self.instance_id}_album_artwork_sync"
+
+    @property
+    def _artist_artwork_task_id(self) -> str:
+        """Return deterministic task id for artist artwork backfill."""
+        return f"{self.instance_id}_artist_artwork_sync"

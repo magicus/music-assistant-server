@@ -21,6 +21,7 @@ TRACK_TAGS = "tags:abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 STREAM_PATH_TEMPLATE = "/music/{track_id}/download"
 CONF_ARTWORK_CACHE_BUSTER = "artwork_cache_buster"
 ACTION_ROTATE_ARTWORK_CACHE_TOKEN = "rotate_artwork_cache_token"
+ACTION_RESCAN_ALBUM_AND_ARTIST_ART = "rescan_album_and_artist_art_now"
 
 SUPPORTED_FEATURES: set[ProviderFeature] = {
     ProviderFeature.BROWSE,

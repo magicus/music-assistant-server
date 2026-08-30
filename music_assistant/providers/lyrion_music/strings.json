@@ -11,11 +11,18 @@
     "rotate_artwork_cache_token": {
       "label": "Rotate artwork cache token",
       "description": "Rotate Lyrion artwork cache token for this provider. Artwork refreshes on the next regular sync/scan."
+    },
+    "rescan_album_and_artist_art_now": {
+      "label": "Rescan album and artist art now",
+      "description": "Re-fetch provider artwork for linked library artists and albums right away."
     }
   },
   "config_actions": {
     "rotate_artwork_cache_token": {
       "result": "Artwork cache token rotated. Artwork will refresh on the next regular sync/scan."
+    },
+    "rescan_album_and_artist_art_now": {
+      "result": "Album and artist artwork rescan started."
     }
   },
   "media": {

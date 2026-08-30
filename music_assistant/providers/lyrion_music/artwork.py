@@ -9,7 +9,7 @@ from urllib.parse import quote
 from aiohttp import ClientError, ClientTimeout
 from music_assistant_models.enums import ImageType
 from music_assistant_models.errors import ProviderUnavailableError
-from music_assistant_models.media_items import UniqueList
+from music_assistant_models.media_items import MediaItemImage, UniqueList
 
 from . import parsers
 from .constants import ARTWORK_VALIDATION_TIMEOUT, CONF_ARTWORK_CACHE_BUSTER, RPC_TIMEOUT
@@ -220,6 +220,34 @@ def get_thumb_path(item: Artist | Album) -> str | None:
         if image.type == ImageType.THUMB:
             return image.path
     return None
+
+
+def set_thumb_path(item: Artist | Album, path: str | None) -> None:
+    """Set or clear thumbnail image path on an artist or album."""
+    images = list(item.metadata.images or [])
+    thumb_image = next((img for img in images if img.type == ImageType.THUMB), None)
+    if path is None:
+        if thumb_image is None:
+            return
+        item.metadata.images = UniqueList(img for img in images if img is not thumb_image)
+        return
+    if thumb_image is not None:
+        new_image = dataclasses.replace(thumb_image, path=path)
+        item.metadata.images = UniqueList(
+            new_image if img is thumb_image else img for img in images
+        )
+        return
+    item.metadata.images = UniqueList(
+        [
+            *images,
+            MediaItemImage(
+                type=ImageType.THUMB,
+                path=path,
+                provider=item.provider,
+                remotely_accessible=True,
+            ),
+        ]
+    )
 
 
 def append_artwork_cache_buster(provider: LyrionMusicProvider, url: str) -> str:

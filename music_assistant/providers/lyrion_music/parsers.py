@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import quote
 
@@ -40,6 +41,10 @@ def parse_artist(provider: LyrionMusicProvider, raw_artist: dict[str, Any]) -> A
                 item_id=artist_id,
                 provider_domain=provider.domain,
                 provider_instance=provider.instance_id,
+                details=_serialize_mapping_details(
+                    raw_artist,
+                    keys=("portraitid", "artwork_url", "artwork", "icon"),
+                ),
             )
         },
     )
@@ -103,6 +108,10 @@ def parse_album(provider: LyrionMusicProvider, raw_album: dict[str, Any]) -> Alb
                 item_id=album_id,
                 provider_domain=provider.domain,
                 provider_instance=provider.instance_id,
+                details=_serialize_mapping_details(
+                    raw_album,
+                    keys=("coverid", "artwork_track_id", "artwork_url", "artwork", "icon"),
+                ),
             )
         },
     )
@@ -380,3 +389,19 @@ def parse_int(value: Any, default: int = 0) -> int:
         return int(str(value).strip())
     except TypeError, ValueError:
         return default
+
+
+def _serialize_mapping_details(raw: dict[str, Any], keys: tuple[str, ...]) -> str | None:
+    """Serialize selected LMS payload fields for later provider-local reuse."""
+    details: dict[str, str] = {}
+    for key in keys:
+        value = raw.get(key)
+        if value is None:
+            continue
+        value_str = str(value).strip()
+        if not value_str:
+            continue
+        details[key] = value_str
+    if not details:
+        return None
+    return json.dumps(details, separators=(",", ":"))
