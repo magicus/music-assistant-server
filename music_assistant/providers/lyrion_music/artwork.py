@@ -12,11 +12,7 @@ from music_assistant_models.errors import ProviderUnavailableError
 from music_assistant_models.media_items import UniqueList
 
 from . import parsers
-from .constants import (
-    ARTWORK_VALIDATION_TIMEOUT,
-    CONF_ARTWORK_CACHE_BUSTER,
-    RPC_TIMEOUT,
-)
+from .constants import ARTWORK_VALIDATION_TIMEOUT, CONF_ARTWORK_CACHE_BUSTER, RPC_TIMEOUT
 
 if TYPE_CHECKING:
     from music_assistant_models.media_items import Album, Artist
