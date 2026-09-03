@@ -39,8 +39,6 @@ from .constants import (
     ACTION_RESCAN_ARTWORK,
     BROWSE_PAGE_SIZE,
     CONF_ARTWORK_CACHE_BUSTER,
-    CONF_LMS_HOST,
-    CONF_LMS_PORT,
     DEFAULT_LMS_PORT,
     ITEM_CACHE_TTL,
     SEARCH_CACHE_TTL,
@@ -441,23 +439,7 @@ class LyrionMusicProvider(MusicProvider):
 
     async def get_config_entries(self) -> tuple[ConfigEntry, ...]:
         """Return Config entries to configure this provider."""
-        configured_host = self._get_configured_host() or ""
-        configured_port = self._get_configured_port(default=None)
         return (
-            ConfigEntry(
-                key=CONF_LMS_HOST,
-                type=ConfigEntryType.STRING,
-                required=False,
-                read_only=True,
-                value=configured_host,
-            ),
-            ConfigEntry(
-                key=CONF_LMS_PORT,
-                type=ConfigEntryType.INTEGER,
-                required=False,
-                read_only=True,
-                value=configured_port,
-            ),
             ConfigEntry(
                 key=ACTION_RESCAN_ARTWORK,
                 type=ConfigEntryType.ACTION,
