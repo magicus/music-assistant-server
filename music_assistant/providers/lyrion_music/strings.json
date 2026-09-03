@@ -2,11 +2,11 @@
   "config_entries": {
     "lms_host": {
       "label": "Lyrion host",
-      "description": "IP address or hostname of your Lyrion/LMS server."
+      "description": "IP address or hostname of your Lyrion/LMS server"
     },
     "port": {
       "label": "Lyrion JSON-RPC port",
-      "description": "Configured via Reconfigure flow."
+      "description": "Port to reach Lyrion control interface, typically 9000"
     },
     "rotate_artwork_cache_token": {
       "label": "Rotate artwork cache token",

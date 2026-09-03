@@ -3,7 +3,7 @@
   "domain": "lyrion_player",
   "name": "Lyrion Players",
   "stage": "experimental",
-  "description": "Control Lyrion/Logitech Media Server players from Music Assistant via LMS JSON-RPC.",
+  "description": "Control and play music on Lyrion Media Server (LMS) players",
   "codeowners": ["@ihse"],
   "requirements": [],
   "documentation": "https://lyrion.org/reference/cli/jsonrpc/",

@@ -244,10 +244,7 @@ async def _validate_lms_endpoint(
                 type=socket.SOCK_STREAM,
             )
         except socket.gaierror:
-            return (
-                f"Hostname '{host_str}' is invalid or the host does not "
-                "exist. Check spelling or use an IP address."
-            )
+            return f"Host '{host_str}' could not be found. Check spelling or use an IP address."
 
     try:
         conn = await asyncio.wait_for(
