@@ -36,8 +36,7 @@ from music_assistant.providers.lyrion_music.shared.setup_flow import validate_lm
 
 from . import artwork, client, parsers, sync
 from .constants import (
-    ACTION_RESCAN_ALBUM_AND_ARTIST_ART,
-    ACTION_ROTATE_ARTWORK_CACHE_TOKEN,
+    ACTION_RESCAN_ARTWORK,
     BROWSE_PAGE_SIZE,
     CONF_ARTWORK_CACHE_BUSTER,
     CONF_LMS_HOST,
@@ -460,14 +459,9 @@ class LyrionMusicProvider(MusicProvider):
                 value=configured_port,
             ),
             ConfigEntry(
-                key=ACTION_ROTATE_ARTWORK_CACHE_TOKEN,
+                key=ACTION_RESCAN_ARTWORK,
                 type=ConfigEntryType.ACTION,
-                action=ACTION_ROTATE_ARTWORK_CACHE_TOKEN,
-            ),
-            ConfigEntry(
-                key=ACTION_RESCAN_ALBUM_AND_ARTIST_ART,
-                type=ConfigEntryType.ACTION,
-                action=ACTION_RESCAN_ALBUM_AND_ARTIST_ART,
+                action=ACTION_RESCAN_ARTWORK,
             ),
         )
 
@@ -476,20 +470,13 @@ class LyrionMusicProvider(MusicProvider):
         action: str,
     ) -> tuple[ConfigEntry, ...] | ConfigActionResult | None:
         """Handle one-shot options actions."""
-        if action not in (
-            ACTION_ROTATE_ARTWORK_CACHE_TOKEN,
-            ACTION_RESCAN_ALBUM_AND_ARTIST_ART,
-        ):
+        if action != ACTION_RESCAN_ARTWORK:
             return await super().handle_config_action(action)
 
         self._rotate_artwork_cache_token()
-        if action == ACTION_RESCAN_ALBUM_AND_ARTIST_ART:
-            self._trigger_artwork_backfill_tasks()
-            return ConfigActionResult(
-                translation_key=ACTION_RESCAN_ALBUM_AND_ARTIST_ART,
-            )
+        self._trigger_artwork_backfill_tasks()
         return ConfigActionResult(
-            translation_key=ACTION_ROTATE_ARTWORK_CACHE_TOKEN,
+            translation_key=ACTION_RESCAN_ARTWORK,
         )
 
     async def handle_async_init(self) -> None:

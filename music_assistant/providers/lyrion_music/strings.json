@@ -8,20 +8,13 @@
       "label": "Lyrion JSON-RPC port",
       "description": "Port to reach Lyrion control interface, typically 9000"
     },
-    "rotate_artwork_cache_token": {
-      "label": "Rotate artwork cache token",
-      "description": "Rotate Lyrion artwork cache token for this provider. Artwork refreshes on the next regular sync/scan."
-    },
-    "rescan_album_and_artist_art_now": {
-      "label": "Rescan album and artist art now",
-      "description": "Re-fetch provider artwork for linked library artists and albums right away."
+    "rescan_artwork": {
+      "label": "Rescan artwork now",
+      "description": "Refresh artwork for your Lyrion library artists and albums right away."
     }
   },
   "config_actions": {
-    "rotate_artwork_cache_token": {
-      "result": "Artwork cache token rotated. Artwork will refresh on the next regular sync/scan."
-    },
-    "rescan_album_and_artist_art_now": {
+    "rescan_artwork": {
       "result": "Album and artist artwork rescan started."
     }
   },
