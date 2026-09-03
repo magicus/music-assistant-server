@@ -9,6 +9,13 @@
       "description": "Port to reach Lyrion control interface, typically 9000"
     }
   },
+  "errors": {
+    "host_required": "Please enter a Lyrion hostname or IP address.",
+    "invalid_port": "Port must be a number between 1 and 65535.",
+    "endpoint_unreachable": "Could not connect to this endpoint. Check host, port, and that Lyrion is running.",
+    "endpoint_not_lyrion": "Connected, but this is not a valid Lyrion JSON-RPC endpoint.",
+    "serverstatus_invalid": "Connected, but the response is not a valid Lyrion serverstatus result."
+  },
   "manifest": {
     "description": "Control and play music on Lyrion Media Server (LMS) players"
   }

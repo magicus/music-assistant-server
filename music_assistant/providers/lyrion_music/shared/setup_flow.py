@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from aiohttp import ClientError, ClientTimeout
 from music_assistant_models.config_entries import ConfigEntry
 from music_assistant_models.enums import ConfigEntryType
+from music_assistant_models.errors import SetupFailedError
 
 from music_assistant.models.setup_flow import SetupFlowError
 
@@ -64,19 +65,6 @@ async def run_lms_setup_flow(
         setup_data[host_key] = normalized[host_key]
         setup_data[port_key] = normalized[port_key]
 
-        if validation_error := await _validate_lms_endpoint(
-            session,
-            host=setup_data.get(host_key),
-            port=setup_data.get(port_key),
-        ):
-            logger.warning(
-                "%s setup validation failed: %s",
-                log_prefix,
-                validation_error,
-            )
-            errors = {"base": validation_error}
-            continue
-
         try:
             await session.finish(setup_data)
             return
@@ -92,6 +80,93 @@ async def run_lms_setup_flow(
                 detail,
             )
             errors = {"base": error_key}
+
+
+async def validate_lms_endpoint(
+    host: object,
+    port: object,
+    *,
+    http_session: object,
+    translation_owner: str | None = None,
+) -> None:
+    """Validate a configured LMS endpoint."""
+    host_str = str(host or "").strip()
+    if not host_str:
+        raise SetupFailedError(
+            "host_required",
+            translation_key="host_required",
+            translation_owner=translation_owner,
+        )
+
+    resolved_port = _coerce_port(port)
+    if resolved_port is None:
+        raise SetupFailedError(
+            "invalid_port",
+            translation_key="invalid_port",
+            translation_owner=translation_owner,
+        )
+
+    if not _is_ip_address(host_str):
+        try:
+            await asyncio.get_running_loop().getaddrinfo(
+                host_str,
+                None,
+                type=socket.SOCK_STREAM,
+            )
+        except socket.gaierror as err:
+            msg = f"host_unresolvable: {host_str}"
+            raise SetupFailedError(
+                msg,
+                translation_key="host_unresolvable",
+                translation_owner=translation_owner,
+                translation_args=[host_str],
+            ) from err
+
+    try:
+        conn = await asyncio.wait_for(
+            asyncio.open_connection(host_str, resolved_port),
+            timeout=5,
+        )
+        _, writer = conn
+        writer.close()
+        await writer.wait_closed()
+    except (TimeoutError, OSError) as err:
+        msg = f"endpoint_unreachable: {host_str}:{resolved_port}"
+        raise SetupFailedError(
+            msg,
+            translation_key="endpoint_unreachable",
+            translation_owner=translation_owner,
+        ) from err
+
+    payload = {
+        "id": 1,
+        "method": "slim.request",
+        "params": ["", ["serverstatus", 0, 1]],
+    }
+    url = f"http://{host_str}:{resolved_port}/jsonrpc.js"
+    try:
+        async with http_session.post(
+            url,
+            json=payload,
+            timeout=ClientTimeout(total=5),
+        ) as response:
+            response.raise_for_status()
+            body = await response.json()
+    except (ClientError, TimeoutError, ValueError) as err:
+        msg = f"endpoint_not_lyrion: {host_str}:{resolved_port}"
+        raise SetupFailedError(
+            msg,
+            translation_key="endpoint_not_lyrion",
+            translation_owner=translation_owner,
+        ) from err
+
+    if not isinstance(body, dict) or body.get("result") is None:
+        msg = f"serverstatus_invalid: {host_str}:{resolved_port}"
+        raise SetupFailedError(
+            msg,
+            translation_key="serverstatus_invalid",
+            translation_owner=translation_owner,
+        )
 
 
 def _entries(
@@ -220,72 +295,6 @@ def _normalize_submitted_values(
         host_key: normalized_host,
         port_key: port,
     }
-
-
-async def _validate_lms_endpoint(
-    session: SetupSession,
-    host: object,
-    port: object,
-) -> str | None:
-    """Validate host/DNS/port/RPC reachability in strict ordered steps."""
-    host_str = str(host or "").strip()
-    if not host_str:
-        return "Please enter a Lyrion hostname or IP address."
-
-    resolved_port = _coerce_port(port)
-    if resolved_port is None:
-        return "Port must be a number between 1 and 65535."
-
-    if not _is_ip_address(host_str):
-        try:
-            await asyncio.get_running_loop().getaddrinfo(
-                host_str,
-                None,
-                type=socket.SOCK_STREAM,
-            )
-        except socket.gaierror:
-            return f"Host '{host_str}' could not be found. Check spelling or use an IP address."
-
-    try:
-        conn = await asyncio.wait_for(
-            asyncio.open_connection(host_str, resolved_port),
-            timeout=5,
-        )
-        _, writer = conn
-        writer.close()
-        await writer.wait_closed()
-    except TimeoutError, OSError:
-        return (
-            f"Could not connect to {host_str}:{resolved_port}. "
-            "Check host, port, and that Lyrion is running."
-        )
-
-    payload = {
-        "id": 1,
-        "method": "slim.request",
-        "params": ["", ["serverstatus", 0, 1]],
-    }
-    url = f"http://{host_str}:{resolved_port}/jsonrpc.js"
-    try:
-        async with session.mass.http_session.post(
-            url,
-            json=payload,
-            timeout=ClientTimeout(total=5),
-        ) as response:
-            response.raise_for_status()
-            body = await response.json()
-    except ClientError, TimeoutError, ValueError:
-        return (
-            f"Connected to {host_str}:{resolved_port}, but this is not a "
-            "valid Lyrion JSON-RPC endpoint."
-        )
-
-    if not isinstance(body, dict) or body.get("result") is None:
-        return (
-            f"Connected to {host_str}:{resolved_port}, but the response is "
-            "not a valid Lyrion serverstatus result."
-        )
-    return None
 
 
 def _is_ip_address(value: str) -> bool:

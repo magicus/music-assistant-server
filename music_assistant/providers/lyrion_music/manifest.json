@@ -4,8 +4,8 @@
   "name": "Lyrion Music Library",
   "stage": "experimental",
   "description": "Play music from a Lyrion Media Server (LMS) library",
-  "codeowners": ["@ihse"],
+  "codeowners": ["@magicus"],
   "requirements": [],
-  "documentation": "https://lyrion.org/reference/cli/jsonrpc/",
+  "documentation": "https://github.com/magicus/music-assistant-server",
   "multi_instance": true
 }

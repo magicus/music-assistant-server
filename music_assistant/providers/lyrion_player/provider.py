@@ -13,10 +13,10 @@ from music_assistant_models.errors import (
     InvalidDataError,
     MusicAssistantError,
     ProviderUnavailableError,
-    SetupFailedError,
 )
 
 from music_assistant.models.player_provider import PlayerProvider
+from music_assistant.providers.lyrion_music.shared.setup_flow import validate_lms_endpoint
 
 from .cometd_event_adapter import LyrionCometDEventAdapter
 from .constants import (
@@ -70,26 +70,17 @@ class LyrionPlayerProvider(PlayerProvider):
         """Validate the configured Lyrion endpoint."""
         host = self._get_configured_host()
         port = self._get_configured_port()
-        if not host:
-            raise SetupFailedError("Please configure the Lyrion host before connecting.")
         self.logger.debug(
             "Validating Lyrion JSON-RPC endpoint %s:%s",
             host,
             port,
         )
-        try:
-            await self._rpc_request(
-                player_id="",
-                command=["serverstatus", 0, 1],
-            )
-        except ProviderUnavailableError as err:
-            self.logger.warning(
-                "Lyrion endpoint validation failed for %s:%s: %s",
-                host,
-                port,
-                err,
-            )
-            raise SetupFailedError(str(err)) from err
+        await validate_lms_endpoint(
+            host=host,
+            port=port,
+            http_session=self.mass.http_session,
+            translation_owner=self.translation_owner,
+        )
 
     async def loaded_in_mass(self) -> None:
         """Call after the provider has been loaded."""

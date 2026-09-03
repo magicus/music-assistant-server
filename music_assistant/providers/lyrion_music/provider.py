@@ -16,12 +16,7 @@ from music_assistant_models.enums import (
     MediaType,
     StreamType,
 )
-from music_assistant_models.errors import (
-    InvalidDataError,
-    MediaNotFoundError,
-    ProviderUnavailableError,
-    SetupFailedError,
-)
+from music_assistant_models.errors import InvalidDataError, MediaNotFoundError
 from music_assistant_models.media_items import (
     Album,
     Artist,
@@ -37,6 +32,7 @@ from music_assistant_models.streamdetails import StreamDetails
 
 from music_assistant.controllers.cache import use_cache
 from music_assistant.models.music_provider import MusicProvider
+from music_assistant.providers.lyrion_music.shared.setup_flow import validate_lms_endpoint
 
 from . import artwork, client, parsers, sync
 from .constants import (
@@ -502,27 +498,17 @@ class LyrionMusicProvider(MusicProvider):
         self._unsubscribe_music_sync_completed = None
         host = self._get_configured_host()
         port = self._get_configured_port()
-        if not host:
-            raise SetupFailedError("Please configure the Lyrion host before connecting.")
         self.logger.debug(
             "Validating Lyrion JSON-RPC endpoint %s:%s",
             host,
             port,
         )
-        try:
-            await client.rpc_request(
-                self,
-                player_id="",
-                command=["serverstatus", 0, 1],
-            )
-        except ProviderUnavailableError as err:
-            self.logger.warning(
-                "Lyrion endpoint validation failed for %s:%s: %s",
-                host,
-                port,
-                err,
-            )
-            raise SetupFailedError(str(err)) from err
+        await validate_lms_endpoint(
+            host=host,
+            port=port,
+            http_session=self.mass.http_session,
+            translation_owner=self.translation_owner,
+        )
 
     async def loaded_in_mass(self) -> None:
         """Subscribe to sync-completed events once provider is active."""
