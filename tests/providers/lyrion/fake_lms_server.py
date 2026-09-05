@@ -7,6 +7,15 @@ from typing import Any
 
 from aiohttp import web
 
+from .catalog_seed import (
+    fake_albums,
+    fake_artists,
+    fake_genres,
+    fake_playlist_tracks,
+    fake_playlists,
+    fake_tracks,
+)
+
 PNG_1X1_BYTES = (
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
     b"\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde"
@@ -37,188 +46,12 @@ class FakeLmsServer:
         self.missing_large_artist_images: set[str] = {"a3"}
         self.missing_large_album_images: set[str] = {"alb6"}
 
-        self.artists: list[dict[str, Any]] = [
-            {"id": "a1", "artist": "DJ Home Azziztant", "portraitid": "a1"},
-            {"id": "a2", "artist": "The Async Awaiters", "portraitid": "a2"},
-            {"id": "a3", "artist": "One Hit Wonderbread", "portraitid": "a3"},
-            {"id": "a4", "artist": "Null Pointer Sisters", "portraitid": "a4"},
-        ]
-        self.albums: list[dict[str, Any]] = [
-            {
-                "id": "alb1",
-                "album": "Home Sweet Home Lab",
-                "artist": "DJ Home Azziztant",
-                "artist_id": "a1",
-                "genre_id": "g1",
-                "coverid": "alb1",
-            },
-            {
-                "id": "alb2",
-                "album": "Cache Me Outside",
-                "artist": "DJ Home Azziztant",
-                "artist_id": "a1",
-                "genre_id": "g2",
-                "coverid": "alb2",
-            },
-            {
-                "id": "alb3",
-                "album": "Awaiting Sunrise",
-                "artist": "The Async Awaiters",
-                "artist_id": "a2",
-                "genre_id": "g1",
-                "coverid": "alb3",
-            },
-            {
-                "id": "alb4",
-                "album": "Race Condition Blues",
-                "artist": "The Async Awaiters",
-                "artist_id": "a2",
-                "genre_id": "g3",
-                "coverid": "alb4",
-            },
-            {
-                "id": "alb5",
-                "album": "Greatest Hit And That's It",
-                "artist": "One Hit Wonderbread",
-                "artist_id": "a3",
-                "genre_id": "g2",
-                "coverid": "alb5",
-            },
-            {
-                "id": "alb6",
-                "album": "None Shall Pass",
-                "artist": "Null Pointer Sisters",
-                "artist_id": "a4",
-                "genre_id": "g3",
-                "coverid": "alb6",
-            },
-        ]
-        self.tracks: list[dict[str, Any]] = [
-            {
-                "id": "t1",
-                "title": "Wake Up And Smell The Exceptions",
-                "artist": "DJ Home Azziztant",
-                "artist_id": "a1",
-                "album": "Home Sweet Home Lab",
-                "album_id": "alb1",
-                "duration": 211,
-                "disc": 1,
-                "tracknum": 1,
-                "url": "http://cdn.example.invalid/t1.mp3",
-            },
-            {
-                "id": "t2",
-                "title": "Kiss My Cache",
-                "artist": "DJ Home Azziztant",
-                "artist_id": "a1",
-                "album": "Home Sweet Home Lab",
-                "album_id": "alb1",
-                "duration": 199,
-                "disc": 1,
-                "tracknum": 2,
-            },
-            {
-                "id": "t3",
-                "title": "Cold Start Romance",
-                "artist": "DJ Home Azziztant",
-                "artist_id": "a1",
-                "album": "Cache Me Outside",
-                "album_id": "alb2",
-                "duration": 187,
-                "disc": 1,
-                "tracknum": 1,
-            },
-            {
-                "id": "t4",
-                "title": "Await Me Maybe",
-                "artist": "The Async Awaiters",
-                "artist_id": "a2",
-                "album": "Awaiting Sunrise",
-                "album_id": "alb3",
-                "duration": 241,
-                "disc": 1,
-                "tracknum": 1,
-            },
-            {
-                "id": "t5",
-                "title": "Future Is Pending",
-                "artist": "The Async Awaiters",
-                "artist_id": "a2",
-                "album": "Awaiting Sunrise",
-                "album_id": "alb3",
-                "duration": 230,
-                "disc": 1,
-                "tracknum": 2,
-            },
-            {
-                "id": "t6",
-                "title": "Race You To The Lock",
-                "artist": "The Async Awaiters",
-                "artist_id": "a2",
-                "album": "Race Condition Blues",
-                "album_id": "alb4",
-                "duration": 202,
-                "disc": 1,
-                "tracknum": 1,
-            },
-            {
-                "id": "t7",
-                "title": "Segfault Serenade",
-                "artist": "The Async Awaiters",
-                "artist_id": "a2",
-                "album": "Race Condition Blues",
-                "album_id": "alb4",
-                "duration": 219,
-                "disc": 2,
-                "tracknum": 3,
-            },
-            {
-                "id": "t8",
-                "title": "Breadline Top 1",
-                "artist": "One Hit Wonderbread",
-                "artist_id": "a3",
-                "album": "Greatest Hit And That's It",
-                "album_id": "alb5",
-                "duration": 177,
-                "disc": 1,
-                "tracknum": 1,
-            },
-            {
-                "id": "t9",
-                "title": "None Shall Dance",
-                "artist": "Null Pointer Sisters",
-                "artist_id": "a4",
-                "album": "None Shall Pass",
-                "album_id": "alb6",
-                "duration": 222,
-                "disc": 1,
-                "tracknum": 1,
-            },
-            {
-                "id": "t10",
-                "title": "Guard Clause Cha-Cha",
-                "artist": "Null Pointer Sisters",
-                "artist_id": "a4",
-                "album": "None Shall Pass",
-                "album_id": "alb6",
-                "duration": 208,
-                "disc": 1,
-                "tracknum": 2,
-            },
-        ]
-        self.playlists: list[dict[str, Any]] = [
-            {"id": "pl1", "playlist": "Debugging Bangers"},
-            {"id": "pl2", "playlist": "Guard Clauses Only"},
-        ]
-        self.genres: list[dict[str, Any]] = [
-            {"id": "g1", "genre": "Electro"},
-            {"id": "g2", "genre": "Lo-Fi"},
-            {"id": "g3", "genre": "Blues"},
-        ]
-        self.playlist_tracks: dict[str, list[str]] = {
-            "pl1": ["t1", "t3", "t5", "t8"],
-            "pl2": ["t2", "t4", "t6", "t9", "t10"],
-        }
+        self.artists: list[dict[str, Any]] = fake_artists()
+        self.albums: list[dict[str, Any]] = fake_albums()
+        self.tracks: list[dict[str, Any]] = fake_tracks()
+        self.playlists: list[dict[str, Any]] = fake_playlists()
+        self.genres: list[dict[str, Any]] = fake_genres()
+        self.playlist_tracks: dict[str, list[str]] = fake_playlist_tracks()
 
     @property
     def app(self) -> web.Application:

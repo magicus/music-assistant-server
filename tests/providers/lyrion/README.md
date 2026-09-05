@@ -5,6 +5,8 @@ inklusive `lyrion_music` nu och `lyrion_player` senare.
 
 ## Delar
 
+- `catalog_seed.py`: Delad, deterministisk testkatalog (artister/albums/tracks/genres/playlists)
+  som anvands av bade fake LMS och Docker-seed.
 - `fake_lms_server.py`: In-memory fake LMS med JSON-RPC, stream-URL och artwork-endpoints.
 - `fixtures.py`: Gemensamma pytest-fixtures that exponerar en LMS-endpoint.
 
@@ -23,6 +25,9 @@ Tester valjer endpoint sa har:
 - `tests/providers/lyrion_music/test_provider_contract.py`
   ar fake-LMS-specifika tester (whitebox) som validerar intern
   request-historik och felinjicering i fake-servern.
+
+I CI kor dessa tester i fake-lage. Docker-lage ar en lokal, aktiv
+verifiering for arbete med Lyrion-specifik funktionalitet.
 
 ## Korning
 
@@ -53,13 +58,7 @@ Tillfalliga testartefakter skrivs under:
 
 - `build/test/lyrion/`
 
-Kor direkt med pytest:
-
-```bash
-pytest tests/providers/lyrion_music/test_provider_live_docker.py --live-lyrion-docker -q
-```
-
-Kora samma blackbox-tester mot Docker LMS:
+Kor blackbox mot Docker:
 
 ```bash
 pytest tests/providers/lyrion_music/test_provider_blackbox.py --live-lyrion-docker -q
@@ -71,9 +70,7 @@ Eller via markor:
 pytest -m live_lyrion_docker --live-lyrion-docker -q
 ```
 
-Detta kor:
-
-- `tests/providers/lyrion_music/test_provider_live_docker.py`
+Detta kor blackbox-tester markerade med `live_lyrion_docker`.
 
 Fake-LMS-kontraktstesterna hoppas over automatiskt i Docker-lage:
 

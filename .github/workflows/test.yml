@@ -177,6 +177,8 @@ jobs:
           MODE: ${{ needs.changes.outputs.mode }}
           TEST_PATHS: ${{ needs.changes.outputs.test_paths }}
           COV_PATHS: ${{ needs.changes.outputs.cov_paths }}
+          # CI should always run Lyrion tests against fake LMS only.
+          LYRION_TEST_DOCKER: "0"
           # aiolibdatachannel's _native.so doesn't link libstdc++ itself; the production
           # image resolves it via its jemalloc LD_PRELOAD, here we preload it directly
           LD_PRELOAD: libstdc++.so.6

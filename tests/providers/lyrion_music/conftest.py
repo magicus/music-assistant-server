@@ -7,13 +7,18 @@ from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-from aiohttp import ClientSession, web
+from aiohttp import ClientSession
 
 from music_assistant.providers.lyrion_music.constants import SUPPORTED_FEATURES
 from music_assistant.providers.lyrion_music.provider import LyrionMusicProvider
 from tests.common import use_real_create_task
 from tests.providers.lyrion.fake_lms_server import FakeLmsServer
-from tests.providers.lyrion.fixtures import LyrionTestEndpoint
+from tests.providers.lyrion.lms_server_harness import (
+    DockerLmsServerHarness,
+    FakeLmsServerHarness,
+    LyrionTestEndpoint,
+    LyrionTestLmsServer,
+)
 
 if TYPE_CHECKING:
     from tests.providers.lyrion.live_docker import LiveLmsEndpoint
@@ -22,41 +27,38 @@ pytest_plugins = ("tests.providers.lyrion.live_docker",)
 
 
 @pytest.fixture
-async def lyrion_test_endpoint(
+async def lyrion_test_lms_server(
     unused_tcp_port_factory: Callable[[], int],
     pytestconfig: pytest.Config,
     request: pytest.FixtureRequest,
-) -> AsyncGenerator[LyrionTestEndpoint]:
-    """Return LMS endpoint for Docker mode or fake mode."""
+) -> AsyncGenerator[LyrionTestLmsServer]:
+    """Return Docker or fake LMS harness based on test mode flags."""
     if pytestconfig.getoption("--live-lyrion-docker"):
         lms_endpoint: LiveLmsEndpoint = request.getfixturevalue("lyrion_live_lms_endpoint")
-        yield LyrionTestEndpoint(
+        endpoint = LyrionTestEndpoint(
             host=lms_endpoint.host,
             port=lms_endpoint.port,
             base_url=lms_endpoint.base_url,
             source="docker",
             fake_server=None,
         )
+        yield DockerLmsServerHarness(endpoint)
         return
 
-    fake_server = FakeLmsServer()
-    runner = web.AppRunner(fake_server.app)
-    await runner.setup()
-    port = unused_tcp_port_factory()
-    site = web.TCPSite(runner, host="127.0.0.1", port=port)
-    await site.start()
-
-    endpoint = LyrionTestEndpoint(
-        host="127.0.0.1",
-        port=port,
-        base_url=f"http://127.0.0.1:{port}",
-        source="fake",
-        fake_server=fake_server,
-    )
+    harness = FakeLmsServerHarness(unused_tcp_port_factory)
+    await harness.start()
     try:
-        yield endpoint
+        yield harness
     finally:
-        await runner.cleanup()
+        await harness.stop()
+
+
+@pytest.fixture
+async def lyrion_test_endpoint(
+    lyrion_test_lms_server: LyrionTestLmsServer,
+) -> LyrionTestEndpoint:
+    """Return endpoint details for the active LMS harness."""
+    return lyrion_test_lms_server.endpoint
 
 
 @pytest.fixture
@@ -106,9 +108,9 @@ async def lyrion_provider(
 
 @pytest.fixture
 def lyrion_fake_server(
-    lyrion_test_endpoint: LyrionTestEndpoint,
+    lyrion_test_lms_server: LyrionTestLmsServer,
 ) -> FakeLmsServer:
     """Return fake LMS server state when tests run in fake mode."""
-    if lyrion_test_endpoint.fake_server is None:
+    if lyrion_test_lms_server.fake_server is None:
         pytest.skip("Test requires fake LMS server; real LMS endpoint configured")
-    return lyrion_test_endpoint.fake_server
+    return lyrion_test_lms_server.fake_server

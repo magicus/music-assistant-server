@@ -18,6 +18,8 @@ from urllib.request import Request, urlopen
 
 import pytest
 
+from .catalog_seed import docker_catalog, docker_playlists_by_name
+
 
 @dataclass(slots=True, frozen=True)
 class LiveLmsEndpoint:
@@ -52,57 +54,6 @@ COMPOSE_FILE = REPO_ROOT / "tests/providers/lyrion/docker-compose.lms.yml"
 LMS_BUILD_DIR = REPO_ROOT / "build/test/lyrion"
 LMS_CONFIG_DIR = LMS_BUILD_DIR / "config"
 LMS_MUSIC_DIR = LMS_BUILD_DIR / "music"
-
-CATALOG: tuple[dict[str, Any], ...] = (
-    {
-        "artist": "DJ Home Azziztant",
-        "album": "Home Sweet Home Lab",
-        "genre": "Electro",
-        "tracks": (
-            ("Wake Up And Smell The Exceptions", 1, 1),
-            ("Kiss My Cache", 1, 2),
-        ),
-    },
-    {
-        "artist": "DJ Home Azziztant",
-        "album": "Cache Me Outside",
-        "genre": "Lo-Fi",
-        "tracks": (("Cold Start Romance", 1, 1),),
-    },
-    {
-        "artist": "The Async Awaiters",
-        "album": "Awaiting Sunrise",
-        "genre": "Electro",
-        "tracks": (
-            ("Await Me Maybe", 1, 1),
-            ("Future Is Pending", 1, 2),
-        ),
-    },
-    {
-        "artist": "The Async Awaiters",
-        "album": "Race Condition Blues",
-        "genre": "Blues",
-        "tracks": (
-            ("Race You To The Lock", 1, 1),
-            ("Segfault Serenade", 2, 3),
-        ),
-    },
-    {
-        "artist": "One Hit Wonderbread",
-        "album": "Greatest Hit And That's It",
-        "genre": "Lo-Fi",
-        "tracks": (("Breadline Top 1", 1, 1),),
-    },
-    {
-        "artist": "Null Pointer Sisters",
-        "album": "None Shall Pass",
-        "genre": "Blues",
-        "tracks": (
-            ("None Shall Dance", 1, 1),
-            ("Guard Clause Cha-Cha", 1, 2),
-        ),
-    },
-)
 
 
 def _safe_filename(value: str) -> str:
@@ -359,8 +310,11 @@ def _write_catalog(music_dir: Path) -> None:
         shutil.rmtree(music_dir)
     music_dir.mkdir(parents=True, exist_ok=True)
 
+    catalog = docker_catalog()
+    playlists_by_name = docker_playlists_by_name()
+
     track_path_map: dict[str, Path] = {}
-    for album_spec in CATALOG:
+    for album_spec in catalog:
         artist_name = str(album_spec["artist"])
         album_name = str(album_spec["album"])
         genre_name = str(album_spec["genre"])
@@ -382,19 +336,8 @@ def _write_catalog(music_dir: Path) -> None:
     playlists_dir = music_dir / "Playlists"
     playlists_dir.mkdir(parents=True, exist_ok=True)
 
-    debug_bangers = [
-        "Wake Up And Smell The Exceptions",
-        "Cold Start Romance",
-        "Future Is Pending",
-        "Breadline Top 1",
-    ]
-    guard_clauses = [
-        "Kiss My Cache",
-        "Await Me Maybe",
-        "Race You To The Lock",
-        "None Shall Dance",
-        "Guard Clause Cha-Cha",
-    ]
+    debug_bangers = playlists_by_name["Debugging Bangers"]
+    guard_clauses = playlists_by_name["Guard Clauses Only"]
 
     (playlists_dir / "Debugging Bangers.m3u").write_text(
         ("\n".join(str(track_path_map[title]) for title in debug_bangers) + "\n"),
