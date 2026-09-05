@@ -714,14 +714,15 @@ class LyrionMusicProvider(MusicProvider):
 
     def _trigger_artwork_backfill_tasks(self) -> None:
         """Queue album first, then artist artwork backfill tasks."""
-        try:
-            self.mass.tasks.run_task(self._album_artwork_task_id)
-            self.mass.tasks.run_task(self._artist_artwork_task_id)
-        except InvalidDataError as err:
-            self.logger.debug(
-                "Artwork backfill task scheduling skipped: %s",
-                err,
-            )
+        for task_id in (self._album_artwork_task_id, self._artist_artwork_task_id):
+            try:
+                self.mass.tasks.run_task(task_id)
+            except InvalidDataError as err:
+                self.logger.debug(
+                    "Artwork backfill task scheduling skipped for %s: %s",
+                    task_id,
+                    err,
+                )
 
     def _rotate_artwork_cache_token(self) -> None:
         """Rotate cache token appended to Lyrion artwork URLs."""

@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
-from aiohttp import ClientError, ClientTimeout
+from aiohttp import ClientError, ClientSession, ClientTimeout
 from music_assistant_models.config_entries import ConfigEntry
 from music_assistant_models.enums import ConfigEntryType
 from music_assistant_models.errors import SetupFailedError
@@ -86,7 +86,7 @@ async def validate_lms_endpoint(
     host: object,
     port: object,
     *,
-    http_session: object,
+    http_session: ClientSession,
     translation_owner: str | None = None,
 ) -> None:
     """Validate a configured LMS endpoint."""
