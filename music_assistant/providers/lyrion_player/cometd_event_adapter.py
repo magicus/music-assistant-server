@@ -75,7 +75,15 @@ class LyrionCometDEventAdapter:
         :param player: Target MA player.
         :param status: Merged playerstatus payload from LMS CometD stream.
         """
-        player._attr_available = True
+        if _is_invalid_player_status(status):
+            player._attr_available = False
+            player.update_state()
+            return
+
+        if (connected := _get_status_int(status, "player_connected")) is not None:
+            player._attr_available = bool(connected)
+        else:
+            player._attr_available = True
 
         mode = str(status.get("mode") or "stop")
         player._attr_playback_state = MODE_MAP.get(mode, PlaybackState.IDLE)
@@ -97,3 +105,20 @@ class LyrionCometDEventAdapter:
                 player._attr_elapsed_time_last_updated = time.time()
 
         player.update_state()
+
+
+def _get_status_int(status: StatusPayload, key: str) -> int | None:
+    """Parse one integer field from status payload."""
+    value = status.get(key)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except TypeError, ValueError:
+        return None
+
+
+def _is_invalid_player_status(status: StatusPayload) -> bool:
+    """Return True when LMS reports that the status player is invalid."""
+    error = status.get("error")
+    return isinstance(error, str) and error == "invalid player"

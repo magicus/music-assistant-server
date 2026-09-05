@@ -26,6 +26,8 @@ from .constants import (
     COMETD_CONNECT_TIMEOUT,
     COMETD_PLAYERSTATUS_TAGS,
     COMETD_RETRY_DELAY,
+    COMETD_SERVERSTATUS_BATCH_SIZE,
+    COMETD_SERVERSTATUS_SUBSCRIBE_INTERVAL,
     RPC_TIMEOUT,
 )
 
@@ -55,6 +57,8 @@ class LyrionCometDEventStream:
         self._subscribed_player_ids: set[str] = set()
         self._pending_player_ids: set[str] = set()
         self._status_by_player: dict[str, StatusPayload] = {}
+        self._known_server_player_ids: set[str] | None = None
+        self._known_server_player_count: int | None = None
 
     def start(self) -> None:
         """Start the background stream task when needed."""
@@ -78,6 +82,8 @@ class LyrionCometDEventStream:
         self._subscribed_player_ids.clear()
         self._pending_player_ids.clear()
         self._status_by_player.clear()
+        self._known_server_player_ids = None
+        self._known_server_player_count = None
 
     def mark_player_seen(self, player_id: str) -> None:
         """
@@ -119,9 +125,13 @@ class LyrionCometDEventStream:
         client_id = await self._bayeux.open_session(RPC_TIMEOUT)
         self._client_id = client_id
         self._subscribed_player_ids.clear()
+        self._known_server_player_ids = None
+        self._known_server_player_count = None
 
         for player in self.provider.players:
             self._pending_player_ids.add(player.player_id)
+
+        await self._subscribe_server_status()
 
         await self._bayeux.run_connect_loop(
             client_id=client_id,
@@ -181,6 +191,34 @@ class LyrionCometDEventStream:
         for message in response[1:]:
             await self._handle_message(message)
 
+    async def _subscribe_server_status(self) -> None:
+        """Subscribe to serverstatus updates to detect player roster changes."""
+        if self._client_id is None:
+            return
+
+        response_channel = f"/{self._client_id}/slim/serverstatus"
+        request = [
+            "",
+            [
+                "serverstatus",
+                0,
+                COMETD_SERVERSTATUS_BATCH_SIZE,
+                f"subscribe:{COMETD_SERVERSTATUS_SUBSCRIBE_INTERVAL}",
+            ],
+        ]
+        response = await self._bayeux.publish(
+            channel="/slim/subscribe",
+            client_id=self._client_id,
+            data={
+                "response": response_channel,
+                "request": request,
+            },
+            timeout=RPC_TIMEOUT,
+        )
+
+        for message in response[1:]:
+            await self._handle_message(message)
+
     async def _handle_message(self, message: dict[str, Any]) -> None:
         """Handle one normalized CometD message."""
         channel = message.get("channel")
@@ -194,12 +232,105 @@ class LyrionCometDEventStream:
                 await self._handle_player_status(player_id, data)
             return
 
+        if channel.endswith("/slim/serverstatus"):
+            data = message.get("data")
+            if isinstance(data, dict):
+                self._handle_server_status(data)
+            return
+
+    def _handle_server_status(self, payload: dict[str, Any]) -> None:
+        """Detect server roster changes and trigger provider rediscovery."""
+        self._apply_server_player_connection_state(payload)
+
+        player_ids = _extract_server_player_ids(payload)
+        if player_ids:
+            current_player_ids = {player.player_id for player in self.provider.players}
+            if self._known_server_player_ids is None:
+                self._known_server_player_ids = player_ids
+                self._known_server_player_count = len(player_ids)
+                if player_ids != current_player_ids:
+                    self.provider.schedule_players_discovery()
+                return
+
+            if player_ids != self._known_server_player_ids:
+                self._known_server_player_ids = player_ids
+                self._known_server_player_count = len(player_ids)
+                self.provider.schedule_players_discovery()
+            return
+
+        player_count = _get_int(payload, "player count")
+        if player_count is None:
+            return
+
+        if self._known_server_player_count is None:
+            self._known_server_player_count = player_count
+            if player_count != len(self.provider.players):
+                self.provider.schedule_players_discovery()
+            return
+
+        if player_count != self._known_server_player_count:
+            self._known_server_player_count = player_count
+            self.provider.schedule_players_discovery()
+
+    def _apply_server_player_connection_state(self, payload: dict[str, Any]) -> None:
+        """Apply connected flags from serverstatus to MA player availability."""
+        players_loop = payload.get("players_loop")
+        if not isinstance(players_loop, list):
+            return
+
+        for player_data in players_loop:
+            if not isinstance(player_data, dict):
+                continue
+
+            raw_player_id = player_data.get("playerid")
+            if not raw_player_id:
+                continue
+            player_id = str(raw_player_id)
+
+            connected = _get_int(player_data, "connected")
+            if connected is None:
+                continue
+
+            player = self.provider.mass.players.get_player(player_id)
+            if player is None:
+                continue
+
+            player_provider = getattr(player, "provider", None)
+            if (
+                player_provider is not None
+                and getattr(player_provider, "instance_id", None) != self.provider.instance_id
+            ):
+                continue
+
+            if not hasattr(player, "_attr_available") or not hasattr(player, "update_state"):
+                continue
+
+            available = bool(connected)
+            if getattr(player, "_attr_available", None) == available:
+                continue
+
+            player._attr_available = available
+            player.update_state()
+
     async def _handle_player_status(
         self,
         player_id: str,
         partial: StatusPayload,
     ) -> None:
         """Merge one playerstatus payload, compute diffs, and emit events."""
+        if _is_invalid_player_payload(partial):
+            self._status_by_player.pop(player_id, None)
+            self.mark_player_removed(player_id)
+            await self._event_callback(
+                LmsPlayerStatusUpdatedEvent(
+                    player_id=player_id,
+                    status=dict(partial),
+                    is_initial=False,
+                )
+            )
+            self.provider.schedule_players_discovery()
+            return
+
         previous = self._status_by_player.get(player_id)
         merged = dict(previous or {})
         merged.update(partial)
@@ -402,3 +533,25 @@ def _extract_current_track_id(status: StatusPayload) -> str | None:
         if value is not None:
             return str(value)
     return None
+
+
+def _extract_server_player_ids(payload: dict[str, Any]) -> set[str]:
+    """Extract normalized player ids from a serverstatus payload."""
+    players_loop = payload.get("players_loop")
+    if not isinstance(players_loop, list):
+        return set()
+
+    player_ids: set[str] = set()
+    for player_data in players_loop:
+        if not isinstance(player_data, dict):
+            continue
+        player_id = player_data.get("playerid")
+        if player_id:
+            player_ids.add(str(player_id))
+    return player_ids
+
+
+def _is_invalid_player_payload(payload: dict[str, Any]) -> bool:
+    """Return True when LMS status subscription reports an invalid player."""
+    error = payload.get("error")
+    return isinstance(error, str) and error == "invalid player"

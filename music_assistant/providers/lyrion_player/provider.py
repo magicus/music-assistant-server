@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
+from contextlib import suppress
 from typing import Any, cast
 from urllib.parse import urlencode
 
@@ -39,6 +41,8 @@ class LyrionPlayerProvider(PlayerProvider):
         """Initialize provider internals."""
         super().__init__(*args, **kwargs)
         self._unregister_stream_redirect_route = None
+        self._discover_players_task: asyncio.Task[None] | None = None
+        self._discover_players_again = False
         self._cometd_adapter = LyrionCometDEventAdapter(self)
         self._cometd_stream = LyrionCometDEventStream(
             self,
@@ -93,11 +97,30 @@ class LyrionPlayerProvider(PlayerProvider):
 
     async def unload(self, is_removed: bool = False) -> None:
         """Handle unload/close of the provider."""
+        if self._discover_players_task is not None:
+            self._discover_players_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._discover_players_task
+            self._discover_players_task = None
+
         await self._cometd_stream.stop()
         if unregister := self._unregister_stream_redirect_route:
             self._unregister_stream_redirect_route = None
             unregister()
         await super().unload(is_removed)
+
+    def schedule_players_discovery(self) -> None:
+        """Schedule players rediscovery and coalesce bursts into one task."""
+        if self.unloading:
+            return
+
+        if self._discover_players_task and not self._discover_players_task.done():
+            self._discover_players_again = True
+            return
+
+        self._discover_players_again = False
+        self._discover_players_task = self.mass.create_task(self._run_discover_players_loop())
+        self._discover_players_task.add_done_callback(self._handle_discover_players_done)
 
     def build_stream_redirect_url(
         self,
@@ -366,3 +389,24 @@ class LyrionPlayerProvider(PlayerProvider):
     ) -> int | None:
         """Backward-compatible wrapper for internal port access."""
         return self.get_configured_port(default)
+
+    async def _run_discover_players_loop(self) -> None:
+        """Run player discovery once or repeatedly while new triggers arrive."""
+        while not self.unloading:
+            self._discover_players_again = False
+            await self.discover_players()
+            if not self._discover_players_again:
+                break
+
+    def _handle_discover_players_done(self, task: asyncio.Task[None]) -> None:
+        """Log any discovery task failure and clear task bookkeeping."""
+        if self._discover_players_task is task:
+            self._discover_players_task = None
+
+        if task.cancelled():
+            return
+        if exception := task.exception():
+            self.logger.warning(
+                "Lyrion dynamic player rediscovery failed: %s",
+                exception,
+            )
