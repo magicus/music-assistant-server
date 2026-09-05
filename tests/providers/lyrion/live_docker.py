@@ -656,10 +656,10 @@ def lyrion_live_lms_endpoint(pytestconfig: pytest.Config) -> LiveLmsEndpoint:
         _write_catalog(LMS_MUSIC_DIR)
         _progress(f"catalog written under {LMS_MUSIC_DIR}")
 
-    base_url = os.getenv("LYRION_TEST_LMS_URL", "http://127.0.0.1:9000")
+    base_url = os.getenv("LYRION_TEST_DOCKER_LMS_URL", "http://127.0.0.1:9000")
     parsed = urlparse(base_url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname or not parsed.port:
-        msg = "LYRION_TEST_LMS_URL must include scheme, host and port"
+        msg = "LYRION_TEST_DOCKER_LMS_URL must include scheme, host and port"
         raise ValueError(msg)
 
     endpoint = LiveLmsEndpoint(

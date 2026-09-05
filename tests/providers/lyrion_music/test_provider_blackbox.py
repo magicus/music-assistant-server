@@ -8,7 +8,10 @@ from music_assistant_models.media_items import BrowseFolder
 
 from music_assistant.providers.lyrion_music.provider import LyrionMusicProvider
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [
+    pytest.mark.asyncio,
+    pytest.mark.live_lyrion_docker,
+]
 
 
 async def test_browse_root_has_expected_sections(

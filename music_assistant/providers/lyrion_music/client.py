@@ -379,6 +379,7 @@ async def _get_browse_ids(
         )
         if not raw_items:
             break
+        ids_before_page = len(ids)
         for raw_item in raw_items:
             if (item_id := parsers.extract_item_id(raw_item, id_keys=spec.id_keys)) is None:
                 continue
@@ -386,6 +387,14 @@ async def _get_browse_ids(
                 continue
             seen.add(item_id)
             ids.append(item_id)
+        if len(ids) == ids_before_page:
+            provider.logger.warning(
+                "Lyrion %s id discovery stalled at offset %s; received %s rows but no new ids",
+                spec.key,
+                offset,
+                len(raw_items),
+            )
+            break
         if expected_total:
             progress_text = f"Getting {spec.key} ids from Lyrion: {len(ids)}/{expected_total}"
             update_current_task_progress_text(progress_text)
