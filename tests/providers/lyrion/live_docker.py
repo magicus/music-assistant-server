@@ -32,10 +32,26 @@ class LiveLmsError(RuntimeError):
     """Raised when Docker/ffmpeg/LMS orchestration fails."""
 
 
+VERBOSE_PROGRESS = False
+
+
+def _set_progress_verbosity(enabled: bool) -> None:
+    """Set whether harness progress messages should be printed."""
+    global VERBOSE_PROGRESS
+    VERBOSE_PROGRESS = enabled
+
+
+def _progress(message: str, *, force: bool = False) -> None:
+    """Print a live progress message for on-demand local runs."""
+    if force or VERBOSE_PROGRESS:
+        print(f"[lyrion-live] {message}", flush=True)
+
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 COMPOSE_FILE = REPO_ROOT / "tests/providers/lyrion/docker-compose.lms.yml"
-LMS_CONFIG_DIR = REPO_ROOT / "tests/providers/lyrion/.lms-config"
-LMS_MUSIC_DIR = REPO_ROOT / "tests/providers/lyrion/.lms-music"
+LMS_BUILD_DIR = REPO_ROOT / "build/test/lyrion"
+LMS_CONFIG_DIR = LMS_BUILD_DIR / "config"
+LMS_MUSIC_DIR = LMS_BUILD_DIR / "music"
 
 CATALOG: tuple[dict[str, Any], ...] = (
     {
@@ -101,6 +117,7 @@ def _run(
     *,
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
+    timeout_s: float | None = None,
 ) -> str:
     """Run a subprocess command and return combined output on success."""
     try:
@@ -111,10 +128,18 @@ def _run(
             check=True,
             capture_output=True,
             text=True,
+            timeout=timeout_s,
         )
         return (completed.stdout or "") + (completed.stderr or "")
     except FileNotFoundError as err:
         msg = f"Command not found: {cmd[0]}"
+        raise LiveLmsError(msg) from err
+    except subprocess.TimeoutExpired as err:
+        msg = textwrap.dedent(
+            f"""
+            Command timed out after {timeout_s}s: {" ".join(cmd)}
+            """
+        ).strip()
         raise LiveLmsError(msg) from err
     except subprocess.CalledProcessError as err:
         output = ((err.stdout or "") + "\n" + (err.stderr or "")).strip()
@@ -127,6 +152,41 @@ def _run(
             """
         ).strip()
         raise LiveLmsError(msg) from err
+
+
+def _run_with_retries(
+    cmd: list[str],
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    timeout_s: float | None = None,
+    retries: int = 4,
+    delay_s: float = 2.0,
+) -> str:
+    """Run command with retries for transient Docker race conditions."""
+    last_err: LiveLmsError | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            return _run(
+                cmd,
+                cwd=cwd,
+                env=env,
+                timeout_s=timeout_s,
+            )
+        except LiveLmsError as err:
+            msg = str(err).lower()
+            transient = "removal of container" in msg and "already in progress" in msg
+            if transient and attempt < retries:
+                _progress("docker reports container removal in progress; retrying startup")
+                time.sleep(delay_s)
+                last_err = err
+                continue
+            raise
+
+    if last_err is not None:
+        raise last_err
+    msg = "Unexpected startup retry failure state"
+    raise LiveLmsError(msg)
 
 
 def _run_no_raise(
@@ -157,12 +217,12 @@ def _resolve_compose_cmd() -> list[str]:
         try:
             _run(["docker", "compose", "version"])
             return ["docker", "compose"]
-        except subprocess.CalledProcessError:
+        except LiveLmsError:
             pass
     if shutil.which("docker-compose"):
         return ["docker-compose"]
     msg = "Neither 'docker compose' nor 'docker-compose' is available"
-    raise RuntimeError(msg)
+    raise LiveLmsError(msg)
 
 
 def _json_rpc(
@@ -191,8 +251,7 @@ def _extract_loop_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
     """Extract LMS loop rows from a result object."""
     for key, value in result.items():
         if key.endswith("_loop") and isinstance(value, list):
-            rows = [row for row in value if isinstance(row, dict)]
-            return rows
+            return [row for row in value if isinstance(row, dict)]
     return []
 
 
@@ -213,6 +272,8 @@ def _wait_for_catalog_ready(base_url: str, timeout_s: float = 240.0) -> None:
     """Wait until expected catalog rows are visible in LMS listings."""
     end = time.time() + timeout_s
     last_counts = "artists=0 albums=0 tracks=0 playlists=0"
+    last_reported = ""
+    start = time.time()
     while time.time() < end:
         try:
             artists_rsp = _json_rpc(base_url, ["artists", 0, 1000])
@@ -233,6 +294,10 @@ def _wait_for_catalog_ready(base_url: str, timeout_s: float = 240.0) -> None:
             f"tracks={len(tracks)} "
             f"playlists={len(playlists)}"
         )
+        if last_counts != last_reported:
+            elapsed = time.time() - start
+            _progress(f"scan progress ({elapsed:.1f}s): {last_counts}")
+            last_reported = last_counts
 
         if len(artists) >= 4 and len(albums) >= 6 and len(tracks) >= 10 and len(playlists) >= 2:
             return
@@ -341,38 +406,99 @@ def _write_catalog(music_dir: Path) -> None:
     )
 
 
+def _write_server_prefs(config_dir: Path) -> None:
+    """Write minimum server prefs to skip first-run wizard in tests."""
+    prefs_dir = config_dir / "prefs"
+    prefs_dir.mkdir(parents=True, exist_ok=True)
+    server_prefs = prefs_dir / "server.prefs"
+    server_prefs.write_text(
+        "\n".join(
+            (
+                "wizardDone: 1",
+                "protectSettings: 0",
+                "audiodir: /music",
+                "playlistdir: /music/Playlists",
+                "rescaninterval: 0",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 def _docker_env() -> dict[str, str]:
     """Return docker compose env for LMS test run."""
     env = os.environ.copy()
     env.setdefault("TZ", "UTC")
+    env.setdefault("PUID", str(os.getuid()))
+    env.setdefault("PGID", str(os.getgid()))
     env["LMS_CONFIG_DIR"] = str(LMS_CONFIG_DIR)
     env["LMS_MUSIC_DIR"] = str(LMS_MUSIC_DIR)
     return env
 
 
+def _compose_logs(compose_cmd: list[str]) -> str:
+    """Return the latest LMS container logs for diagnostics."""
+    return _run_no_raise(
+        [
+            *compose_cmd,
+            "-f",
+            str(COMPOSE_FILE),
+            "logs",
+            "--tail",
+            "200",
+            "lms",
+        ],
+        cwd=REPO_ROOT,
+        env=_docker_env(),
+    )
+
+
+def _compose_ps(compose_cmd: list[str]) -> str:
+    """Return compose service state for diagnostics."""
+    return _run_no_raise(
+        [
+            *compose_cmd,
+            "-f",
+            str(COMPOSE_FILE),
+            "ps",
+            "--all",
+        ],
+        cwd=REPO_ROOT,
+        env=_docker_env(),
+    )
+
+
+def _container_unhealthy_state(compose_ps_output: str) -> bool:
+    """Return True if compose output indicates exited or restart loop state."""
+    lowered = compose_ps_output.lower()
+    return "restarting" in lowered or "exited" in lowered or "dead" in lowered
+
+
 def _bring_up_lms(base_url: str) -> None:
     """Start LMS container and wait until serverstatus works."""
     compose_cmd = _resolve_compose_cmd()
+    _progress("starting LMS docker container")
+    compose_up_cmd = [
+        *compose_cmd,
+        "-f",
+        str(COMPOSE_FILE),
+        "up",
+        "-d",
+        "--no-recreate",
+    ]
+    _progress(f"compose command: {' '.join(compose_up_cmd)}")
+    _progress("starting container (timeout 120s)")
     try:
-        _run(
-            [*compose_cmd, "-f", str(COMPOSE_FILE), "up", "-d"],
+        _run_with_retries(
+            compose_up_cmd,
             cwd=REPO_ROOT,
             env=_docker_env(),
+            timeout_s=120.0,
         )
+        _progress("container start command returned")
     except LiveLmsError as err:
-        logs = _run_no_raise(
-            [
-                *compose_cmd,
-                "-f",
-                str(COMPOSE_FILE),
-                "logs",
-                "--tail",
-                "200",
-                "lms",
-            ],
-            cwd=REPO_ROOT,
-            env=_docker_env(),
-        )
+        logs = _compose_logs(compose_cmd)
         msg = textwrap.dedent(
             f"""
             Failed to start LMS container.
@@ -387,34 +513,54 @@ def _bring_up_lms(base_url: str) -> None:
     parsed = urlparse(base_url)
     host = str(parsed.hostname)
     port = int(parsed.port) if parsed.port else 9000
+    _progress(f"waiting for TCP endpoint {host}:{port}")
     _wait_for_port(host, port)
 
     end = time.time() + 180.0
+    start = time.time()
+    next_status_report = time.time() + 5.0
+    _progress("waiting for LMS JSON-RPC serverstatus")
     while time.time() < end:
+        ps_output = _compose_ps(compose_cmd)
+        if _container_unhealthy_state(ps_output):
+            logs = _compose_logs(compose_cmd)
+            msg = textwrap.dedent(
+                f"""
+                LMS container is not healthy during startup.
+                Compose status:
+                {ps_output}
+
+                Container logs (last 200 lines):
+                {logs}
+                """
+            ).strip()
+            raise LiveLmsError(msg)
+
         try:
             rsp = _json_rpc(base_url, ["serverstatus", 0, 1])
             if isinstance(rsp.get("result"), dict):
+                _progress("LMS JSON-RPC is ready")
                 return
         except URLError, TimeoutError, OSError, ValueError:
             pass
+
+        if time.time() >= next_status_report:
+            elapsed = time.time() - start
+            _progress(f"still waiting for JSON-RPC ({elapsed:.1f}s)")
+            _progress(_compose_ps(compose_cmd))
+            next_status_report = time.time() + 5.0
+
         time.sleep(2.0)
-    logs = _run_no_raise(
-        [
-            *compose_cmd,
-            "-f",
-            str(COMPOSE_FILE),
-            "logs",
-            "--tail",
-            "200",
-            "lms",
-        ],
-        cwd=REPO_ROOT,
-        env=_docker_env(),
-    )
+
+    logs = _compose_logs(compose_cmd)
+    ps = _compose_ps(compose_cmd)
     msg = textwrap.dedent(
         f"""
         LMS did not become ready for JSON-RPC in time.
         Endpoint: {base_url}
+
+        Compose status:
+        {ps}
 
         Container logs (last 200 lines):
         {logs}
@@ -425,17 +571,27 @@ def _bring_up_lms(base_url: str) -> None:
 
 def _trigger_rescan(base_url: str) -> None:
     """Trigger a library rescan, ignoring unsupported command variants."""
+    _progress("triggering LMS rescan")
     for command in (["rescan"], ["rescan", "full"]):
         try:
             _json_rpc(base_url, command)
+            _progress(f"rescan command accepted: {command}")
             return
         except URLError, TimeoutError, OSError, ValueError:
             continue
 
 
-def _bring_down_lms() -> None:
+def _bring_down_lms(*, ignore_errors: bool = False) -> None:
     """Stop and remove LMS container for the test harness."""
     compose_cmd = _resolve_compose_cmd()
+    _progress("stopping LMS docker container")
+    if ignore_errors:
+        _run_no_raise(
+            [*compose_cmd, "-f", str(COMPOSE_FILE), "down"],
+            cwd=REPO_ROOT,
+            env=_docker_env(),
+        )
+        return
     _run(
         [*compose_cmd, "-f", str(COMPOSE_FILE), "down"],
         cwd=REPO_ROOT,
@@ -454,14 +610,58 @@ def lyrion_live_lms_endpoint(pytestconfig: pytest.Config) -> LiveLmsEndpoint:
     if not enabled and os.getenv("LYRION_TEST_DOCKER") != "1":
         pytest.skip("Set --live-lyrion-docker to run Docker-managed live LMS tests")
 
-    LMS_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    _write_catalog(LMS_MUSIC_DIR)
+    verbose_enabled = (
+        bool(pytestconfig.getoption("verbose"))
+        or bool(pytestconfig.getoption("--live-lyrion-verbose"))
+        or os.getenv("LYRION_TEST_DOCKER_VERBOSE") == "1"
+    )
+    _set_progress_verbosity(verbose_enabled)
+    _progress(
+        "verbose progress enabled",
+        force=verbose_enabled,
+    )
+    if platform := os.getenv("LMS_PLATFORM"):
+        _progress(
+            f"docker platform override: {platform}",
+            force=verbose_enabled,
+        )
+
+    keep_running = (
+        bool(pytestconfig.getoption("--live-lyrion-keep-running"))
+        or os.getenv("LYRION_TEST_DOCKER_KEEP_RUNNING") == "1"
+    )
+
+    if keep_running:
+        _progress("keep-running enabled: preserving existing LMS state")
+        if not LMS_CONFIG_DIR.exists():
+            _progress("no existing config found; creating initial server prefs")
+            LMS_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            _write_server_prefs(LMS_CONFIG_DIR)
+        if not LMS_MUSIC_DIR.exists():
+            _progress("no existing music catalog found; generating test catalog")
+            _write_catalog(LMS_MUSIC_DIR)
+            _progress(f"catalog written under {LMS_MUSIC_DIR}")
+    else:
+        # Ensure no old container keeps file handles into mounted dirs while
+        # we rebuild config/music trees for this deterministic test run.
+        _bring_down_lms(ignore_errors=True)
+
+        _progress("preparing deterministic music catalog")
+        if LMS_CONFIG_DIR.exists():
+            _progress("removing stale LMS config directory")
+            shutil.rmtree(LMS_CONFIG_DIR)
+        LMS_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        LMS_MUSIC_DIR.mkdir(parents=True, exist_ok=True)
+        _write_server_prefs(LMS_CONFIG_DIR)
+        _write_catalog(LMS_MUSIC_DIR)
+        _progress(f"catalog written under {LMS_MUSIC_DIR}")
 
     base_url = os.getenv("LYRION_TEST_LMS_URL", "http://127.0.0.1:9000")
     parsed = urlparse(base_url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname or not parsed.port:
         msg = "LYRION_TEST_LMS_URL must include scheme, host and port"
         raise ValueError(msg)
+
     endpoint = LiveLmsEndpoint(
         host=parsed.hostname,
         port=parsed.port,
@@ -471,8 +671,15 @@ def lyrion_live_lms_endpoint(pytestconfig: pytest.Config) -> LiveLmsEndpoint:
     try:
         _bring_up_lms(endpoint.base_url)
         _trigger_rescan(endpoint.base_url)
+        _progress("waiting for catalog to become visible in LMS")
         _wait_for_catalog_ready(endpoint.base_url)
+        _progress("catalog is ready; running tests")
         yield endpoint
     finally:
-        if os.getenv("LYRION_TEST_DOCKER_KEEP_RUNNING") != "1":
+        if not keep_running:
             _bring_down_lms()
+        else:
+            _progress(
+                "keeping LMS container running for manual inspection",
+                force=True,
+            )

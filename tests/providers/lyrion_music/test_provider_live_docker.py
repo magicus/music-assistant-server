@@ -14,7 +14,10 @@ if TYPE_CHECKING:
     from tests.providers.lyrion.live_docker import LiveLmsEndpoint
 
 pytest_plugins = ("tests.providers.lyrion.live_docker",)
-pytestmark = pytest.mark.live_lyrion_docker
+pytestmark = [
+    pytest.mark.live_lyrion_docker,
+    pytest.mark.timeout(900),
+]
 
 
 @pytest.fixture

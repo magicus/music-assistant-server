@@ -2,22 +2,70 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
-from typing import TYPE_CHECKING, Any
+import os
+from collections.abc import AsyncGenerator, Callable
+from typing import Any
 from unittest.mock import AsyncMock, Mock
+from urllib.parse import urlparse
 
 import pytest
-from aiohttp import ClientSession
+from aiohttp import ClientSession, web
 
 from music_assistant.providers.lyrion_music.constants import SUPPORTED_FEATURES
 from music_assistant.providers.lyrion_music.provider import LyrionMusicProvider
 from tests.common import use_real_create_task
 from tests.providers.lyrion.fake_lms_server import FakeLmsServer
+from tests.providers.lyrion.fixtures import LyrionTestEndpoint
 
-if TYPE_CHECKING:
-    from tests.providers.lyrion.fixtures import LyrionTestEndpoint
 
-pytest_plugins = ("tests.providers.lyrion.fixtures",)
+@pytest.fixture
+async def lyrion_test_endpoint(
+    unused_tcp_port_factory: Callable[[], int],
+) -> AsyncGenerator[LyrionTestEndpoint]:
+    """Return fake LMS endpoint unless real LMS env vars are configured."""
+    if raw_url := os.getenv("LYRION_TEST_LMS_URL"):
+        parsed = urlparse(raw_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname or not parsed.port:
+            msg = "LYRION_TEST_LMS_URL must include scheme, host and port"
+            raise ValueError(msg)
+        yield LyrionTestEndpoint(
+            host=parsed.hostname,
+            port=parsed.port,
+            base_url=f"{parsed.scheme}://{parsed.hostname}:{parsed.port}",
+            source="real_url",
+            fake_server=None,
+        )
+        return
+
+    if raw_host := os.getenv("LYRION_TEST_LMS_HOST"):
+        port = int(os.getenv("LYRION_TEST_LMS_PORT", "9000"))
+        yield LyrionTestEndpoint(
+            host=raw_host,
+            port=port,
+            base_url=f"http://{raw_host}:{port}",
+            source="real_host",
+            fake_server=None,
+        )
+        return
+
+    fake_server = FakeLmsServer()
+    runner = web.AppRunner(fake_server.app)
+    await runner.setup()
+    port = unused_tcp_port_factory()
+    site = web.TCPSite(runner, host="127.0.0.1", port=port)
+    await site.start()
+
+    endpoint = LyrionTestEndpoint(
+        host="127.0.0.1",
+        port=port,
+        base_url=f"http://127.0.0.1:{port}",
+        source="fake",
+        fake_server=fake_server,
+    )
+    try:
+        yield endpoint
+    finally:
+        await runner.cleanup()
 
 
 @pytest.fixture

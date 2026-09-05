@@ -56,6 +56,10 @@ dar pytest-fixturen skoter orkestreringen i Python:
 - vantar tills katalogen ar synlig
 - kor live integrationstesterna
 
+Tillfalliga testartefakter skrivs under:
+
+- `build/test/lyrion/`
+
 Kor direkt med pytest:
 
 ```bash
