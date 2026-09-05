@@ -1,3 +1,4 @@
+# mypy: disable-error-code="arg-type"
 """
 Live LMS smoke tests for lyrion_music provider.
 

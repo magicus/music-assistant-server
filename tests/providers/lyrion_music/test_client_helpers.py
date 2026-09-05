@@ -1,3 +1,4 @@
+# mypy: disable-error-code="attr-defined,no-untyped-def,unreachable,method-assign"
 """Unit tests for Lyrion client helper functions."""
 
 from __future__ import annotations
@@ -222,7 +223,7 @@ def test_count_and_lookup_helpers() -> None:
     command = client._create_lookup_command(client.ALBUM_SPEC, ["1", "2"])
     assert command[-1] == "album_id:1,2"
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="requires at least one id"):
         client._create_lookup_command(client.ALBUM_SPEC, [])
 
 
@@ -238,7 +239,7 @@ def test_split_lookup_reply_and_normalize() -> None:
     split = client._split_lookup_reply(client.ALBUM_SPEC, result, ["a1", "a2"])
     assert [item["id"] for item in split] == ["a1", "a2"]
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="returned incomplete data"):
         client._split_lookup_reply(client.ALBUM_SPEC, result, ["a1", "missing"])
 
     provider = _provider()

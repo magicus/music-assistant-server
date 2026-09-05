@@ -31,6 +31,16 @@ from tests.common import (
 NUMBA_CACHE_DIR = pytest.StashKey[tempfile.TemporaryDirectory[str]]()
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    """Register project-specific test CLI options."""
+    parser.addoption(
+        "--live-lyrion-docker",
+        action="store_true",
+        default=False,
+        help="Run on-demand Lyrion live integration tests against Docker LMS.",
+    )
+
+
 def pytest_configure(config: pytest.Config) -> None:
     """
     Give this test process its own numba kernel cache.
@@ -43,6 +53,10 @@ def pytest_configure(config: pytest.Config) -> None:
     """
     cache_dir = tempfile.TemporaryDirectory(prefix="ma-numba-cache-")
     config.stash[NUMBA_CACHE_DIR] = cache_dir
+    config.addinivalue_line(
+        "markers",
+        "live_lyrion_docker: on-demand tests requiring Docker LMS",
+    )
     # numba reads this once, when it is imported; nothing here imports it that early.
     os.environ["NUMBA_CACHE_DIR"] = cache_dir.name
 

@@ -1,3 +1,4 @@
+# mypy: disable-error-code="attr-defined,no-untyped-def"
 """Unit tests for Lyrion artwork helper functions."""
 
 from __future__ import annotations

@@ -1,17 +1,21 @@
+# mypy: disable-error-code="attr-defined,no-untyped-def,arg-type,unreachable"
 """Unit tests for Lyrion artwork and sync helper logic."""
 
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, Mock
 
-import pytest
 from music_assistant_models.enums import ImageType, MediaType
 from music_assistant_models.errors import MediaNotFoundError
 from music_assistant_models.media_items import Artist, MediaItemImage, ProviderMapping, UniqueList
 
 from music_assistant.providers.lyrion_music import sync
+
+if TYPE_CHECKING:
+    import pytest
 
 
 def _make_artist(

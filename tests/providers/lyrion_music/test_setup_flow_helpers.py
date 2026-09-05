@@ -1,3 +1,4 @@
+# mypy: disable-error-code="union-attr,attr-defined"
 """Tests for shared and provider-specific Lyrion setup flow helpers."""
 
 from __future__ import annotations

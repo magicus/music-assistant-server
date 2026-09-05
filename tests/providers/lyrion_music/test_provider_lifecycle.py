@@ -1,3 +1,4 @@
+# mypy: disable-error-code="method-assign,attr-defined"
 """Tests for Lyrion provider lifecycle and task wiring helpers."""
 
 from __future__ import annotations
@@ -6,7 +7,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from music_assistant_models.enums import ConfigEntryType, MediaType
-from music_assistant_models.errors import InvalidDataError
+from music_assistant_models.errors import ActionUnavailable, InvalidDataError
 
 from music_assistant.models.music_provider import MusicProvider
 from music_assistant.providers.lyrion_music import provider as lyrion_provider_mod
@@ -32,7 +33,7 @@ async def test_config_action_unknown_delegates_to_super(
     lyrion_provider: LyrionMusicProvider,
 ) -> None:
     """Unknown action should delegate to base class and surface its error."""
-    with pytest.raises(Exception):
+    with pytest.raises(ActionUnavailable, match="Unknown action"):
         await lyrion_provider.handle_config_action("unknown-action")
 
 
