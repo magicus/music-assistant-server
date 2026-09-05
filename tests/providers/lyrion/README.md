@@ -18,8 +18,12 @@ Tester valjer endpoint sa har:
 
 ## Teststrategi
 
+- `tests/providers/lyrion_music/test_provider_blackbox.py`
+  ar endpoint-agnostiska tester som kan koras mot fake LMS (default)
+  eller Docker LMS med `--live-lyrion-docker`.
 - `tests/providers/lyrion_music/test_provider_contract.py`
-  kor against fake LMS och antar deterministisk fejk-katalog.
+  ar fake-LMS-specifika tester (whitebox) som validerar intern
+  request-historik och felinjicering i fake-servern.
 - `tests/providers/lyrion_music/test_provider_live_smoke.py`
   kor bara nar real LMS ar konfigurerad och gor data-agnostiska smoke-checks.
 
@@ -29,6 +33,12 @@ Fake-lage (default):
 
 ```bash
 python -m pytest tests/providers/lyrion_music -q
+```
+
+Kora enbart endpoint-agnostiska blackbox-tester i fake-lage:
+
+```bash
+python -m pytest tests/providers/lyrion_music/test_provider_blackbox.py -q
 ```
 
 Real LMS via URL:
@@ -66,6 +76,12 @@ Kor direkt med pytest:
 pytest tests/providers/lyrion_music/test_provider_live_docker.py --live-lyrion-docker -q
 ```
 
+Kora samma blackbox-tester mot Docker LMS:
+
+```bash
+pytest tests/providers/lyrion_music/test_provider_blackbox.py --live-lyrion-docker -q
+```
+
 Eller via markor:
 
 ```bash
@@ -75,6 +91,10 @@ pytest -m live_lyrion_docker --live-lyrion-docker -q
 Detta kor:
 
 - `tests/providers/lyrion_music/test_provider_live_docker.py`
+
+Fake-LMS-kontraktstesterna hoppas over automatiskt i Docker-lage:
+
+- `tests/providers/lyrion_music/test_provider_contract.py`
 
 Notera:
 

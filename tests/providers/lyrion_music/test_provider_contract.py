@@ -1,4 +1,4 @@
-"""Contract tests for the Lyrion music provider against a fake LMS server."""
+"""Fake-LMS-specific contract tests for the Lyrion music provider."""
 
 from __future__ import annotations
 
@@ -13,12 +13,13 @@ from music_assistant.providers.lyrion_music import client as lyrion_client
 from music_assistant.providers.lyrion_music import provider as lyrion_provider_mod
 from music_assistant.providers.lyrion_music.provider import LyrionMusicProvider
 from tests.providers.lyrion.fake_lms_server import FakeLmsServer
-from tests.providers.lyrion.fixtures import LyrionTestEndpoint, using_real_lms_from_env
+from tests.providers.lyrion.fixtures import LyrionTestEndpoint
 
-pytestmark = pytest.mark.skipif(
-    using_real_lms_from_env(),
-    reason="Requires deterministic fake LMS catalog",
-)
+
+@pytest.fixture(autouse=True)
+def _require_fake_lms(lyrion_fake_server: FakeLmsServer) -> None:
+    """Ensure this module only runs when the fake LMS endpoint is active."""
+    del lyrion_fake_server
 
 
 async def test_handle_async_init_calls_serverstatus(

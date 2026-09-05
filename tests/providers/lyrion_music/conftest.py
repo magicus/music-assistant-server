@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import os
 from collections.abc import AsyncGenerator, Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, Mock
-from urllib.parse import urlparse
 
 import pytest
 from aiohttp import ClientSession, web
@@ -17,33 +15,26 @@ from tests.common import use_real_create_task
 from tests.providers.lyrion.fake_lms_server import FakeLmsServer
 from tests.providers.lyrion.fixtures import LyrionTestEndpoint
 
+if TYPE_CHECKING:
+    from tests.providers.lyrion.live_docker import LiveLmsEndpoint
+
+pytest_plugins = ("tests.providers.lyrion.live_docker",)
+
 
 @pytest.fixture
 async def lyrion_test_endpoint(
     unused_tcp_port_factory: Callable[[], int],
+    pytestconfig: pytest.Config,
+    request: pytest.FixtureRequest,
 ) -> AsyncGenerator[LyrionTestEndpoint]:
-    """Return fake LMS endpoint unless real LMS env vars are configured."""
-    if raw_url := os.getenv("LYRION_TEST_LMS_URL"):
-        parsed = urlparse(raw_url)
-        if parsed.scheme not in {"http", "https"} or not parsed.hostname or not parsed.port:
-            msg = "LYRION_TEST_LMS_URL must include scheme, host and port"
-            raise ValueError(msg)
+    """Return LMS endpoint for Docker mode or fake mode."""
+    if pytestconfig.getoption("--live-lyrion-docker"):
+        lms_endpoint: LiveLmsEndpoint = request.getfixturevalue("lyrion_live_lms_endpoint")
         yield LyrionTestEndpoint(
-            host=parsed.hostname,
-            port=parsed.port,
-            base_url=f"{parsed.scheme}://{parsed.hostname}:{parsed.port}",
-            source="real_url",
-            fake_server=None,
-        )
-        return
-
-    if raw_host := os.getenv("LYRION_TEST_LMS_HOST"):
-        port = int(os.getenv("LYRION_TEST_LMS_PORT", "9000"))
-        yield LyrionTestEndpoint(
-            host=raw_host,
-            port=port,
-            base_url=f"http://{raw_host}:{port}",
-            source="real_host",
+            host=lms_endpoint.host,
+            port=lms_endpoint.port,
+            base_url=lms_endpoint.base_url,
+            source="docker",
             fake_server=None,
         )
         return
