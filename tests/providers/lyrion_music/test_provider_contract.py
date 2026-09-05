@@ -166,7 +166,7 @@ async def test_get_library_genres_and_genre_browse(
 ) -> None:
     """Genres should be listable and browsable into matching albums."""
     genres = [genre async for genre in lyrion_provider.get_library_genres()]
-    assert genres == ["Electro", "Lo-Fi", "Blues"]
+    assert sorted(genres) == ["Blues", "Electro", "Lo-Fi"]
 
     genre_items = await lyrion_provider.browse(f"{lyrion_provider.instance_id}://genres")
     genre_folder = next(

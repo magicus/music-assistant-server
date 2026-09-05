@@ -320,6 +320,9 @@ class FakeLmsServer:
         )
 
     def _build_result(self, command: list[Any], entity: str) -> dict[str, Any]:
+        if entity == "playlists" and len(command) > 1 and command[1] == "tracks":
+            return self._build_playlist_tracks_result(command)
+
         offset = _coerce_int(command[1] if len(command) > 1 else 0, 0)
         limit = _coerce_int(command[2] if len(command) > 2 else 250, 250)
         filters = [
@@ -345,7 +348,35 @@ class FakeLmsServer:
             return _page_result("playlists_loop", rows, offset, limit)
 
         rows = self._filter_genres(self.genres, filters)
+        rows = sorted(
+            rows,
+            key=lambda row: str(row.get("genre") or row.get("name") or "").casefold(),
+        )
         return _page_result("genres_loop", rows, offset, limit)
+
+    def _build_playlist_tracks_result(self, command: list[Any]) -> dict[str, Any]:
+        """Return a paged playlisttracks_loop response for playlists tracks."""
+        offset = _coerce_int(command[2] if len(command) > 2 else 0, 0)
+        limit = _coerce_int(command[3] if len(command) > 3 else 250, 250)
+        filters = [
+            str(arg)
+            for arg in command[4:]
+            if isinstance(arg, (str, int, float)) and ":" in str(arg)
+        ]
+
+        playlist_id: str | None = None
+        for key, value in _iter_filters(filters):
+            if key in {"playlist_id", "id"}:
+                playlist_id = value
+                break
+
+        if playlist_id is None:
+            return _page_result("playlisttracks_loop", [], offset, limit)
+
+        wanted_ids = self.playlist_tracks.get(playlist_id, [])
+        track_lookup = {str(row["id"]): row for row in self.tracks}
+        rows = [track_lookup[track_id] for track_id in wanted_ids if track_id in track_lookup]
+        return _page_result("playlisttracks_loop", rows, offset, limit)
 
     def _maybe_make_incomplete_batch(
         self,

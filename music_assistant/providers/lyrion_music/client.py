@@ -268,10 +268,41 @@ async def get_all_playlists(provider: LyrionMusicProvider) -> list[dict[str, str
 
 async def get_playlist_tracks(provider: LyrionMusicProvider, playlist_id: str) -> list[Track]:
     """Return all tracks for a playlist id."""
-    return [
-        track
-        async for track in iter_library_tracks(provider, filter_value=f"playlist_id:{playlist_id}")
-    ]
+    tracks: list[Track] = []
+    offset = 0
+    while True:
+        result = await rpc_request(
+            provider,
+            player_id="",
+            command=[
+                "playlists",
+                "tracks",
+                offset,
+                BROWSE_PAGE_SIZE,
+                f"playlist_id:{playlist_id}",
+                TRACK_TAGS,
+            ],
+        )
+        raw_items = cast(
+            "list[dict[str, Any]]",
+            result.get("playlisttracks_loop", []),
+        )
+        if not raw_items:
+            break
+        for raw_track in raw_items:
+            if parsers.extract_item_id(raw_track, id_keys=("id", "track_id")) is None:
+                continue
+            tracks.append(parsers.parse_track(provider, raw_track))
+
+        expected_total = _extract_browse_total_count(result)
+        if expected_total is not None:
+            has_more = offset + len(raw_items) < expected_total
+        else:
+            has_more = len(raw_items) >= BROWSE_PAGE_SIZE
+        if not has_more:
+            break
+        offset += BROWSE_PAGE_SIZE
+    return tracks
 
 
 async def get_album_tracks(provider: LyrionMusicProvider, album_id: str) -> list[Track]:

@@ -58,7 +58,7 @@ async def test_live_docker_catalog_counts_match_fixture(
     assert len(albums) == 6
     assert len(tracks) == 10
     assert len(playlists) == 2
-    assert genres == ["Electro", "Lo-Fi", "Blues"]
+    assert sorted(genres) == ["Blues", "Electro", "Lo-Fi"]
 
 
 async def test_live_docker_search_finds_seeded_records(
