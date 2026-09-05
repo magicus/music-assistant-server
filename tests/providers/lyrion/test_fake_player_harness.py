@@ -1,0 +1,78 @@
+"""Tests for fake Lyrion players being backend-agnostic across fake and Docker LMS."""
+
+from __future__ import annotations
+
+import pytest
+
+from tests.providers.lyrion.fake_lms_player import FakeSlimProtoPlayer
+from tests.providers.lyrion.fake_lms_server import FakeLmsServer
+from tests.providers.lyrion.lms_server_harness import FakeLmsServerHarness, LyrionTestEndpoint
+
+
+@pytest.mark.asyncio
+async def test_fake_player_registers_on_fake_lms(unused_tcp_port_factory) -> None:
+    """A fake slimproto player should show up as a connected LMS player on the fake server."""
+    harness = FakeLmsServerHarness(unused_tcp_port_factory)
+    await harness.start()
+    try:
+        player = FakeSlimProtoPlayer(
+            endpoint=harness.endpoint,
+            player_id="fake-player-1",
+            name="Fake Bedroom",
+            model="test",
+        )
+
+        await player.connect()
+        state = harness.fake_server.players["fake-player-1"]
+        assert state["connected"] == 1
+        assert state["name"] == "Fake Bedroom"
+
+        player_status = await player.request_status()
+        assert player_status["playerid"] == "fake-player-1"
+        assert player_status["connected"] == 1
+        assert player_status["mode"] == "stop"
+
+        await player.disconnect()
+        await player.close()
+    finally:
+        await harness.stop()
+
+
+@pytest.mark.asyncio
+async def test_fake_player_harness_uses_same_endpoint_contract_for_real_lms() -> None:
+    """The player only depends on the shared endpoint contract, not the backend implementation."""
+    endpoint = LyrionTestEndpoint(
+        host="127.0.0.1",
+        port=9000,
+        base_url="http://127.0.0.1:9000",
+        source="docker",
+        slimproto_port=3483,
+    )
+
+    player = FakeSlimProtoPlayer(
+        endpoint=endpoint,
+        player_id="docker-player-1",
+        name="Docker Player",
+        model="docker",
+    )
+
+    assert player.endpoint.host == "127.0.0.1"
+    assert player.endpoint.slimproto_port == 3483
+    assert player.player_id == "docker-player-1"
+
+
+@pytest.mark.asyncio
+async def test_fake_lms_server_builds_player_status_payload() -> None:
+    """The fake LMS should keep its player roster and status payloads consistent for both discovery and runtime calls."""
+    server = FakeLmsServer()
+    await server.connect_player("test-1", "Kitchen", "test")
+
+    result = server._build_serverstatus_result()
+    assert result["player count"] == 1
+    assert result["players_loop"][0]["playerid"] == "test-1"
+    assert result["players_loop"][0]["connected"] == 1
+
+    status = server._status_for_player("test-1")
+    assert status["playerid"] == "test-1"
+    assert status["mode"] == "stop"
+    assert status["power"] == 1

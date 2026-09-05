@@ -45,6 +45,7 @@ class FakeLmsServer:
         self.incomplete_batch_for_entities: set[str] = set()
         self.missing_large_artist_images: set[str] = {"a3"}
         self.missing_large_album_images: set[str] = {"alb6"}
+        self.players: dict[str, dict[str, Any]] = {}
 
         self.artists: list[dict[str, Any]] = fake_artists()
         self.albums: list[dict[str, Any]] = fake_albums()
@@ -52,6 +53,75 @@ class FakeLmsServer:
         self.playlists: list[dict[str, Any]] = fake_playlists()
         self.genres: list[dict[str, Any]] = fake_genres()
         self.playlist_tracks: dict[str, list[str]] = fake_playlist_tracks()
+
+    async def connect_player(self, player_id: str, name: str, model: str) -> dict[str, Any]:
+        """Register a connected fake player and return its player metadata."""
+        player = {
+            "playerid": player_id,
+            "name": name,
+            "model": model,
+            "connected": 1,
+            "power": 1,
+            "mode": "stop",
+            "volume": 50,
+            "playlist index": 0,
+            "playlist tracks": 0,
+            "player_name": name,
+            "isplaying": 0,
+            "sync_master": "",
+        }
+        self.players[player_id] = player
+        return player
+
+    async def disconnect_player(self, player_id: str) -> dict[str, Any]:
+        """Disconnect a registered fake player."""
+        player = self.players.pop(player_id, {})
+        if not player:
+            return {"playerid": player_id, "connected": 0, "power": 0}
+        player["connected"] = 0
+        player["power"] = 0
+        return player
+
+    def _status_for_player(self, player_id: str) -> dict[str, Any]:
+        """Return a status payload for a known fake player."""
+        player = self.players.get(player_id)
+        if player is None:
+            return {
+                "playerid": player_id,
+                "connected": 0,
+                "power": 0,
+                "mode": "stop",
+            }
+        return {
+            "playerid": player_id,
+            "name": player.get("name", player_id),
+            "model": player.get("model", "test"),
+            "connected": int(player.get("connected", 1)),
+            "power": int(player.get("power", 1)),
+            "mode": player.get("mode", "stop"),
+            "playlist index": int(player.get("playlist index", 0)),
+            "playlist tracks": int(player.get("playlist tracks", 0)),
+            "volume": int(player.get("volume", 50)),
+            "player_name": player.get("player_name", player_id),
+            "isplaying": int(player.get("isplaying", 0)),
+        }
+
+    def _build_serverstatus_result(self) -> dict[str, Any]:
+        """Build the serverstatus payload expected by CometD / roster discovery."""
+        players_loop = [
+            {
+                "playerid": player_id,
+                "name": player.get("name", player_id),
+                "model": player.get("model", "test"),
+                "connected": int(player.get("connected", 1)),
+                "power": int(player.get("power", 1)),
+            }
+            for player_id, player in sorted(self.players.items())
+        ]
+        return {
+            "player count": len(players_loop),
+            "players_loop": players_loop,
+        }
 
     @property
     def app(self) -> web.Application:
@@ -99,7 +169,27 @@ class FakeLmsServer:
             return self._rpc_error(code, message, status=200)
 
         if command_name == "serverstatus":
-            return web.json_response({"id": 1, "result": {"count": 1}})
+            return web.json_response({"id": 1, "result": self._build_serverstatus_result()})
+
+        if command_name == "players":
+            return web.json_response({"id": 1, "result": self._build_serverstatus_result()})
+
+        if command_name == "status":
+            status = self._status_for_player(player_id)
+            return web.json_response({"id": 1, "result": status})
+
+        if command_name == "player":
+            action = command[1] if len(command) > 1 else ""
+            if action == "register":
+                name = str(command[2]) if len(command) > 2 else player_id
+                model = str(command[3]) if len(command) > 3 else "test"
+                await self.connect_player(player_id, name, model)
+                return web.json_response({"id": 1, "result": self._status_for_player(player_id)})
+            if action == "disconnect":
+                await self.disconnect_player(player_id)
+                return web.json_response(
+                    {"id": 1, "result": {"playerid": player_id, "connected": 0}}
+                )
 
         if command_name == "artists":
             return self._rpc_result(command, "artists")

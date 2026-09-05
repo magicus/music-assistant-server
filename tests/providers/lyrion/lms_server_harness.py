@@ -20,6 +20,7 @@ class LyrionTestEndpoint:
     base_url: str
     source: str
     fake_server: FakeLmsServer | None = None
+    slimproto_port: int = 3483
 
 
 class LyrionTestLmsServer(Protocol):
