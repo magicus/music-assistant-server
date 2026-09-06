@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import aiohttp
@@ -49,12 +50,23 @@ class EndpointRpcClient:
             "method": "slim.request",
             "params": [self._player_id, command],
         }
-        async with self._session.post(
-            f"{self._endpoint.base_url}/jsonrpc.js",
-            json=payload,
-        ) as response:
-            response.raise_for_status()
-            data = await response.json()
+        data: dict[str, Any] | None = None
+        for attempt in range(3):
+            try:
+                async with self._session.post(
+                    f"{self._endpoint.base_url}/jsonrpc.js",
+                    json=payload,
+                ) as response:
+                    response.raise_for_status()
+                    data = await response.json()
+                break
+            except aiohttp.ServerDisconnectedError:
+                if attempt == 2:
+                    raise
+                await asyncio.sleep(0.1 * (attempt + 1))
+
+        if data is None:
+            raise RuntimeError("JSON-RPC response payload was unexpectedly empty")
         result = data.get("result")
         if not isinstance(result, dict):
             raise RuntimeError("JSON-RPC response is missing result payload")
@@ -81,6 +93,55 @@ class ProviderStyleRpcClient:
         await self._rpc.close()
 
 
+async def _resolve_live_player_id(
+    endpoint: LyrionTestEndpoint,
+    preferred_player_id: str,
+) -> str | None:
+    """
+    Resolve a working live LMS player id from serverstatus.
+
+    Returns ``preferred_player_id`` immediately on fake backend.
+    """
+    if endpoint.fake_server is not None:
+        return preferred_player_id
+
+    session = aiohttp.ClientSession()
+    payload = {
+        "id": 1,
+        "method": "slim.request",
+        "params": ["", ["serverstatus", 0, 200]],
+    }
+    try:
+        for _ in range(10):
+            try:
+                async with session.post(
+                    f"{endpoint.base_url}/jsonrpc.js", json=payload
+                ) as response:
+                    response.raise_for_status()
+                    data = await response.json()
+                result = data.get("result")
+                if isinstance(result, dict):
+                    players = result.get("players_loop")
+                    if isinstance(players, list):
+                        for item in players:
+                            if not isinstance(item, dict):
+                                continue
+                            player_id = item.get("playerid")
+                            if isinstance(player_id, str) and player_id:
+                                return player_id
+            except (
+                aiohttp.ClientConnectionError,
+                aiohttp.ClientPayloadError,
+                aiohttp.ServerDisconnectedError,
+            ):
+                pass
+            await asyncio.sleep(0.2)
+    finally:
+        await session.close()
+
+    return None
+
+
 def _playlist_index(status: dict[str, Any]) -> int:
     """Read current queue index from LMS status across key-name variants."""
     if "playlist_cur_index" in status:
@@ -93,6 +154,23 @@ def _playlist_tracks(status: dict[str, Any]) -> int:
     if "playlist_tracks" in status:
         return int(status["playlist_tracks"])
     return int(status.get("playlist tracks", 0))
+
+
+def _playlist_values(status: dict[str, Any]) -> list[str]:
+    """Return queue identity values in order from playlist_loop payload."""
+    playlist_loop = status.get("playlist_loop")
+    if not isinstance(playlist_loop, list):
+        return []
+    values: list[str] = []
+    for row in playlist_loop:
+        if not isinstance(row, dict):
+            continue
+        for key in ("url", "track_id", "id"):
+            raw = row.get(key)
+            if raw is not None:
+                values.append(str(raw))
+                break
+    return values
 
 
 @pytest.mark.asyncio
@@ -109,6 +187,13 @@ async def test_fake_player_registers_on_fake_lms(
 
     try:
         await player.connect()
+        resolved_player_id = await _resolve_live_player_id(
+            player.endpoint,
+            player.player_id,
+        )
+        if resolved_player_id is None:
+            pytest.skip("Live LMS did not expose any player id for queue command routing")
+        player.rpc_player_id = resolved_player_id
         state = (
             player.endpoint.fake_server.players["fake-player-1"]
             if player.endpoint.fake_server
@@ -324,11 +409,17 @@ async def test_queue_state_stays_consistent_when_three_sources_alternate_aggress
         name="Fake Queue Adversarial",
         model="test",
     )
-    provider_client = ProviderStyleRpcClient(lyrion_test_endpoint, player.player_id)
-    direct_rpc_client = EndpointRpcClient(lyrion_test_endpoint, player.player_id)
-
-    await player.connect()
+    provider_client: ProviderStyleRpcClient | None = None
+    direct_rpc_client: EndpointRpcClient | None = None
     try:
+        await player.connect()
+        resolved_player_id = await _resolve_live_player_id(lyrion_test_endpoint, player.player_id)
+        if resolved_player_id is None:
+            pytest.skip("Live LMS did not expose any player id for queue command routing")
+        player.rpc_player_id = resolved_player_id
+        provider_client = ProviderStyleRpcClient(lyrion_test_endpoint, resolved_player_id)
+        direct_rpc_client = EndpointRpcClient(lyrion_test_endpoint, resolved_player_id)
+
         await provider_client.send_player_command(["playlist", "clear"])
         await direct_rpc_client.send(["playlist", "add", "http://queue.local/track-a.mp3"])
         await provider_client.send_player_command(
@@ -369,8 +460,142 @@ async def test_queue_state_stays_consistent_when_three_sources_alternate_aggress
         if player.endpoint.fake_server is not None:
             assert player.endpoint.fake_server.slimproto_events[-1][0] == b"butn"
     finally:
-        await provider_client.close()
-        await direct_rpc_client.close()
+        if provider_client is not None:
+            await provider_client.close()
+        if direct_rpc_client is not None:
+            await direct_rpc_client.close()
+        await player.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.live_lyrion_docker
+async def test_queue_duplicate_track_reordering_survives_cross_source_churn(
+    lyrion_test_endpoint: LyrionTestEndpoint,
+) -> None:
+    """A duplicate-heavy queue should keep coherent ordering/index while updates alternate across all control paths."""
+    player = FakeSlimProtoPlayer(
+        endpoint=lyrion_test_endpoint,
+        player_id="fake-player-queue-dupes",
+        name="Fake Queue Dupes",
+        model="test",
+    )
+
+    track_a = "http://queue.local/track-a.mp3"
+    track_b = "http://queue.local/track-b.mp3"
+
+    provider_client: ProviderStyleRpcClient | None = None
+    direct_rpc_client: EndpointRpcClient | None = None
+    try:
+        await player.connect()
+        resolved_player_id = await _resolve_live_player_id(lyrion_test_endpoint, player.player_id)
+        if resolved_player_id is None:
+            pytest.skip("Live LMS did not expose any player id for queue command routing")
+        player.rpc_player_id = resolved_player_id
+        provider_client = ProviderStyleRpcClient(lyrion_test_endpoint, resolved_player_id)
+        direct_rpc_client = EndpointRpcClient(lyrion_test_endpoint, resolved_player_id)
+
+        await provider_client.send_player_command(["playlist", "clear"])
+
+        # Build: A, A, A, B, A, A (alternating MA/provider and direct JSON-RPC).
+        await provider_client.send_player_command(["playlist", "add", track_a])
+        await direct_rpc_client.send(["playlist", "add", track_a])
+        await provider_client.send_player_command(["playlist", "add", track_a])
+        await direct_rpc_client.send(["playlist", "add", track_b])
+        await provider_client.send_player_command(["playlist", "add", track_a])
+        await direct_rpc_client.send(["playlist", "add", track_a])
+
+        status = await direct_rpc_client.send(["status", 0, 100])
+        assert _playlist_values(status) == [track_a, track_a, track_a, track_b, track_a, track_a]
+        assert _playlist_tracks(status) == 6
+        assert _playlist_index(status) == 0
+
+        # SlimProto rewires active index while queue reshapes around duplicates.
+        await player.next_track()
+        await direct_rpc_client.send(["playlist", "move", 5, 2])
+        await provider_client.send_player_command(["playlist", "move", 0, 4])
+        await player.next_track()
+        await direct_rpc_client.send(["playlist", "delete", 3])
+
+        status = await direct_rpc_client.send(["status", 0, 100])
+        assert _playlist_values(status) == [track_a, track_a, track_a, track_a, track_a]
+        assert _playlist_tracks(status) == 5
+        assert 0 <= _playlist_index(status) <= 4
+
+        # Cross the former separator boundary and swap through equal neighbors.
+        await provider_client.send_player_command(["playlist", "move", 4, 1])
+        await player.previous_track()
+        await provider_client.send_player_command(["playlist", "move", 2, 3])
+
+        status = await direct_rpc_client.send(["status", 0, 100])
+        assert _playlist_values(status) == [track_a, track_a, track_a, track_a, track_a]
+        assert _playlist_tracks(status) == 5
+        assert 0 <= _playlist_index(status) <= 4
+    finally:
+        if provider_client is not None:
+            await provider_client.close()
+        if direct_rpc_client is not None:
+            await direct_rpc_client.close()
+        await player.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.live_lyrion_docker
+async def test_queue_duplicate_swap_and_bridge_hops_keep_index_valid(
+    lyrion_test_endpoint: LyrionTestEndpoint,
+) -> None:
+    """Moving duplicate items across a middle sentinel should not corrupt queue length or active index bounds."""
+    player = FakeSlimProtoPlayer(
+        endpoint=lyrion_test_endpoint,
+        player_id="fake-player-queue-bridge",
+        name="Fake Queue Bridge",
+        model="test",
+    )
+
+    track_a = "http://queue.local/track-a.mp3"
+    track_b = "http://queue.local/track-b.mp3"
+
+    provider_client: ProviderStyleRpcClient | None = None
+    direct_rpc_client: EndpointRpcClient | None = None
+    try:
+        await player.connect()
+        resolved_player_id = await _resolve_live_player_id(lyrion_test_endpoint, player.player_id)
+        if resolved_player_id is None:
+            pytest.skip("Live LMS did not expose any player id for queue command routing")
+        player.rpc_player_id = resolved_player_id
+        provider_client = ProviderStyleRpcClient(lyrion_test_endpoint, resolved_player_id)
+        direct_rpc_client = EndpointRpcClient(lyrion_test_endpoint, resolved_player_id)
+
+        await provider_client.send_player_command(["playlist", "clear"])
+
+        # Build: A, A, B, A, A then churn by alternating all three sources.
+        await provider_client.send_player_command(["playlist", "add", track_a])
+        await direct_rpc_client.send(["playlist", "add", track_a])
+        await provider_client.send_player_command(["playlist", "add", track_b])
+        await direct_rpc_client.send(["playlist", "add", track_a])
+        await provider_client.send_player_command(["playlist", "add", track_a])
+
+        status = await direct_rpc_client.send(["status", 0, 100])
+        assert _playlist_values(status) == [track_a, track_a, track_b, track_a, track_a]
+        assert _playlist_tracks(status) == 5
+
+        await provider_client.send_player_command(["playlist", "index", 2])
+        await player.next_track()
+        await direct_rpc_client.send(["playlist", "move", 0, 4])
+        await provider_client.send_player_command(["playlist", "move", 3, 1])
+        await player.previous_track()
+        await direct_rpc_client.send(["playlist", "move", 2, 0])
+
+        status = await direct_rpc_client.send(["status", 0, 100])
+        values = _playlist_values(status)
+        assert len(values) == 5
+        assert values.count(track_a) == 4
+        assert values.count(track_b) == 1
+        assert 0 <= _playlist_index(status) <= 4
+    finally:
+        if provider_client is not None:
+            await provider_client.close()
+        if direct_rpc_client is not None:
+            await direct_rpc_client.close()
         await player.close()
 
 

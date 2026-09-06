@@ -29,11 +29,11 @@ class FakeSlimProtoPlayer:
         return struct.pack("!H", len(payload) + 4) + command + payload
 
     @staticmethod
-    def _make_helo_payload(player_id: str, name: str, model: str) -> bytes:
+    def _make_helo_payload(player_id: str, mac_address: bytes, name: str, model: str) -> bytes:
         """Encode minimal HELO payload with the player identity and capabilities."""
         return (
             b"\x0c\x00\x00\x00\x00\x00\x00\x00"  # deviceid=12, revision=0
-            b"\x00\x00\x00\x00\x00\x00"  # 6-byte MAC placeholder
+            + mac_address
             + b"\x00" * 16
             + struct.pack("!H", 0)
             + struct.pack("!II", 0, 0)
@@ -63,6 +63,10 @@ class FakeSlimProtoPlayer:
         self.name = name
         self.model = model
         self.mode = "stop"
+        self.rpc_player_id = (
+            player_id if self.endpoint.fake_server is not None else "00:00:00:00:00:00"
+        )
+        self._mac_address = b"\x00\x00\x00\x00\x00\x00"
         self._session = aiohttp.ClientSession()
         self._slimproto_writer: asyncio.StreamWriter | None = None
         self._server_state_listener: Callable[[str, dict[str, Any]], None] | None = None
@@ -85,7 +89,12 @@ class FakeSlimProtoPlayer:
             self.endpoint.slimproto_port,
         )
         writer = self._slimproto_writer[1]
-        helo_payload = self._make_helo_payload(self.player_id, self.name, self.model)
+        helo_payload = self._make_helo_payload(
+            self.player_id,
+            self._mac_address,
+            self.name,
+            self.model,
+        )
         writer.write(self._make_frame(b"HELO", helo_payload))
         await writer.drain()
 
@@ -95,7 +104,8 @@ class FakeSlimProtoPlayer:
                 "mode", self.mode
             )
             return self.endpoint.fake_server._status_for_player(self.player_id)
-        return {"playerid": self.player_id, "connected": 1, "power": 1}
+
+        return {"playerid": self.rpc_player_id, "connected": 1, "power": 1}
 
     async def disconnect(self) -> dict[str, Any]:
         """Disconnect the player using the SlimProto DSCO frame and close the socket."""
@@ -147,26 +157,10 @@ class FakeSlimProtoPlayer:
 
     async def request_status(self) -> dict[str, Any]:
         """Return runtime status for the player using the active backend's real contract."""
-        if self.endpoint.fake_server is None:
-            connected = 1 if self._slimproto_writer is not None else 0
-            return {
-                "playerid": self.player_id,
-                "name": self.name,
-                "model": self.model,
-                "connected": connected,
-                "power": 1 if connected else 0,
-                "mode": self.mode,
-                "playlist index": 0,
-                "playlist tracks": 0,
-                "volume": 50,
-                "player_name": self.name,
-                "isplaying": 1 if self.mode == "play" else 0,
-            }
-
         payload = {
             "id": 1,
             "method": "slim.request",
-            "params": [self.player_id, ["status", "-", 1]],
+            "params": [self.rpc_player_id, ["status", "-", 1]],
         }
         async with self._session.post(
             f"{self.endpoint.base_url}/jsonrpc.js",
