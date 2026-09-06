@@ -13,6 +13,7 @@ from music_assistant_models.errors import (
     ProviderUnavailableError,
 )
 
+from music_assistant.controllers.players import PlayerController
 from music_assistant.providers.lyrion_player.player import LyrionPlayer
 
 
@@ -35,6 +36,57 @@ def mock_provider() -> MagicMock:
 def player(mock_provider: MagicMock) -> LyrionPlayer:
     """Return a LyrionPlayer instance backed by a mocked provider."""
     return LyrionPlayer(mock_provider, "test_player", {})
+
+
+def _build_controller_with_lyrion_players() -> tuple[
+    PlayerController,
+    MagicMock,
+    MagicMock,
+    LyrionPlayer,
+    LyrionPlayer,
+]:
+    """Create a PlayerController with two real LyrionPlayer instances."""
+    mass = MagicMock()
+    mass.closing = False
+    mass.loop = None
+    mass.config = MagicMock()
+    mass.config.get = MagicMock(return_value=[])
+    mass.config.get_raw_player_config_value = MagicMock(
+        side_effect=lambda _player_id, _key, default=None: default
+    )
+    mass.config.get_raw_core_config_value = MagicMock(return_value="GLOBAL")
+    mass.config.create_default_player_config = MagicMock()
+    mass.config.get_base_player_config = MagicMock(return_value=MagicMock())
+    mass.signal_event = MagicMock()
+    mass.get_providers = MagicMock(return_value=[])
+    mass.subscribe = MagicMock(return_value=lambda: None)
+
+    controller = PlayerController(mass)
+    mass.players = controller
+
+    provider = MagicMock()
+    provider.instance_id = "lyrion_player"
+    provider.logger = MagicMock()
+    provider.mass = mass
+    provider.send_player_command = AsyncMock()
+
+    leader = LyrionPlayer(provider, "leader", {"name": "Leader", "model": "test"})
+    member = LyrionPlayer(provider, "member", {"name": "Member", "model": "test"})
+    provider.players = [leader, member]
+
+    leader._attr_powered = True
+    member._attr_powered = True
+    leader._attr_available = True
+    member._attr_available = True
+    leader._attr_can_group_with = {"member", provider.instance_id}
+    member._attr_can_group_with = {"leader", provider.instance_id}
+    leader._attr_volume_control = "native"
+    member._attr_volume_control = "native"
+
+    controller._players = {leader.player_id: leader, member.player_id: member}
+    leader.update_state(signal_event=False)
+    member.update_state(signal_event=False)
+    return controller, mass, provider, leader, member
 
 
 @pytest.mark.asyncio
@@ -191,3 +243,48 @@ async def test_set_members_wraps_provider_unavailable(
 
     with pytest.raises(PlayerCommandFailed, match="set_members failed"):
         await player.set_members(player_ids_to_add=["member_a"])
+
+
+@pytest.mark.asyncio
+async def test_controller_cmd_set_members_uses_lyrion_native_sync_path() -> None:
+    """The MA grouping API should reach Lyrion native sync commands."""
+    controller, _mass, provider, leader, member = _build_controller_with_lyrion_players()
+
+    await controller.cmd_set_members("leader", player_ids_to_add=["member"])
+
+    provider.send_player_command.assert_awaited_once_with("member", ["sync", "leader"])
+    assert leader.group_members == ["leader", "member"]
+    assert member.synced_to == "leader"
+    assert member.state.synced_to == "leader"
+
+    provider.send_player_command.reset_mock()
+
+    await controller.cmd_set_members("leader", player_ids_to_remove=["member"])
+
+    provider.send_player_command.assert_awaited_once_with("member", ["sync", "-"])
+    assert leader.group_members == []
+    assert member.synced_to is None
+    assert member.state.synced_to is None
+
+
+@pytest.mark.asyncio
+async def test_controller_cmd_group_volume_targets_all_lyrion_members() -> None:
+    """MA group volume commands should fan out to all grouped Lyrion members."""
+    controller, _mass, provider, leader, member = _build_controller_with_lyrion_players()
+    leader._attr_group_members = ["leader", "member"]
+    leader._attr_volume_level = 30
+    member._attr_volume_level = 30
+    leader.update_state(signal_event=False)
+    member.update_state(signal_event=False)
+
+    await controller.cmd_group_volume("leader", 60)
+
+    assert provider.send_player_command.await_count == 2
+    assert provider.send_player_command.await_args_list[0].args == (
+        "leader",
+        ["mixer", "volume", 60],
+    )
+    assert provider.send_player_command.await_args_list[1].args == (
+        "member",
+        ["mixer", "volume", 60],
+    )
