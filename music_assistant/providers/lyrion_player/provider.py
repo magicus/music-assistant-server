@@ -28,7 +28,7 @@ from .constants import (
     PLAYERS_BATCH_SIZE,
     RPC_TIMEOUT,
 )
-from .lyrion_cometd import LyrionCometDEventStream
+from music_assistant.providers.lyrion_music.shared.lyrion_cometd import LyrionCometDEventStream
 from .player import LyrionPlayer
 
 

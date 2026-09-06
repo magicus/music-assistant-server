@@ -1,12 +1,39 @@
-"""Backward-compatibility wrapper for the shared Lyrion CometD stream."""
+"""Lyrion-specific CometD stream built on top of Bayeux primitives."""
 
 from __future__ import annotations
 
-from music_assistant.providers.lyrion_music.shared.lyrion_cometd import (
-    LyrionCometDEventStream,
+import asyncio
+from contextlib import suppress
+from typing import TYPE_CHECKING, Any, cast
+
+from aiohttp import ClientError, ClientTimeout
+from music_assistant_models.errors import ProviderUnavailableError
+
+from music_assistant.providers.lyrion_player.cometd_events import (
+    LmsPlayerEventCallback,
+    LmsPlayerPlaybackChangedEvent,
+    LmsPlayerPlaylistChangedEvent,
+    LmsPlayerPowerChangedEvent,
+    LmsPlayerRepeatChangedEvent,
+    LmsPlayerSeekedEvent,
+    LmsPlayerShuffleChangedEvent,
+    LmsPlayerStatusUpdatedEvent,
+    LmsPlayerVolumeChangedEvent,
+    StatusPayload,
 )
 
-__all__ = ["LyrionCometDEventStream"]
+from .bayeux_client import BayeuxClient
+from .constants import (
+    COMETD_CONNECT_TIMEOUT,
+    COMETD_PLAYERSTATUS_TAGS,
+    COMETD_RETRY_DELAY,
+    COMETD_SERVERSTATUS_BATCH_SIZE,
+    COMETD_SERVERSTATUS_SUBSCRIBE_INTERVAL,
+    RPC_TIMEOUT,
+)
+
+if TYPE_CHECKING:
+    from .provider import LyrionPlayerProvider
 
 
 class LyrionCometDEventStream:

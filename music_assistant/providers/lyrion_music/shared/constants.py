@@ -1,0 +1,16 @@
+"""Shared Lyrion protocol constants for generic LMS/CometD handling."""
+
+from __future__ import annotations
+
+from music_assistant.constants import CONF_PORT
+
+CONF_LMS_HOST = "lms_host"
+CONF_LMS_PORT = CONF_PORT
+DEFAULT_LMS_HOST = "127.0.0.1"
+DEFAULT_LMS_PORT = 9000
+RPC_TIMEOUT = 10
+COMETD_RETRY_DELAY = 5
+COMETD_CONNECT_TIMEOUT = 35
+COMETD_PLAYERSTATUS_TAGS = "tags:cdegilopqrstuyAABEGIKNPSTV"
+COMETD_SERVERSTATUS_SUBSCRIBE_INTERVAL = 30
+COMETD_SERVERSTATUS_BATCH_SIZE = 500
