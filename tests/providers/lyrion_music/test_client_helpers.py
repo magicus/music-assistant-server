@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from types import SimpleNamespace
 from typing import Any, Self
 from unittest.mock import AsyncMock, Mock
@@ -36,7 +36,33 @@ class _Response:
         return None
 
 
-def _provider(*, host: Any = "127.0.0.1", port: Any = 9000) -> Any:
+class _FakeRpcTransport:
+    """Route JSON-RPC payloads to a local handler and capture requests."""
+
+    def __init__(
+        self,
+        handler: Callable[[str, list[Any]], dict[str, Any] | Exception],
+    ) -> None:
+        self._handler = handler
+        self.commands: list[list[Any]] = []
+
+    def post(self, _url: str, json: dict[str, Any], timeout: Any) -> _Response:
+        del timeout
+        player_id = str(json["params"][0])
+        command = list(json["params"][1])
+        self.commands.append(command)
+        result = self._handler(player_id, command)
+        if isinstance(result, Exception):
+            raise result
+        return _Response(payload={"result": result})
+
+
+def _provider(
+    *,
+    host: Any = "127.0.0.1",
+    port: Any = 9000,
+    rpc_handler: Callable[[str, list[Any]], dict[str, Any] | Exception] | None = None,
+) -> Any:
     provider = Mock()
     provider.logger = Mock()
     provider.mass.http_session.post = Mock()
@@ -50,6 +76,10 @@ def _provider(*, host: Any = "127.0.0.1", port: Any = 9000) -> Any:
 
     provider.get_setup_value = Mock(side_effect=_get_setup_value)
     provider._disabled_batch_lookup_keys = set()
+    if rpc_handler is not None:
+        transport = _FakeRpcTransport(rpc_handler)
+        provider.mass.http_session.post = Mock(side_effect=transport.post)
+        provider._fake_rpc_transport = transport
     return provider
 
 
@@ -202,19 +232,18 @@ async def test_get_album_tracks_sorting_and_playlist_tracks(
 
     monkeypatch.setattr(client, "iter_library_tracks", _iter_tracks)
 
-    async def _rpc_request(_provider: Any, player_id: str, command: list[Any]) -> dict[str, Any]:
-        del _provider, player_id
+    def _rpc_request(player_id: str, command: list[Any]) -> dict[str, Any]:
+        assert player_id == ""
         assert command[:2] == ["playlists", "tracks"]
         assert any(str(part).startswith("playlist_id:pl1") for part in command)
         return {"playlisttracks_loop": [{"id": "trk1", "track": "Track 1"}], "count": "1"}
 
-    monkeypatch.setattr(client, "rpc_request", _rpc_request)
     monkeypatch.setattr(
         client.parsers,
         "parse_track",
         lambda _provider, _raw: _Track(0, 0),
     )
-    provider = _provider()
+    provider = _provider(rpc_handler=_rpc_request)
 
     tracks = await client.get_album_tracks(provider, "alb1")
     assert [(t.disc_number, t.track_number) for t in tracks] == [(1, 1), (1, 2), (2, 3)]
@@ -314,34 +343,32 @@ async def test_get_entity_data_not_found(monkeypatch: pytest.MonkeyPatch) -> Non
         await client._get_entity_data(_provider(), client.TRACK_SPEC, "missing")
 
 
-async def test_get_entity_pages_has_more_branches(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_get_entity_pages_has_more_branches() -> None:
     """has_more should use count when present and fallback to page size when absent."""
 
-    async def _rpc_count(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        del args, kwargs
+    def _rpc_count(_player_id: str, _command: list[Any]) -> dict[str, Any]:
         return {"albums_loop": [{"id": "1"}], "count": 2}
 
-    monkeypatch.setattr(client, "rpc_request", _rpc_count)
-    page, has_more = await client._get_entity_page(_provider(), client.ALBUM_SPEC, 0, 1)
+    page, has_more = await client._get_entity_page(
+        _provider(rpc_handler=_rpc_count), client.ALBUM_SPEC, 0, 1
+    )
     assert len(page) == 1
     assert has_more is True
 
-    async def _rpc_entity_no_count(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        del args, kwargs
+    def _rpc_entity_no_count(_player_id: str, _command: list[Any]) -> dict[str, Any]:
         return {"albums_loop": []}
 
-    monkeypatch.setattr(client, "rpc_request", _rpc_entity_no_count)
-    page, has_more = await client._get_entity_page(_provider(), client.ALBUM_SPEC, 0, 1)
+    page, has_more = await client._get_entity_page(
+        _provider(rpc_handler=_rpc_entity_no_count), client.ALBUM_SPEC, 0, 1
+    )
     assert page == []
     assert has_more is False
 
-    async def _rpc_no_count(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        del args, kwargs
+    def _rpc_no_count(_player_id: str, _command: list[Any]) -> dict[str, Any]:
         return {"playlists_loop": [{"id": "1"}]}
 
-    monkeypatch.setattr(client, "rpc_request", _rpc_no_count)
     page, has_more = await client._get_simple_browse_page(
-        _provider(), "playlists", "playlists_loop", 0, 1
+        _provider(rpc_handler=_rpc_no_count), "playlists", "playlists_loop", 0, 1
     )
     assert len(page) == 1
     assert has_more is True
@@ -351,14 +378,13 @@ async def test_get_browse_ids_without_count_uses_found_so_far_and_offset_paging(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """_get_browse_ids should use the no-count progress text and advance offset by page size."""
-    provider = _provider()
     observed_offsets: list[int] = []
 
     first_page = [{"id": f"id{i}"} for i in range(client.BROWSE_PAGE_SIZE)]
     second_page = [{"id": "id-last"}]
 
-    async def _rpc(_provider: Any, player_id: str, command: list[Any]) -> dict[str, Any]:
-        del _provider, player_id
+    def _rpc(player_id: str, command: list[Any]) -> dict[str, Any]:
+        assert player_id == ""
         observed_offsets.append(int(command[1]))
         if int(command[1]) == 0:
             return {client.ARTIST_SPEC.loop_key: first_page}
@@ -366,12 +392,13 @@ async def test_get_browse_ids_without_count_uses_found_so_far_and_offset_paging(
             return {client.ARTIST_SPEC.loop_key: second_page}
         return {client.ARTIST_SPEC.loop_key: []}
 
+    provider = _provider(rpc_handler=_rpc)
+
     progress_texts: list[str] = []
 
     def _capture_progress(text: str) -> None:
         progress_texts.append(text)
 
-    monkeypatch.setattr(client, "rpc_request", _rpc)
     monkeypatch.setattr(client, "update_current_task_progress_text", _capture_progress)
     monkeypatch.setattr(client, "_update_weighted_sync_progress", lambda **_: None)
 
@@ -382,19 +409,17 @@ async def test_get_browse_ids_without_count_uses_found_so_far_and_offset_paging(
     assert any("found so far" in text for text in progress_texts)
 
 
-async def test_get_entity_page_filter_and_has_more_false(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_get_entity_page_filter_and_has_more_false() -> None:
     """_get_entity_page should append filter value and compute has_more=False at total boundary."""
     captured_commands: list[list[Any]] = []
 
-    async def _rpc(_provider: Any, player_id: str, command: list[Any]) -> dict[str, Any]:
-        del _provider, player_id
+    def _rpc(player_id: str, command: list[Any]) -> dict[str, Any]:
+        assert player_id == ""
         captured_commands.append(command)
         return {"albums_loop": [{"id": "1"}], "count": 3}
 
-    monkeypatch.setattr(client, "rpc_request", _rpc)
-
     page, has_more = await client._get_entity_page(
-        _provider(),
+        _provider(rpc_handler=_rpc),
         client.ALBUM_SPEC,
         offset=2,
         limit=5,
