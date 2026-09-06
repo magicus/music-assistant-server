@@ -1,4 +1,4 @@
-"""Shared fixtures for tests that need an LMS endpoint."""
+"""Shared pytest fixtures for Lyrion endpoint-agnostic tests."""
 
 from __future__ import annotations
 
@@ -6,8 +6,8 @@ from collections.abc import AsyncGenerator, Callable
 
 import pytest
 
-from .fake_lms_server import FakeLmsServer
-from .lms_server_harness import (
+from tests.providers.lyrion.fake_lms_server import FakeLmsServer
+from tests.providers.lyrion.lms_server_harness import (
     DockerLmsServerHarness,
     FakeLmsServerHarness,
     LyrionTestEndpoint,
@@ -54,10 +54,10 @@ async def lyrion_test_endpoint(
 
 
 @pytest.fixture
-def fake_lms_server(
+def lyrion_fake_server(
     lyrion_test_lms_server: LyrionTestLmsServer,
 ) -> FakeLmsServer:
-    """Return fake LMS state when the backend is the in-memory fake server."""
+    """Return fake LMS state when the current backend is the in-memory fake server."""
     if lyrion_test_lms_server.fake_server is None:
         pytest.skip("Test requires fake LMS server; real LMS endpoint configured")
     return lyrion_test_lms_server.fake_server

@@ -8,7 +8,7 @@ import pytest
 
 from tests.providers.lyrion.fake_lms_player import FakeSlimProtoPlayer
 from tests.providers.lyrion.fake_lms_server import FakeLmsServer
-from tests.providers.lyrion.lms_server_harness import FakeLmsServerHarness, LyrionTestEndpoint
+from tests.providers.lyrion.lms_server_harness import LyrionTestEndpoint
 
 
 class FakeMAProvider:
@@ -33,22 +33,27 @@ class FakeMAProvider:
 
 
 @pytest.mark.asyncio
-async def test_fake_player_registers_on_fake_lms(unused_tcp_port_factory) -> None:
-    """A fake slimproto player should show up as a connected LMS player on the fake server."""
-    harness = FakeLmsServerHarness(unused_tcp_port_factory)
-    await harness.start()
-    try:
-        player = FakeSlimProtoPlayer(
-            endpoint=harness.endpoint,
-            player_id="fake-player-1",
-            name="Fake Bedroom",
-            model="test",
-        )
+async def test_fake_player_registers_on_fake_lms(
+    lyrion_test_endpoint: LyrionTestEndpoint,
+) -> None:
+    """A fake slimproto player should show up as a connected LMS player on the active backend."""
+    player = FakeSlimProtoPlayer(
+        endpoint=lyrion_test_endpoint,
+        player_id="fake-player-1",
+        name="Fake Bedroom",
+        model="test",
+    )
 
+    try:
         await player.connect()
-        state = harness.fake_server.players["fake-player-1"]
-        assert state["connected"] == 1
-        assert state["name"] == "Fake Bedroom"
+        state = (
+            player.endpoint.fake_server.players["fake-player-1"]
+            if player.endpoint.fake_server
+            else None
+        )
+        if state is not None:
+            assert state["connected"] == 1
+            assert state["name"] == "Fake Bedroom"
 
         player_status = await player.request_status()
         assert player_status["playerid"] == "fake-player-1"
@@ -56,66 +61,69 @@ async def test_fake_player_registers_on_fake_lms(unused_tcp_port_factory) -> Non
         assert player_status["mode"] == "stop"
 
         await player.disconnect()
-        await player.close()
     finally:
-        await harness.stop()
+        await player.close()
 
 
 @pytest.mark.asyncio
-async def test_fake_player_detects_connect_and_disconnect_events(unused_tcp_port_factory) -> None:
-    """The fake LMS should report when a slimproto player connects and disconnects."""
-    harness = FakeLmsServerHarness(unused_tcp_port_factory)
-    await harness.start()
-    try:
-        player = FakeSlimProtoPlayer(
-            endpoint=harness.endpoint,
-            player_id="fake-player-2",
-            name="Fake Office",
-            model="test",
-        )
+async def test_fake_player_detects_connect_and_disconnect_events(
+    lyrion_test_endpoint: LyrionTestEndpoint,
+) -> None:
+    """The active LMS backend should report when a slimproto player connects and disconnects."""
+    player = FakeSlimProtoPlayer(
+        endpoint=lyrion_test_endpoint,
+        player_id="fake-player-2",
+        name="Fake Office",
+        model="test",
+    )
 
+    try:
         await player.connect()
-        assert harness.fake_server.slimproto_players["fake-player-2"]["connected"] is True
+        if player.endpoint.fake_server is not None:
+            assert (
+                player.endpoint.fake_server.slimproto_players["fake-player-2"]["connected"] is True
+            )
 
         await player.disconnect()
-        assert harness.fake_server.slimproto_players["fake-player-2"]["connected"] is False
-
-        await player.close()
+        if player.endpoint.fake_server is not None:
+            assert (
+                player.endpoint.fake_server.slimproto_players["fake-player-2"]["connected"] is False
+            )
     finally:
-        await harness.stop()
+        await player.close()
 
 
 @pytest.mark.asyncio
 async def test_fake_player_and_ma_provider_sync_play_and_pause_states(
-    unused_tcp_port_factory,
+    lyrion_test_endpoint: LyrionTestEndpoint,
 ) -> None:
     """Both MA commands and slimproto player commands should update the same underlying LMS state."""
-    harness = FakeLmsServerHarness(unused_tcp_port_factory)
-    await harness.start()
+    player = FakeSlimProtoPlayer(
+        endpoint=lyrion_test_endpoint,
+        player_id="fake-player-3",
+        name="Fake Kitchen",
+        model="test",
+    )
+    await player.connect()
     try:
-        player = FakeSlimProtoPlayer(
-            endpoint=harness.endpoint,
-            player_id="fake-player-3",
-            name="Fake Kitchen",
-            model="test",
-        )
-        await player.connect()
-        provider = FakeMAProvider(harness.fake_server, "fake-player-3")
+        if player.endpoint.fake_server is None:
+            pytest.skip("This sync check specifically validates the fake LMS state model")
+
+        provider = FakeMAProvider(player.endpoint.fake_server, "fake-player-3")
 
         await provider.send_player_command(["play"])
-        assert harness.fake_server.players["fake-player-3"]["mode"] == "play"
+        assert player.endpoint.fake_server.players["fake-player-3"]["mode"] == "play"
         assert player.mode == "play"
         assert provider.latest_status["mode"] == "play"
 
         await player.pause()
-        assert harness.fake_server.players["fake-player-3"]["mode"] == "pause"
+        assert player.endpoint.fake_server.players["fake-player-3"]["mode"] == "pause"
         assert provider.latest_status["mode"] == "pause"
         assert player.mode == "pause"
 
         await player.disconnect()
-        await player.close()
     finally:
-        await harness.stop()
+        await player.close()
 
 
 @pytest.mark.asyncio
