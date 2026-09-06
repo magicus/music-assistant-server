@@ -484,6 +484,9 @@ def _bring_up_lms(base_url: str) -> None:
             rsp = _json_rpc(base_url, ["serverstatus", 0, 1])
             if isinstance(rsp.get("result"), dict):
                 _progress("LMS JSON-RPC is ready")
+                _progress(f"waiting for LMS SlimProto endpoint {host}:3483")
+                _wait_for_port(host, 3483, timeout_s=60.0)
+                _progress("LMS SlimProto endpoint is ready")
                 return
         except URLError, TimeoutError, OSError, ValueError:
             pass

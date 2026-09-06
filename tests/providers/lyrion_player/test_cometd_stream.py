@@ -176,8 +176,8 @@ async def test_invalid_player_status_triggers_rediscovery() -> None:
     assert provider.discovery_calls == 1
 
 
-async def test_playerstatus_playlist_change_detects_space_delimited_keys() -> None:
-    """Playlist-change detection should work for LMS payloads using `playlist tracks` aliases."""
+async def test_playerstatus_playlist_change_detects_canonical_playlist_tracks_key() -> None:
+    """Playlist-change detection should work for LMS payloads using `playlist_tracks`."""
     provider = _StubProvider(["player_a"])
     emitted_events: list[object] = []
 
@@ -190,7 +190,7 @@ async def test_playerstatus_playlist_change_detects_space_delimited_keys() -> No
         "player_a",
         {
             "mode": "play",
-            "playlist tracks": 2,
+            "playlist_tracks": 2,
             "playlist_cur_index": 0,
         },
     )
@@ -198,7 +198,7 @@ async def test_playerstatus_playlist_change_detects_space_delimited_keys() -> No
         "player_a",
         {
             "mode": "play",
-            "playlist tracks": 3,
+            "playlist_tracks": 3,
             "playlist_cur_index": 0,
         },
     )

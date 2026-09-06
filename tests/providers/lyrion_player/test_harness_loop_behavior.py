@@ -252,7 +252,7 @@ async def test_shuffle_mode_bidirectional_sync_fake_backend(
         direct_rpc_client = EndpointRpcClient(lyrion_test_endpoint, player.rpc_player_id)
 
         await provider_client.send_player_command(["playlist", "clear"])
-        for suffix in ("a", "b", "c", "d"):
+        for suffix in ("a", "b", "c", "d", "e", "f", "g", "h"):
             await provider_client.send_player_command(
                 ["playlist", "add", f"http://queue.local/shuffle-{suffix}.mp3"]
             )
@@ -266,11 +266,22 @@ async def test_shuffle_mode_bidirectional_sync_fake_backend(
         assert playlist_shuffle(status) == 1
         order_tracks = playlist_values(status)
 
-        await player.toggle_shuffle()
-        status = await wait_for_playlist_shuffle(direct_rpc_client, 2)
-        assert playlist_shuffle(status) == 2
-        order_albums = playlist_values(status)
-        assert order_albums != order_tracks
+        order_albums = order_tracks
+        # Some LMS runs keep the same order after one 1->2 transition.
+        # Retry a few times to reduce random no-op shuffles before failing.
+        for attempt in range(6):
+            await player.toggle_shuffle()
+            status = await wait_for_playlist_shuffle(direct_rpc_client, 2)
+            assert playlist_shuffle(status) == 2
+            order_albums = playlist_values(status)
+            if order_albums != order_tracks:
+                break
+            if attempt < 5:
+                await player.toggle_shuffle()
+                status = await wait_for_playlist_shuffle(direct_rpc_client, 1)
+                assert playlist_shuffle(status) == 1
+        else:
+            pytest.fail("oh, no difference despite shuffle after retries (1->2)")
 
         await player.toggle_shuffle()
         status = await wait_for_playlist_shuffle(direct_rpc_client, 0)

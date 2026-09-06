@@ -79,6 +79,7 @@ async def test_track_lookup_falls_back_from_broken_batch_responses(
     tracks = [track async for track in lyrion_provider.get_library_tracks()]
 
     assert len(tracks) == 10
+
     track_id_filters = [
         call.args[4]
         for call in lyrion_fake_server.rpc_calls

@@ -11,17 +11,6 @@ from aiohttp import ClientError, ClientTimeout
 from music_assistant_models.errors import ProviderUnavailableError
 
 from .bayeux_client import BayeuxClient
-
-if TYPE_CHECKING:
-    from music_assistant.providers.lyrion_player.cometd_events import (
-        LmsPlayerEventCallback,
-        StatusPayload,
-    )
-
-    from .provider import LyrionPlayerProvider
-
-StatusPayload = dict[str, Any]
-LmsPlayerEventCallback = Callable[[Any], Awaitable[None]]
 from .constants import (
     COMETD_CONNECT_TIMEOUT,
     COMETD_PLAYERSTATUS_TAGS,
@@ -30,6 +19,12 @@ from .constants import (
     COMETD_SERVERSTATUS_SUBSCRIBE_INTERVAL,
     RPC_TIMEOUT,
 )
+
+if TYPE_CHECKING:
+    from .provider import LyrionPlayerProvider
+
+StatusPayload = dict[str, Any]
+LmsPlayerEventCallback = Callable[[Any], Awaitable[None]]
 
 
 class LyrionCometDEventStream:
@@ -315,7 +310,7 @@ class LyrionCometDEventStream:
         partial: StatusPayload,
     ) -> None:
         """Merge one playerstatus payload, compute diffs, and emit events."""
-        from music_assistant.providers.lyrion_player.cometd_events import (
+        from music_assistant.providers.lyrion_player.cometd_events import (  # noqa: PLC0415
             LmsPlayerPlaybackChangedEvent,
             LmsPlayerPlaylistChangedEvent,
             LmsPlayerPowerChangedEvent,
@@ -388,8 +383,8 @@ class LyrionCometDEventStream:
                 )
             )
 
-        old_repeat = _get_int_with_aliases(previous, "playlist repeat", "playlist_repeat")
-        new_repeat = _get_int_with_aliases(merged, "playlist repeat", "playlist_repeat")
+        old_repeat = _get_int(previous, "playlist repeat")
+        new_repeat = _get_int(merged, "playlist repeat")
         if old_repeat is not None and new_repeat is not None and old_repeat != new_repeat:
             await self._event_callback(
                 LmsPlayerRepeatChangedEvent(
@@ -399,8 +394,8 @@ class LyrionCometDEventStream:
                 )
             )
 
-        old_shuffle = _get_int_with_aliases(previous, "playlist shuffle", "playlist_shuffle")
-        new_shuffle = _get_int_with_aliases(merged, "playlist shuffle", "playlist_shuffle")
+        old_shuffle = _get_int(previous, "playlist shuffle")
+        new_shuffle = _get_int(merged, "playlist shuffle")
         if old_shuffle is not None and new_shuffle is not None and old_shuffle != new_shuffle:
             await self._event_callback(
                 LmsPlayerShuffleChangedEvent(
@@ -424,8 +419,8 @@ class LyrionCometDEventStream:
 
         old_timestamp = _get_float(previous, "playlist_timestamp")
         new_timestamp = _get_float(merged, "playlist_timestamp")
-        old_tracks = _get_int_with_aliases(previous, "playlist_tracks", "playlist tracks")
-        new_tracks = _get_int_with_aliases(merged, "playlist_tracks", "playlist tracks")
+        old_tracks = _get_int(previous, "playlist_tracks")
+        new_tracks = _get_int(merged, "playlist_tracks")
         if old_timestamp != new_timestamp or old_tracks != new_tracks:
             await self._event_callback(
                 LmsPlayerPlaylistChangedEvent(
@@ -499,14 +494,6 @@ def _get_int(status: StatusPayload, key: str) -> int | None:
         return int(cast("int | str", value))
     except TypeError, ValueError:
         return None
-
-
-def _get_int_with_aliases(status: StatusPayload, *keys: str) -> int | None:
-    """Parse integer field from first available key alias in status payload."""
-    for key in keys:
-        if (parsed := _get_int(status, key)) is not None:
-            return parsed
-    return None
 
 
 def _get_float(status: StatusPayload, key: str) -> float | None:

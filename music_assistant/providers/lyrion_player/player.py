@@ -82,7 +82,7 @@ class LyrionPlayer(Player):
         return 5 if self._attr_playback_state == PlaybackState.PLAYING else 20
 
     async def poll(self) -> None:
-        """Poll runtime status from LMS as fallback when explicitly invoked."""
+        """Poll runtime status from LMS when explicitly invoked."""
         try:
             status = await self.provider.get_player_status(self.player_id)
         except ProviderUnavailableError as err:
@@ -129,9 +129,7 @@ class LyrionPlayer(Player):
             media,
             command="add",
         ):
-            await self._queue_sync.sync_ma_queue_to_lms(
-                allow_uninitialized=True,
-            )
+            await self._queue_sync.sync_ma_queue_to_lms()
             return
 
         stream_url = await self.mass.streams.resolve_stream_url(

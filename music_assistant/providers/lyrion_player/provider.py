@@ -237,7 +237,7 @@ class LyrionPlayerProvider(PlayerProvider):
         return await self._rpc_request(player_id=player_id, command=command)
 
     def get_configured_host(self) -> str | None:
-        """Return configured host from setup data with config fallback."""
+        """Return configured host from setup data."""
         raw_host = self.get_setup_value(CONF_LMS_HOST)
         if not isinstance(raw_host, str):
             return None
@@ -248,7 +248,7 @@ class LyrionPlayerProvider(PlayerProvider):
         self,
         default: int | None = DEFAULT_LMS_PORT,
     ) -> int | None:
-        """Return configured port from setup data with config fallback."""
+        """Return configured port from setup data."""
         raw_port = self.get_setup_value(CONF_LMS_PORT, default)
         if raw_port is None:
             return None

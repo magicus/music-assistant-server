@@ -106,10 +106,23 @@ class ScriptableSlimProtoPlayer:
 
     async def connect(self) -> dict[str, Any]:
         """Connect to the LMS using the real SlimProto HELO handshake."""
-        self._slimproto_writer = await asyncio.open_connection(
-            self.endpoint.host,
-            self.endpoint.slimproto_port,
-        )
+        connect_error: OSError | None = None
+        for _attempt in range(10):
+            try:
+                self._slimproto_writer = await asyncio.open_connection(
+                    self.endpoint.host,
+                    self.endpoint.slimproto_port,
+                )
+                break
+            except OSError as err:
+                connect_error = err
+                await asyncio.sleep(0.2)
+        else:
+            if connect_error is not None:
+                raise connect_error
+            msg = "SlimProto connection failed without an OSError"
+            raise RuntimeError(msg)
+
         assert self._slimproto_writer is not None
         writer = self._slimproto_writer[1]
         helo_payload = self._make_helo_payload(
