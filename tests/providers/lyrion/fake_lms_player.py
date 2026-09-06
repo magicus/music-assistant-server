@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from typing import Any
 
 import aiohttp
@@ -29,6 +30,18 @@ class FakeSlimProtoPlayer:
         self.mode = "stop"
         self._session = aiohttp.ClientSession()
         self._slimproto_writer: asyncio.StreamWriter | None = None
+        self._server_state_listener: Callable[[str, dict[str, Any]], None] | None = None
+        if self.endpoint.fake_server is not None:
+            self._server_state_listener = self._on_server_state_changed
+            self.endpoint.fake_server.add_player_state_listener(self._server_state_listener)
+
+    def _on_server_state_changed(self, player_id: str, state: dict[str, Any]) -> None:
+        """Keep the fake player state synchronized with updates from the LMS server."""
+        if player_id != self.player_id:
+            return
+        mode = state.get("mode")
+        if isinstance(mode, str):
+            self.mode = mode
 
     async def connect(self) -> dict[str, Any]:
         """Register the fake player with the LMS and open a slimproto socket."""

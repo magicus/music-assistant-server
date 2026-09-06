@@ -19,12 +19,12 @@ Tester valjer endpoint sa har:
 
 ## Teststrategi
 
-- `tests/providers/lyrion_music/test_provider_blackbox.py`
-  ar endpoint-agnostiska tester som kan koras mot fake LMS (default)
-  eller Docker LMS med `--live-lyrion-docker`.
 - `tests/providers/lyrion_music/test_provider_contract.py`
   ar fake-LMS-specifika tester (whitebox) som validerar intern
   request-historik och felinjicering i fake-servern.
+- `tests/providers/lyrion_music/test_provider_blackbox.py`
+  ar endpoint-agnostiska tester som kan koras mot fake LMS (default)
+  eller Docker LMS med `--live-lyrion-docker`.
 
 I CI kor dessa tester i fake-lage. Docker-lage ar en lokal, aktiv
 verifiering for arbete med Lyrion-specifik funktionalitet.
@@ -54,10 +54,6 @@ dar pytest-fixturen skoter orkestreringen i Python:
 - vantar tills katalogen ar synlig
 - kor live integrationstesterna
 
-Tillfalliga testartefakter skrivs under:
-
-- `build/test/lyrion/`
-
 Kor blackbox mot Docker:
 
 ```bash
@@ -81,7 +77,8 @@ Notera:
 - Avsett for lokal, manuell korning (inte CI-gate).
 - LMS-image kan overridas med `LMS_IMAGE`, t.ex.
   `LMS_IMAGE=lmscommunity/lyrionmusicserver:stable pytest -m live_lyrion_docker --live-lyrion-docker -q`
-- Standardendpointen ar `http://127.0.0.1:9000` men kan overridas med `LYRION_TEST_DOCKER_LMS_URL`.
+- Standardendpointen ar `http://127.0.0.1:9000` men kan overridas med
+  `LYRION_TEST_DOCKER_LMS_URL`.
 - Satt `LYRION_TEST_DOCKER_KEEP_RUNNING=1` om du vill lamna containern uppe efter testkorn.
 
 ## Utbyggnad for lyrion_player

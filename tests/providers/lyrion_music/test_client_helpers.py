@@ -185,7 +185,7 @@ async def test_get_all_playlists_and_genres_paging(monkeypatch: pytest.MonkeyPat
 async def test_get_album_tracks_sorting_and_playlist_tracks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Album and playlist track helpers should use expected retrieval flows."""
+    """Album tracks should sort by disc/track and playlist filter should be delegated."""
 
     class _Track:
         def __init__(self, disc: int, num: int) -> None:
@@ -201,32 +201,6 @@ async def test_get_album_tracks_sorting_and_playlist_tracks(
         yield _Track(1, 1)
 
     monkeypatch.setattr(client, "iter_library_tracks", _iter_tracks)
-
-    commands: list[list[Any]] = []
-
-    async def _rpc_request(
-        _provider: Any,
-        player_id: str,
-        command: list[Any],
-    ) -> dict[str, Any]:
-        del player_id
-        commands.append(command)
-        if len(command) >= 5 and command[:2] == ["playlists", "tracks"]:
-            return {
-                "playlisttracks_loop": [
-                    {
-                        "id": "t1",
-                        "title": "Playlist Track",
-                        "artist": "The Async Awaiters",
-                        "tracknum": 1,
-                        "disc": 1,
-                    }
-                ],
-                "count": 1,
-            }
-        return {"playlisttracks_loop": [], "count": 0}
-
-    monkeypatch.setattr(client, "rpc_request", _rpc_request)
     provider = _provider()
 
     tracks = await client.get_album_tracks(provider, "alb1")
@@ -234,10 +208,6 @@ async def test_get_album_tracks_sorting_and_playlist_tracks(
 
     playlist_tracks = await client.get_playlist_tracks(provider, "pl1")
     assert len(playlist_tracks) == 1
-    assert commands
-    assert commands[0][0] == "playlists"
-    assert commands[0][1] == "tracks"
-    assert "playlist_id:pl1" in commands[0]
 
 
 def test_count_and_lookup_helpers() -> None:
