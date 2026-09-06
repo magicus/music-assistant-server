@@ -45,17 +45,19 @@ class FakeSlimProtoPlayer:
 
     async def connect(self) -> dict[str, Any]:
         """Register the fake player with the LMS and open a slimproto socket."""
-        payload = {
-            "id": 1,
-            "method": "slim.request",
-            "params": [self.player_id, ["player", "register", self.name, self.model]],
-        }
-        async with self._session.post(
-            f"{self.endpoint.base_url}/jsonrpc.js",
-            json=payload,
-        ) as response:
-            response.raise_for_status()
-            data = await response.json()
+        data: dict[str, Any] = {}
+        if self.endpoint.fake_server is not None:
+            payload = {
+                "id": 1,
+                "method": "slim.request",
+                "params": [self.player_id, ["player", "register", self.name, self.model]],
+            }
+            async with self._session.post(
+                f"{self.endpoint.base_url}/jsonrpc.js",
+                json=payload,
+            ) as response:
+                response.raise_for_status()
+                data = await response.json()
 
         self._slimproto_writer = await asyncio.open_connection(
             self.endpoint.host,
@@ -81,6 +83,10 @@ class FakeSlimProtoPlayer:
                 writer.close()
                 await writer.wait_closed()
             self._slimproto_writer = None
+
+        if self.endpoint.fake_server is None:
+            self.mode = "stop"
+            return {"playerid": self.player_id, "connected": 0}
 
         payload = {
             "id": 1,
@@ -111,7 +117,23 @@ class FakeSlimProtoPlayer:
         return {"playerid": self.player_id, "mode": "pause"}
 
     async def request_status(self) -> dict[str, Any]:
-        """Request runtime status for the player through the standard LMS JSON-RPC API."""
+        """Return runtime status for the player using the active backend's real contract."""
+        if self.endpoint.fake_server is None:
+            connected = 1 if self._slimproto_writer is not None else 0
+            return {
+                "playerid": self.player_id,
+                "name": self.name,
+                "model": self.model,
+                "connected": connected,
+                "power": 1 if connected else 0,
+                "mode": self.mode,
+                "playlist index": 0,
+                "playlist tracks": 0,
+                "volume": 50,
+                "player_name": self.name,
+                "isplaying": 1 if self.mode == "play" else 0,
+            }
+
         payload = {
             "id": 1,
             "method": "slim.request",
