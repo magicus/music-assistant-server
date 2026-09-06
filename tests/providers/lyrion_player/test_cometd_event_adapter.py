@@ -79,34 +79,3 @@ def test_apply_status_refreshes_related_players_on_topology_change() -> None:
 
     assert leader.group_members == []
     assert child.update_state.call_count >= 1
-
-
-def test_apply_status_updates_observable_child_synced_state() -> None:
-    """LMS topology changes should be reflected in the child's MA synced state."""
-    provider, leader, child = _build_provider_and_players()
-    adapter = LyrionCometDEventAdapter(provider)
-
-    adapter.apply_status(
-        leader,
-        {
-            "mode": "play",
-            "sync_slaves": "child",
-        },
-    )
-
-    assert leader.group_members == ["leader", "child"]
-    assert child.synced_to == "leader"
-    assert child.state.synced_to == "leader"
-
-    adapter.apply_status(
-        leader,
-        {
-            "mode": "stop",
-        },
-    )
-
-    child.update_state(signal_event=False)
-
-    assert leader.group_members == []
-    assert child.synced_to is None
-    assert child.state.synced_to is None

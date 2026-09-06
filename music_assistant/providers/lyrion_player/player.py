@@ -200,6 +200,7 @@ class LyrionPlayer(Player):
         :param volume_level: Volume level from 0 to 100.
         """
         try:
+            await self._ensure_sync_volume_disabled()
             await self.provider.send_player_command(
                 self.player_id,
                 ["mixer", "volume", max(0, min(100, volume_level))],
@@ -212,6 +213,7 @@ class LyrionPlayer(Player):
     async def volume_mute(self, muted: bool) -> None:
         """Mute or unmute playback volume."""
         try:
+            await self._ensure_sync_volume_disabled()
             await self.provider.send_player_command(
                 self.player_id,
                 ["mixer", "muting", 1 if muted else 0],
@@ -328,6 +330,21 @@ class LyrionPlayer(Player):
         if event.object_id != self.player_id or self._queue_sync.syncing_from_lms_queue:
             return
         await self._queue_sync.sync_ma_queue_to_lms(sync_items=False)
+
+    async def _ensure_sync_volume_disabled(self) -> None:
+        """Disable LMS syncVolume before MA volume changes in sync."""
+        if not (self.synced_to or self.group_members):
+            return
+        # LMS' native syncVolume flattens the whole sync domain to one
+        # absolute level. That is the opposite of MA's group-volume
+        # behavior, which preserves each member's relative balance by
+        # adjusting them individually. Material Skin ships its own custom
+        # group-volume flow for the same reason: stock LMS syncVolume is
+        # too blunt for the group-volume UX users typically expect.
+        await self.provider.send_player_command(
+            self.player_id,
+            ["playerpref", "syncVolume", 0],
+        )
 
     def _apply_player_metadata(self, player_data: dict[str, Any]) -> None:
         """
