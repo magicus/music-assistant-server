@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import struct
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -49,6 +50,7 @@ class FakeLmsServer:
         self.missing_large_album_images: set[str] = {"alb6"}
         self.players: dict[str, dict[str, Any]] = {}
         self.slimproto_players: dict[str, dict[str, Any]] = {}
+        self.slimproto_events: list[tuple[bytes, bytes]] = []
         self._player_state_listeners: list[Callable[[str, dict[str, Any]], None]] = []
         self._slimproto_server: asyncio.Server | None = None
         self._slimproto_connections: dict[str, asyncio.StreamWriter] = {}
@@ -218,16 +220,45 @@ class FakeLmsServer:
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
     ) -> None:
-        """Handle a slimproto connection and reflect the connected player state in LMS."""
+        """Handle a SlimProto connection using the real binary HELO/strm flow."""
         player_id: str | None = None
+        name = "unknown"
+        model = "test"
+
+        async def _read_frame() -> tuple[bytes, bytes] | None:
+            prefix = await reader.readexactly(2)
+            if len(prefix) < 2:
+                return None
+            length = struct.unpack("!H", prefix)[0]
+            frame = await reader.readexactly(length)
+            if len(frame) < 4:
+                return None
+            return frame[:4], frame[4:]
+
         try:
-            handshake = await reader.readuntil(b"\n")
-            payload = handshake.decode("utf-8", errors="ignore").strip()
-            parts = payload.split()
-            if len(parts) < 2 or parts[0].upper() != "HELLO":
-                writer.close()
-                return
-            player_id = parts[1]
+            while True:
+                frame = await _read_frame()
+                if frame is None:
+                    break
+                opcode, payload = frame
+                self.slimproto_events.append((opcode, payload))
+                if opcode == b"HELO":
+                    text = payload.decode("utf-8", errors="ignore")
+                    for marker in ("PlayerID=", "Name=", "ModelName="):
+                        idx = text.find(marker)
+                        if idx == -1:
+                            continue
+                        if marker == "PlayerID=":
+                            player_id = text[idx + len(marker) :].split(",", 1)[0]
+                        elif marker == "Name=":
+                            name = text[idx + len(marker) :].split(",", 1)[0]
+                        elif marker == "ModelName=":
+                            model = text[idx + len(marker) :].split(",", 1)[0]
+                    if player_id is None:
+                        player_id = "unknown-player"
+                    break
+                if opcode == b"DSCO":
+                    return
         except asyncio.IncompleteReadError:
             writer.close()
             return
@@ -236,60 +267,78 @@ class FakeLmsServer:
             writer.close()
             return
 
-        self.slimproto_players[player_id] = {
-            "playerid": player_id,
-            "name": player_id,
-            "model": "test",
-            "connected": True,
-            "power": True,
-            "mode": self.players.get(player_id, {}).get("mode", "stop"),
-            "volume": self.players.get(player_id, {}).get("volume", 50),
-        }
         self.players.setdefault(
             player_id,
             {
                 "playerid": player_id,
-                "name": player_id,
-                "model": "test",
+                "name": name,
+                "model": model,
                 "connected": 1,
                 "power": 1,
                 "mode": "stop",
                 "volume": 50,
                 "playlist index": 0,
                 "playlist tracks": 0,
-                "player_name": player_id,
+                "player_name": name,
                 "isplaying": 0,
                 "sync_master": "",
             },
         )
+        self.players[player_id]["name"] = name
+        self.players[player_id]["model"] = model
         self.players[player_id]["connected"] = 1
         self.players[player_id]["power"] = 1
+        self.players[player_id]["player_name"] = name
+
+        self.slimproto_players[player_id] = {
+            "playerid": player_id,
+            "name": name,
+            "model": model,
+            "connected": True,
+            "power": True,
+            "mode": self.players.get(player_id, {}).get("mode", "stop"),
+            "volume": self.players.get(player_id, {}).get("volume", 50),
+        }
         self._slimproto_connections[player_id] = writer
         self._notify_player_state(player_id)
         try:
             while True:
-                command = await reader.readuntil(b"\n")
-                text = command.decode("utf-8", errors="ignore").strip().lower()
-                if not text:
-                    continue
-                if text == "pause":
-                    self.set_player_mode(player_id, "pause")
-                elif text == "play":
-                    self.set_player_mode(player_id, "play")
-                elif text == "stop":
-                    self.set_player_mode(player_id, "stop")
-                elif text == "disconnect":
+                frame = await _read_frame()
+                if frame is None:
+                    break
+                opcode, payload = frame
+                self.slimproto_events.append((opcode, payload))
+                if opcode == b"strm":
+                    action = payload[:1]
+                    if action == b"p":
+                        self.set_player_mode(player_id, "pause")
+                    elif action == b"u":
+                        self.set_player_mode(player_id, "play")
+                    elif action == b"q":
+                        self.set_player_mode(player_id, "stop")
+                elif opcode == b"butn":
+                    if len(payload) >= 8:
+                        _, button = struct.unpack("!LL", payload[:8])
+                        if button == 131090:
+                            self.set_player_mode(player_id, "play")
+                        elif button == 131095:
+                            self.set_player_mode(player_id, "pause")
+                elif opcode == b"DSCO":
                     await self.disconnect_player(player_id)
                     break
-        except asyncio.IncompleteReadError:
+        except asyncio.IncompleteReadError, ConnectionResetError:
             pass
         finally:
             self._slimproto_connections.pop(player_id, None)
-            self.players.get(player_id, {})["connected"] = 0
-            self.players.get(player_id, {})["power"] = 0
+            if player_id in self.players:
+                self.players[player_id]["connected"] = 0
+                self.players[player_id]["power"] = 0
             if player_id in self.slimproto_players:
                 self.slimproto_players[player_id]["connected"] = False
                 self.slimproto_players[player_id]["power"] = False
+                self.slimproto_players[player_id]["mode"] = self.players.get(player_id, {}).get(
+                    "mode", "stop"
+                )
             self._notify_player_state(player_id)
             if not writer.is_closing():
                 writer.close()

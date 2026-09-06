@@ -127,6 +127,33 @@ async def test_fake_player_and_ma_provider_sync_play_and_pause_states(
 
 
 @pytest.mark.asyncio
+async def test_fake_player_uses_real_slimproto_button_events_for_play_and_pause(
+    lyrion_test_endpoint: LyrionTestEndpoint,
+) -> None:
+    """Fake play and pause should be emitted as real SlimProto button events."""
+    player = FakeSlimProtoPlayer(
+        endpoint=lyrion_test_endpoint,
+        player_id="fake-player-button",
+        name="Fake Button Player",
+        model="test",
+    )
+    await player.connect()
+    try:
+        if player.endpoint.fake_server is None:
+            pytest.skip("Protocol-level button assertion only applies to fake backend")
+
+        await player.play()
+        assert player.endpoint.fake_server.slimproto_events[-1][0] == b"butn"
+        assert player.endpoint.fake_server.players["fake-player-button"]["mode"] == "play"
+
+        await player.pause()
+        assert player.endpoint.fake_server.slimproto_events[-1][0] == b"butn"
+        assert player.endpoint.fake_server.players["fake-player-button"]["mode"] == "pause"
+    finally:
+        await player.close()
+
+
+@pytest.mark.asyncio
 async def test_fake_player_harness_uses_same_endpoint_contract_for_real_lms() -> None:
     """The player only depends on the shared endpoint contract, not the backend implementation."""
     endpoint = LyrionTestEndpoint(
