@@ -39,7 +39,6 @@ from .constants import (
     ACTION_RESCAN_ARTWORK,
     BROWSE_PAGE_SIZE,
     CONF_ARTWORK_CACHE_BUSTER,
-    DEFAULT_LMS_PORT,
     ITEM_CACHE_TTL,
     SEARCH_CACHE_TTL,
 )
@@ -465,8 +464,8 @@ class LyrionMusicProvider(MusicProvider):
         """Validate the configured Lyrion endpoint."""
         self._disabled_batch_lookup_keys = set()
         self._unsubscribe_music_sync_completed = None
-        host = self._get_configured_host()
-        port = self._get_configured_port()
+        host = self.get_configured_host()
+        port = self.get_configured_port()
         self.logger.debug(
             "Validating Lyrion JSON-RPC endpoint %s:%s",
             host,
@@ -708,17 +707,6 @@ class LyrionMusicProvider(MusicProvider):
     async def _get_track_data(self, track_id: str) -> dict[str, Any]:
         """Get track payload from LMS."""
         return await client.get_track_data(self, track_id)
-
-    def _get_configured_host(self) -> str | None:
-        """Return configured host from setup data with config fallback."""
-        return client.get_configured_host(self)
-
-    def _get_configured_port(
-        self,
-        default: int | None = DEFAULT_LMS_PORT,
-    ) -> int | None:
-        """Return configured port from setup data with config fallback."""
-        return client.get_configured_port(self, default)
 
     def _on_music_sync_completed(self, _event: Any) -> None:
         """Queue artwork backfill tasks when global music sync completes."""

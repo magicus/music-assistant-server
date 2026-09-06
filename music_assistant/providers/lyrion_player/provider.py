@@ -18,11 +18,7 @@ from music_assistant_models.errors import (
 )
 
 from music_assistant.models.player_provider import PlayerProvider
-from music_assistant.providers.lyrion.client import (
-    get_configured_host,
-    get_configured_port,
-    rpc_request,
-)
+from music_assistant.providers.lyrion.client import rpc_request
 from music_assistant.providers.lyrion.lyrion_cometd import LyrionCometDEventStream
 from music_assistant.providers.lyrion.setup_flow import validate_lms_endpoint
 
@@ -50,8 +46,8 @@ class LyrionPlayerProvider(PlayerProvider):
 
     async def get_config_entries(self) -> tuple[ConfigEntry, ...]:
         """Return Config entries to configure this provider."""
-        configured_host = self._get_configured_host() or ""
-        configured_port = self._get_configured_port(default=None)
+        configured_host = self.get_configured_host() or ""
+        configured_port = self.get_configured_port(default=None)
         return (
             ConfigEntry(
                 key=CONF_LMS_HOST,
@@ -71,8 +67,8 @@ class LyrionPlayerProvider(PlayerProvider):
 
     async def handle_async_init(self) -> None:
         """Validate the configured Lyrion endpoint."""
-        host = self._get_configured_host()
-        port = self._get_configured_port()
+        host = self.get_configured_host()
+        port = self.get_configured_port()
         self.logger.debug(
             "Validating Lyrion JSON-RPC endpoint %s:%s",
             host,
@@ -320,17 +316,6 @@ class LyrionPlayerProvider(PlayerProvider):
     ) -> dict[str, Any]:
         """Execute one LMS JSON-RPC request via the shared Lyrion transport."""
         return await rpc_request(self, player_id=player_id, command=command)
-
-    def _get_configured_host(self) -> str | None:
-        """Backward-compatible wrapper for internal host access."""
-        return get_configured_host(self)
-
-    def _get_configured_port(
-        self,
-        default: int | None = DEFAULT_LMS_PORT,
-    ) -> int | None:
-        """Backward-compatible wrapper for internal port access."""
-        return get_configured_port(self, default)
 
     async def _run_discover_players_loop(self) -> None:
         """Run player discovery once or repeatedly while new triggers arrive."""

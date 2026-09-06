@@ -284,10 +284,10 @@ def to_lms_stream_url(provider: LyrionMusicProvider, track_id: str, raw_url: str
     """Resolve track stream URL."""
     if raw_url and raw_url.startswith(("http://", "https://")):
         return raw_url
-    host = provider._get_configured_host()
+    host = provider.get_configured_host()
     if host is None:
         raise ProviderUnavailableError("Lyrion host is not configured")
-    port = provider._get_configured_port()
+    port = provider.get_configured_port()
     if port is None:
         raise ProviderUnavailableError("Lyrion port is not configured")
     encoded_track_id = quote(track_id, safe="")

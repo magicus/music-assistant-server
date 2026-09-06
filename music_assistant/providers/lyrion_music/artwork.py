@@ -170,10 +170,10 @@ def normalize_artist_artwork_path(path: str) -> str:
 
 def to_lms_absolute_url(provider: LyrionMusicProvider, path: str) -> str:
     """Build an absolute LMS URL from a relative path."""
-    host = provider._get_configured_host()
+    host = provider.get_configured_host()
     if host is None:
         raise ProviderUnavailableError("Lyrion host is not configured")
-    port = provider._get_configured_port()
+    port = provider.get_configured_port()
     if port is None:
         raise ProviderUnavailableError("Lyrion port is not configured")
     return f"http://{host}:{port}{path}"
