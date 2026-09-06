@@ -6,6 +6,7 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from music_assistant.providers.lyrion_player.cometd_events import LmsPlayerPlaylistChangedEvent
 from music_assistant.providers.lyrion_player.lyrion_cometd import LyrionCometDEventStream
 from music_assistant.providers.lyrion_player.provider import LyrionPlayerProvider
 
@@ -171,3 +172,33 @@ async def test_invalid_player_status_triggers_rediscovery() -> None:
     )
 
     assert provider.discovery_calls == 1
+
+
+async def test_playerstatus_playlist_change_detects_space_delimited_keys() -> None:
+    """Playlist-change detection should work for LMS payloads using `playlist tracks` aliases."""
+    provider = _StubProvider(["player_a"])
+    emitted_events: list[object] = []
+
+    async def _capture_event(event: object) -> None:
+        emitted_events.append(event)
+
+    stream = LyrionCometDEventStream(provider, _capture_event)
+
+    await stream._handle_player_status(
+        "player_a",
+        {
+            "mode": "play",
+            "playlist tracks": 2,
+            "playlist_cur_index": 0,
+        },
+    )
+    await stream._handle_player_status(
+        "player_a",
+        {
+            "mode": "play",
+            "playlist tracks": 3,
+            "playlist_cur_index": 0,
+        },
+    )
+
+    assert any(isinstance(event, LmsPlayerPlaylistChangedEvent) for event in emitted_events)

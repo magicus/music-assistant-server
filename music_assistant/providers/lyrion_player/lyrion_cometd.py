@@ -380,8 +380,8 @@ class LyrionCometDEventStream:
                 )
             )
 
-        old_repeat = _get_int(previous, "playlist repeat")
-        new_repeat = _get_int(merged, "playlist repeat")
+        old_repeat = _get_int_with_aliases(previous, "playlist repeat", "playlist_repeat")
+        new_repeat = _get_int_with_aliases(merged, "playlist repeat", "playlist_repeat")
         if old_repeat is not None and new_repeat is not None and old_repeat != new_repeat:
             await self._event_callback(
                 LmsPlayerRepeatChangedEvent(
@@ -391,8 +391,8 @@ class LyrionCometDEventStream:
                 )
             )
 
-        old_shuffle = _get_int(previous, "playlist shuffle")
-        new_shuffle = _get_int(merged, "playlist shuffle")
+        old_shuffle = _get_int_with_aliases(previous, "playlist shuffle", "playlist_shuffle")
+        new_shuffle = _get_int_with_aliases(merged, "playlist shuffle", "playlist_shuffle")
         if old_shuffle is not None and new_shuffle is not None and old_shuffle != new_shuffle:
             await self._event_callback(
                 LmsPlayerShuffleChangedEvent(
@@ -416,8 +416,8 @@ class LyrionCometDEventStream:
 
         old_timestamp = _get_float(previous, "playlist_timestamp")
         new_timestamp = _get_float(merged, "playlist_timestamp")
-        old_tracks = _get_int(previous, "playlist_tracks")
-        new_tracks = _get_int(merged, "playlist_tracks")
+        old_tracks = _get_int_with_aliases(previous, "playlist_tracks", "playlist tracks")
+        new_tracks = _get_int_with_aliases(merged, "playlist_tracks", "playlist tracks")
         if old_timestamp != new_timestamp or old_tracks != new_tracks:
             await self._event_callback(
                 LmsPlayerPlaylistChangedEvent(
@@ -491,6 +491,14 @@ def _get_int(status: StatusPayload, key: str) -> int | None:
         return int(cast("int | str", value))
     except TypeError, ValueError:
         return None
+
+
+def _get_int_with_aliases(status: StatusPayload, *keys: str) -> int | None:
+    """Parse integer field from first available key alias in status payload."""
+    for key in keys:
+        if (parsed := _get_int(status, key)) is not None:
+            return parsed
+    return None
 
 
 def _get_float(status: StatusPayload, key: str) -> float | None:

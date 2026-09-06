@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import aiohttp
 import pytest
 
 from tests.providers.lyrion.fake_lms_player import FakeSlimProtoPlayer
@@ -30,6 +31,68 @@ class FakeMAProvider:
     async def send_player_command(self, command: list[str]) -> dict[str, Any]:
         """Send a command to the server, mirroring the MA provider JSON-RPC call path."""
         return await self.server.handle_jsonrpc_command(self.player_id, command)
+
+
+class EndpointRpcClient:
+    """Small JSON-RPC client used for backend-agnostic command injection."""
+
+    def __init__(self, endpoint: LyrionTestEndpoint, player_id: str) -> None:
+        """Initialize endpoint and player identity."""
+        self._endpoint = endpoint
+        self._player_id = player_id
+        self._session = aiohttp.ClientSession()
+
+    async def send(self, command: list[Any]) -> dict[str, Any]:
+        """Send a raw LMS JSON-RPC command for the configured player."""
+        payload = {
+            "id": 1,
+            "method": "slim.request",
+            "params": [self._player_id, command],
+        }
+        async with self._session.post(
+            f"{self._endpoint.base_url}/jsonrpc.js",
+            json=payload,
+        ) as response:
+            response.raise_for_status()
+            data = await response.json()
+        result = data.get("result")
+        if not isinstance(result, dict):
+            raise RuntimeError("JSON-RPC response is missing result payload")
+        return result
+
+    async def close(self) -> None:
+        """Close the underlying HTTP session."""
+        await self._session.close()
+
+
+class ProviderStyleRpcClient:
+    """Fake MA/provider command path through LMS JSON-RPC."""
+
+    def __init__(self, endpoint: LyrionTestEndpoint, player_id: str) -> None:
+        """Initialize provider-style client."""
+        self._rpc = EndpointRpcClient(endpoint, player_id)
+
+    async def send_player_command(self, command: list[Any]) -> dict[str, Any]:
+        """Send a command as MA/provider would do."""
+        return await self._rpc.send(command)
+
+    async def close(self) -> None:
+        """Close resources held by the provider-style client."""
+        await self._rpc.close()
+
+
+def _playlist_index(status: dict[str, Any]) -> int:
+    """Read current queue index from LMS status across key-name variants."""
+    if "playlist_cur_index" in status:
+        return int(status["playlist_cur_index"])
+    return int(status.get("playlist index", 0))
+
+
+def _playlist_tracks(status: dict[str, Any]) -> int:
+    """Read queue length from LMS status across key-name variants."""
+    if "playlist_tracks" in status:
+        return int(status["playlist_tracks"])
+    return int(status.get("playlist tracks", 0))
 
 
 @pytest.mark.asyncio
@@ -247,6 +310,68 @@ async def test_fake_players_keep_state_in_sync_when_play_pause_sources_conflict(
     finally:
         await player_a.close()
         await player_b.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.live_lyrion_docker
+async def test_queue_state_stays_consistent_when_three_sources_alternate_aggressively(
+    lyrion_test_endpoint: LyrionTestEndpoint,
+) -> None:
+    """Queue transitions should remain coherent when MA/provider, direct JSON-RPC and SlimProto updates interleave."""
+    player = FakeSlimProtoPlayer(
+        endpoint=lyrion_test_endpoint,
+        player_id="fake-player-queue-adversarial",
+        name="Fake Queue Adversarial",
+        model="test",
+    )
+    provider_client = ProviderStyleRpcClient(lyrion_test_endpoint, player.player_id)
+    direct_rpc_client = EndpointRpcClient(lyrion_test_endpoint, player.player_id)
+
+    await player.connect()
+    try:
+        await provider_client.send_player_command(["playlist", "clear"])
+        await direct_rpc_client.send(["playlist", "add", "http://queue.local/track-a.mp3"])
+        await provider_client.send_player_command(
+            ["playlist", "add", "http://queue.local/track-b.mp3"]
+        )
+        await direct_rpc_client.send(["playlist", "add", "http://queue.local/track-c.mp3"])
+
+        status = await player.request_status()
+        assert _playlist_tracks(status) == 3
+        assert _playlist_index(status) == 0
+
+        # 1) MA/provider path changes active queue index.
+        await provider_client.send_player_command(["playlist", "index", 1])
+        status = await player.request_status()
+        assert _playlist_index(status) == 1
+
+        # 2) Direct LMS JSON-RPC mutates queue shape under the player.
+        await direct_rpc_client.send(["playlist", "delete", 0])
+        status = await player.request_status()
+        assert _playlist_tracks(status) == 2
+        assert _playlist_index(status) == 0
+
+        # 3) SlimProto user button events step through the queue.
+        await player.next_track()
+        status = await player.request_status()
+        assert _playlist_index(status) == 1
+
+        # Alternate again across all three sources.
+        await provider_client.send_player_command(
+            ["playlist", "add", "http://queue.local/track-d.mp3"]
+        )
+        await direct_rpc_client.send(["playlist", "index", 2])
+        await player.previous_track()
+        status = await player.request_status()
+        assert _playlist_tracks(status) == 3
+        assert _playlist_index(status) == 1
+
+        if player.endpoint.fake_server is not None:
+            assert player.endpoint.fake_server.slimproto_events[-1][0] == b"butn"
+    finally:
+        await provider_client.close()
+        await direct_rpc_client.close()
+        await player.close()
 
 
 @pytest.mark.asyncio

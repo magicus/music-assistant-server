@@ -15,6 +15,14 @@ from .lms_server_harness import LyrionTestEndpoint
 class FakeSlimProtoPlayer:
     """Small fake player that speaks the real SlimProto wire format."""
 
+    _BUTTON_CODES = {
+        "play": 131090,
+        "pause": 131095,
+        "stop": 131082,
+        "jump_rew": 131083,
+        "jump_fwd": 131086,
+    }
+
     @staticmethod
     def _make_frame(command: bytes, payload: bytes = b"") -> bytes:
         """Build a real SlimProto frame: 2-byte length + 4-byte opcode + payload."""
@@ -119,6 +127,16 @@ class FakeSlimProtoPlayer:
         await self._send_command("pause")
         return {"playerid": self.player_id, "mode": "pause"}
 
+    async def next_track(self) -> dict[str, Any]:
+        """Send a next-track button command over SlimProto."""
+        await self._send_command("jump_fwd")
+        return {"playerid": self.player_id}
+
+    async def previous_track(self) -> dict[str, Any]:
+        """Send a previous-track button command over SlimProto."""
+        await self._send_command("jump_rew")
+        return {"playerid": self.player_id}
+
     def is_playing(self) -> bool:
         """Return whether this fake player currently interprets itself as playing."""
         return self.mode == "play"
@@ -196,19 +214,19 @@ class FakeSlimProtoPlayer:
             msg = "Fake slimproto player is not connected"
             raise RuntimeError(msg)
         writer = self._slimproto_writer[1]
-        button_codes = {
-            "play": 131090,
-            "pause": 131095,
-            "stop": 131082,
-        }
-        button = button_codes.get(command)
+        button = self._BUTTON_CODES.get(command)
         if button is None:
             msg = f"Unsupported slimproto command: {command}"
             raise ValueError(msg)
         timestamp = 0
         writer.write(self._make_frame(b"butn", struct.pack("!LL", timestamp, button)))
         await writer.drain()
-        await self._wait_for_server_mode(command)
+        if command in {"play", "pause", "stop"}:
+            await self._wait_for_server_mode(command)
+            return
+
+        if self.endpoint.fake_server is not None:
+            await self.request_status()
 
     async def close(self) -> None:
         """Close the HTTP session used by the fake player."""

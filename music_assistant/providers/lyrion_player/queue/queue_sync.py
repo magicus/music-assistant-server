@@ -298,9 +298,9 @@ class LyrionQueueSync:
                 continue
             return None
 
-        current_index = self._parse_int(status.get("playlist_cur_index"), 0)
-        shuffle_mode = self._parse_int(status.get("playlist shuffle"), 0)
-        repeat_mode = self._parse_int(status.get("playlist repeat"), 0)
+        current_index = self._parse_status_int(status, ("playlist_cur_index", "playlist index"), 0)
+        shuffle_mode = self._parse_status_int(status, ("playlist shuffle", "playlist_shuffle"), 0)
+        repeat_mode = self._parse_status_int(status, ("playlist repeat", "playlist_repeat"), 0)
         playback_mode = cast("str", status.get("mode") or "stop")
         return _LmsQueueSnapshot(
             entries=tuple(lms_queue_entries),
@@ -590,6 +590,19 @@ class LyrionQueueSync:
             return int(raw_value)
         except TypeError, ValueError:
             return default
+
+    @classmethod
+    def _parse_status_int(
+        cls,
+        status: dict[str, Any],
+        keys: tuple[str, ...],
+        default: int,
+    ) -> int:
+        """Parse integer status field from the first matching key alias."""
+        for key in keys:
+            if key in status:
+                return cls._parse_int(status.get(key), default)
+        return default
 
     @staticmethod
     def _ma_repeat_to_lms(repeat_mode: RepeatMode) -> int:

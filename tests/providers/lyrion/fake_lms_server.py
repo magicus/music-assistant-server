@@ -6,7 +6,7 @@ import asyncio
 import struct
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from aiohttp import web
 
@@ -25,6 +25,12 @@ PNG_1X1_BYTES = (
     b"\x00\x00\x00\x0cIDAT\x08\x1dc``\x00\x00\x00\x02"
     b"\x00\x01\xe2!\xbc3\x00\x00\x00\x00IEND\xaeB`\x82"
 )
+
+SLIMPROTO_BUTTON_PLAY = 131090
+SLIMPROTO_BUTTON_PAUSE = 131095
+SLIMPROTO_BUTTON_STOP = 131082
+SLIMPROTO_BUTTON_JUMP_REW = 131083
+SLIMPROTO_BUTTON_JUMP_FWD = 131086
 
 
 @dataclass(slots=True, frozen=True)
@@ -83,21 +89,17 @@ class FakeLmsServer:
 
     async def connect_player(self, player_id: str, name: str, model: str) -> dict[str, Any]:
         """Register a connected fake player and return its player metadata."""
-        player = {
-            "playerid": player_id,
-            "name": name,
-            "model": model,
-            "connected": 1,
-            "power": 1,
-            "mode": "stop",
-            "volume": 50,
-            "playlist index": 0,
-            "playlist tracks": 0,
-            "player_name": name,
-            "isplaying": 0,
-            "sync_master": "",
-        }
-        self.players[player_id] = player
+        player = self._ensure_player(player_id)
+        player.update(
+            {
+                "name": name,
+                "model": model,
+                "connected": 1,
+                "power": 1,
+                "player_name": name,
+            }
+        )
+        self._normalize_playlist_fields(player)
         self.slimproto_players[player_id] = {
             "playerid": player_id,
             "name": name,
@@ -129,25 +131,10 @@ class FakeLmsServer:
 
     def set_player_mode(self, player_id: str, mode: str) -> dict[str, Any]:
         """Update the fake player's runtime play state and notify listeners."""
-        player = self.players.setdefault(
-            player_id,
-            {
-                "playerid": player_id,
-                "name": player_id,
-                "model": "test",
-                "connected": 1,
-                "power": 1,
-                "mode": "stop",
-                "volume": 50,
-                "playlist index": 0,
-                "playlist tracks": 0,
-                "player_name": player_id,
-                "isplaying": 0,
-                "sync_master": "",
-            },
-        )
+        player = self._ensure_player(player_id)
         player["mode"] = mode
         player["isplaying"] = 1 if mode == "play" else 0
+        self._normalize_playlist_fields(player)
         slimproto = self.slimproto_players.setdefault(
             player_id,
             {
@@ -180,6 +167,12 @@ class FakeLmsServer:
             return self.set_player_mode(player_id, "pause")
         if action == "stop":
             return self.set_player_mode(player_id, "stop")
+        if action == "playlist":
+            return self._handle_playlist_command(player_id, command)
+        if action == "playlistcontrol":
+            return self._handle_playlistcontrol_command(player_id, command)
+        if action == "button":
+            return self._handle_button_command(player_id, command)
         if action == "player":
             sub_action = command[1] if len(command) > 1 else ""
             if sub_action == "register":
@@ -269,20 +262,7 @@ class FakeLmsServer:
 
         self.players.setdefault(
             player_id,
-            {
-                "playerid": player_id,
-                "name": name,
-                "model": model,
-                "connected": 1,
-                "power": 1,
-                "mode": "stop",
-                "volume": 50,
-                "playlist index": 0,
-                "playlist tracks": 0,
-                "player_name": name,
-                "isplaying": 0,
-                "sync_master": "",
-            },
+            self._default_player_state(player_id),
         )
         self.players[player_id]["name"] = name
         self.players[player_id]["model"] = model
@@ -319,10 +299,16 @@ class FakeLmsServer:
                 elif opcode == b"butn":
                     if len(payload) >= 8:
                         _, button = struct.unpack("!LL", payload[:8])
-                        if button == 131090:
+                        if button == SLIMPROTO_BUTTON_PLAY:
                             self.set_player_mode(player_id, "play")
-                        elif button == 131095:
+                        elif button == SLIMPROTO_BUTTON_PAUSE:
                             self.set_player_mode(player_id, "pause")
+                        elif button == SLIMPROTO_BUTTON_STOP:
+                            self.set_player_mode(player_id, "stop")
+                        elif button == SLIMPROTO_BUTTON_JUMP_FWD:
+                            self._advance_playlist_index(player_id, +1)
+                        elif button == SLIMPROTO_BUTTON_JUMP_REW:
+                            self._advance_playlist_index(player_id, -1)
                 elif opcode == b"DSCO":
                     await self.disconnect_player(player_id)
                     break
@@ -353,6 +339,8 @@ class FakeLmsServer:
                 "power": 0,
                 "mode": "stop",
             }
+        self._normalize_playlist_fields(player)
+        playlist_loop = list(cast("list[dict[str, Any]]", player.get("playlist_loop", [])))
         return {
             "playerid": player_id,
             "name": player.get("name", player_id),
@@ -362,10 +350,334 @@ class FakeLmsServer:
             "mode": player.get("mode", "stop"),
             "playlist index": int(player.get("playlist index", 0)),
             "playlist tracks": int(player.get("playlist tracks", 0)),
+            "playlist_cur_index": int(player.get("playlist_cur_index", 0)),
+            "playlist_tracks": int(player.get("playlist_tracks", 0)),
+            "playlist_loop": playlist_loop,
+            "playlist shuffle": int(player.get("playlist shuffle", 0)),
+            "playlist repeat": int(player.get("playlist repeat", 0)),
+            "playlist_timestamp": float(player.get("playlist_timestamp", 0.0)),
             "volume": int(player.get("volume", 50)),
             "player_name": player.get("player_name", player_id),
             "isplaying": int(player.get("isplaying", 0)),
         }
+
+    def _default_player_state(self, player_id: str) -> dict[str, Any]:
+        """Return default fake player state used by queue/playback commands."""
+        return {
+            "playerid": player_id,
+            "name": player_id,
+            "model": "test",
+            "connected": 1,
+            "power": 1,
+            "mode": "stop",
+            "volume": 50,
+            "playlist index": 0,
+            "playlist tracks": 0,
+            "playlist_cur_index": 0,
+            "playlist_tracks": 0,
+            "playlist_loop": [],
+            "playlist shuffle": 0,
+            "playlist repeat": 0,
+            "playlist_timestamp": 0.0,
+            "player_name": player_id,
+            "isplaying": 0,
+            "sync_master": "",
+        }
+
+    def _ensure_player(self, player_id: str) -> dict[str, Any]:
+        """Ensure player state exists and has queue bookkeeping fields."""
+        player = self.players.setdefault(player_id, self._default_player_state(player_id))
+        self._normalize_playlist_fields(player)
+        return player
+
+    def _normalize_playlist_fields(self, player: dict[str, Any]) -> None:
+        """Keep playlist field aliases in sync to match LMS/client naming variants."""
+        playlist_loop = player.get("playlist_loop")
+        if not isinstance(playlist_loop, list):
+            playlist_loop = []
+            player["playlist_loop"] = playlist_loop
+
+        tracks = len(playlist_loop)
+
+        current_index = _coerce_int(
+            player.get("playlist_cur_index", player.get("playlist index", 0)),
+            0,
+        )
+        if tracks <= 0:
+            current_index = 0
+        else:
+            current_index = max(0, min(tracks - 1, current_index))
+
+        player["playlist_tracks"] = tracks
+        player["playlist tracks"] = tracks
+        player["playlist_cur_index"] = current_index
+        player["playlist index"] = current_index
+        player.setdefault("playlist shuffle", 0)
+        player.setdefault("playlist repeat", 0)
+        player.setdefault("playlist_timestamp", 0.0)
+
+    def _touch_playlist_timestamp(self, player: dict[str, Any]) -> None:
+        """Bump playlist timestamp to emulate LMS queue mutation notifications."""
+        current = player.get("playlist_timestamp", 0.0)
+        try:
+            current_float = float(current)
+        except TypeError, ValueError:
+            current_float = 0.0
+        player["playlist_timestamp"] = current_float + 1.0
+
+    def _append_playlist_item(
+        self,
+        player: dict[str, Any],
+        *,
+        track_id: str | None = None,
+        url: str | None = None,
+        title: str | None = None,
+        artist: str | None = None,
+        album: str | None = None,
+    ) -> None:
+        """Append one queue item and normalize playlist counters."""
+        playlist_loop = cast("list[dict[str, Any]]", player.setdefault("playlist_loop", []))
+        item: dict[str, Any] = {}
+        if track_id is not None:
+            item["track_id"] = track_id
+            item["id"] = track_id
+        if url is not None:
+            item["url"] = url
+        if title:
+            item["title"] = title
+        if artist:
+            item["artist"] = artist
+        if album:
+            item["album"] = album
+        playlist_loop.append(item)
+        self._normalize_playlist_fields(player)
+
+    def _set_playlist_index(self, player_id: str, index_value: Any) -> dict[str, Any]:
+        """Set player queue index from absolute or relative LMS index input."""
+        player = self._ensure_player(player_id)
+        self._normalize_playlist_fields(player)
+        tracks = _coerce_int(player.get("playlist_tracks"), 0)
+        if tracks <= 0:
+            player["playlist_cur_index"] = 0
+            player["playlist index"] = 0
+            return self._status_for_player(player_id)
+
+        current = _coerce_int(player.get("playlist_cur_index"), 0)
+        target = current
+        if isinstance(index_value, str) and index_value.startswith(("+", "-")):
+            target = current + _coerce_int(index_value, 0)
+        else:
+            target = _coerce_int(index_value, current)
+        target = max(0, min(tracks - 1, target))
+        player["playlist_cur_index"] = target
+        player["playlist index"] = target
+        player["mode"] = "play"
+        player["isplaying"] = 1
+        self._notify_player_state(player_id)
+        return self._status_for_player(player_id)
+
+    def _advance_playlist_index(self, player_id: str, delta: int) -> dict[str, Any]:
+        """Move queue index forward/backward and mark player as playing."""
+        current = _coerce_int(self._ensure_player(player_id).get("playlist_cur_index"), 0)
+        return self._set_playlist_index(player_id, current + delta)
+
+    def _handle_playlist_command(self, player_id: str, command: list[Any]) -> dict[str, Any]:
+        """Apply LMS playlist commands to fake queue state."""
+        player = self._ensure_player(player_id)
+        sub_action = str(command[1]) if len(command) > 1 else ""
+
+        if sub_action == "clear":
+            player["playlist_loop"] = []
+            player["playlist_cur_index"] = 0
+            player["playlist index"] = 0
+            player["playlist_tracks"] = 0
+            player["playlist tracks"] = 0
+            player["mode"] = "stop"
+            player["isplaying"] = 0
+            self._touch_playlist_timestamp(player)
+            self._notify_player_state(player_id)
+            return self._status_for_player(player_id)
+
+        if sub_action == "play":
+            if len(command) > 2 and isinstance(command[2], str):
+                player["playlist_loop"] = []
+                self._append_playlist_item(player, url=command[2])
+                player["playlist_cur_index"] = 0
+                player["playlist index"] = 0
+                self._touch_playlist_timestamp(player)
+            player["mode"] = "play"
+            player["isplaying"] = 1
+            self._notify_player_state(player_id)
+            return self._status_for_player(player_id)
+
+        if sub_action == "add":
+            if len(command) > 2 and isinstance(command[2], str):
+                self._append_playlist_item(player, url=command[2])
+                self._touch_playlist_timestamp(player)
+            self._notify_player_state(player_id)
+            return self._status_for_player(player_id)
+
+        if sub_action == "delete":
+            if len(command) > 2:
+                delete_index = _coerce_int(command[2], -1)
+                playlist_loop = cast(
+                    "list[dict[str, Any]]",
+                    player.setdefault("playlist_loop", []),
+                )
+                if 0 <= delete_index < len(playlist_loop):
+                    del playlist_loop[delete_index]
+                    current = _coerce_int(player.get("playlist_cur_index"), 0)
+                    if delete_index < current:
+                        current -= 1
+                    current = max(0, min(len(playlist_loop) - 1, current)) if playlist_loop else 0
+                    player["playlist_cur_index"] = current
+                    player["playlist index"] = current
+                    self._touch_playlist_timestamp(player)
+            self._normalize_playlist_fields(player)
+            self._notify_player_state(player_id)
+            return self._status_for_player(player_id)
+
+        if sub_action == "move" and len(command) > 3:
+            from_index = _coerce_int(command[2], -1)
+            to_index = _coerce_int(command[3], -1)
+            playlist_loop = cast("list[dict[str, Any]]", player.setdefault("playlist_loop", []))
+            if 0 <= from_index < len(playlist_loop) and 0 <= to_index < len(playlist_loop):
+                moved = playlist_loop.pop(from_index)
+                playlist_loop.insert(to_index, moved)
+                current = _coerce_int(player.get("playlist_cur_index"), 0)
+                if current == from_index:
+                    current = to_index
+                elif from_index < current <= to_index:
+                    current -= 1
+                elif to_index <= current < from_index:
+                    current += 1
+                player["playlist_cur_index"] = current
+                player["playlist index"] = current
+                self._touch_playlist_timestamp(player)
+            self._normalize_playlist_fields(player)
+            self._notify_player_state(player_id)
+            return self._status_for_player(player_id)
+
+        if sub_action == "index" and len(command) > 2:
+            return self._set_playlist_index(player_id, command[2])
+
+        if sub_action == "repeat" and len(command) > 2:
+            player["playlist repeat"] = _coerce_int(command[2], 0)
+            self._notify_player_state(player_id)
+            return self._status_for_player(player_id)
+
+        if sub_action == "shuffle" and len(command) > 2:
+            player["playlist shuffle"] = _coerce_int(command[2], 0)
+            self._notify_player_state(player_id)
+            return self._status_for_player(player_id)
+
+        if sub_action == "zap" and len(command) > 2:
+            return self._handle_playlist_command(player_id, ["playlist", "delete", command[2]])
+
+        return self._status_for_player(player_id)
+
+    def _handle_playlistcontrol_command(self, player_id: str, command: list[Any]) -> dict[str, Any]:
+        """Apply LMS playlistcontrol commands used by Lyrion queue sync."""
+        player = self._ensure_player(player_id)
+        cmd_arg = next(
+            (
+                str(arg).split(":", 1)[1]
+                for arg in command[1:]
+                if isinstance(arg, str) and str(arg).startswith("cmd:")
+            ),
+            "",
+        )
+        track_id = next(
+            (
+                str(arg).split(":", 1)[1]
+                for arg in command[1:]
+                if isinstance(arg, str) and str(arg).startswith("track_id:")
+            ),
+            None,
+        )
+        url = next(
+            (
+                str(arg).split(":", 1)[1]
+                for arg in command[1:]
+                if isinstance(arg, str) and str(arg).startswith("url:")
+            ),
+            None,
+        )
+        title = next(
+            (
+                str(arg).split(":", 1)[1]
+                for arg in command[1:]
+                if isinstance(arg, str) and str(arg).startswith("title:")
+            ),
+            None,
+        )
+        artist = next(
+            (
+                str(arg).split(":", 1)[1]
+                for arg in command[1:]
+                if isinstance(arg, str) and str(arg).startswith("artist:")
+            ),
+            None,
+        )
+        album = next(
+            (
+                str(arg).split(":", 1)[1]
+                for arg in command[1:]
+                if isinstance(arg, str) and str(arg).startswith("album:")
+            ),
+            None,
+        )
+
+        if cmd_arg == "load":
+            player["playlist_loop"] = []
+            self._append_playlist_item(
+                player,
+                track_id=track_id,
+                url=url,
+                title=title,
+                artist=artist,
+                album=album,
+            )
+            player["playlist_cur_index"] = 0
+            player["playlist index"] = 0
+            player["mode"] = "play"
+            player["isplaying"] = 1
+            self._touch_playlist_timestamp(player)
+            self._notify_player_state(player_id)
+            return self._status_for_player(player_id)
+
+        if cmd_arg == "add":
+            self._append_playlist_item(
+                player,
+                track_id=track_id,
+                url=url,
+                title=title,
+                artist=artist,
+                album=album,
+            )
+            self._touch_playlist_timestamp(player)
+            self._notify_player_state(player_id)
+            return self._status_for_player(player_id)
+
+        return self._status_for_player(player_id)
+
+    def _handle_button_command(self, player_id: str, command: list[Any]) -> dict[str, Any]:
+        """Apply LMS button command names commonly sent by clients."""
+        if len(command) < 2:
+            return self._status_for_player(player_id)
+
+        button_name = str(command[1])
+        if button_name == "jump_fwd":
+            return self._advance_playlist_index(player_id, +1)
+        if button_name == "jump_rew":
+            return self._advance_playlist_index(player_id, -1)
+        if button_name == "play":
+            return self.set_player_mode(player_id, "play")
+        if button_name == "pause":
+            return self.set_player_mode(player_id, "pause")
+        if button_name == "stop":
+            return self.set_player_mode(player_id, "stop")
+        return self._status_for_player(player_id)
 
     def _build_serverstatus_result(self) -> dict[str, Any]:
         """Build the serverstatus payload expected by CometD / roster discovery."""
@@ -438,6 +750,17 @@ class FakeLmsServer:
         if command_name == "status":
             status = self._status_for_player(player_id)
             return web.json_response({"id": 1, "result": status})
+
+        if command_name in {
+            "play",
+            "pause",
+            "stop",
+            "playlist",
+            "playlistcontrol",
+            "button",
+        }:
+            result = await self.handle_jsonrpc_command(player_id, command)
+            return web.json_response({"id": 1, "result": result})
 
         if command_name == "player":
             action = command[1] if len(command) > 1 else ""
