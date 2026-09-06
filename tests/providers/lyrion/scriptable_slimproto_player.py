@@ -236,7 +236,9 @@ class ScriptableSlimProtoPlayer:
                 return
             await asyncio.sleep(0.01)
 
-        self.mode = expected_mode
+        current_mode = self.endpoint.fake_server.players.get(self.player_id, {}).get("mode")
+        if isinstance(current_mode, str):
+            self.mode = current_mode
 
     async def _send_command(self, command: str) -> None:
         """Send a user-button SlimProto event that matches real LMS behavior."""

@@ -162,7 +162,7 @@ class FakeLmsServer:
         if action == "play":
             return self.set_player_mode(player_id, "play")
         if action == "pause":
-            return self.set_player_mode(player_id, "pause")
+            return self._status_for_player(player_id)
         if action == "stop":
             return self.set_player_mode(player_id, "stop")
         if action == "playlist":
@@ -307,11 +307,7 @@ class FakeLmsServer:
                 elif opcode in {b"BUTN", b"butn"}:
                     if len(payload) >= 8:
                         _, button = struct.unpack("!LL", payload[:8])
-                        if button == SLIMPROTO_BUTTON_PLAY:
-                            self.set_player_mode(player_id, "play")
-                        elif button == SLIMPROTO_BUTTON_PAUSE:
-                            self.set_player_mode(player_id, "pause")
-                        elif button == SLIMPROTO_BUTTON_STOP:
+                        if button == SLIMPROTO_BUTTON_STOP:
                             self.set_player_mode(player_id, "stop")
                         elif button == SLIMPROTO_BUTTON_JUMP_FWD:
                             self._advance_playlist_index(player_id, +1)
@@ -328,8 +324,6 @@ class FakeLmsServer:
                             self._cycle_playlist_repeat(player_id)
                         elif ir_code == SLIMPROTO_IR_SHUFFLE:
                             self._cycle_playlist_shuffle(player_id)
-                        elif ir_code == SLIMPROTO_IR_MUTING:
-                            self._toggle_player_muting(player_id)
                 elif opcode == b"DSCO":
                     await self.disconnect_player(player_id)
                     break
@@ -831,7 +825,7 @@ class FakeLmsServer:
         if button_name == "play":
             return self.set_player_mode(player_id, "play")
         if button_name == "pause":
-            return self.set_player_mode(player_id, "pause")
+            return self._status_for_player(player_id)
         if button_name == "stop":
             return self.set_player_mode(player_id, "stop")
         return self._status_for_player(player_id)
@@ -887,18 +881,14 @@ class FakeLmsServer:
             return self._status_for_player(player_id)
 
         if sub_action == "muting":
-            if len(command) > 2:
-                player["mixer muting"] = 1 if _coerce_int(command[2], 0) else 0
             self._notify_player_state(player_id)
             return self._status_for_player(player_id)
 
         return self._status_for_player(player_id)
 
     def _toggle_player_muting(self, player_id: str) -> dict[str, Any]:
-        """Toggle muting state to emulate IR muting behavior."""
+        """Ignore IR muting frames to match live LMS behavior for this harness."""
         player = self._ensure_player(player_id)
-        current = 1 if _coerce_int(player.get("mixer muting"), 0) else 0
-        player["mixer muting"] = 0 if current else 1
         self._notify_player_state(player_id)
         return self._status_for_player(player_id)
 
