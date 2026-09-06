@@ -201,6 +201,19 @@ async def test_get_album_tracks_sorting_and_playlist_tracks(
         yield _Track(1, 1)
 
     monkeypatch.setattr(client, "iter_library_tracks", _iter_tracks)
+
+    async def _rpc_request(_provider: Any, player_id: str, command: list[Any]) -> dict[str, Any]:
+        del _provider, player_id
+        assert command[:2] == ["playlists", "tracks"]
+        assert any(str(part).startswith("playlist_id:pl1") for part in command)
+        return {"playlisttracks_loop": [{"id": "trk1", "track": "Track 1"}], "count": "1"}
+
+    monkeypatch.setattr(client, "rpc_request", _rpc_request)
+    monkeypatch.setattr(
+        client.parsers,
+        "parse_track",
+        lambda _provider, _raw: _Track(0, 0),
+    )
     provider = _provider()
 
     tracks = await client.get_album_tracks(provider, "alb1")
