@@ -154,9 +154,6 @@ async def test_fake_player_ir_button_interface_emits_repeat_and_updates_state(
     lyrion_test_endpoint: LyrionTestEndpoint,
 ) -> None:
     """Named and raw IR interfaces should emit IR frames and drive repeat state updates."""
-    if lyrion_test_endpoint.fake_server is None:
-        pytest.skip("IR interface assertions are specific to the fake LMS backend")
-
     player = ScriptableSlimProtoPlayer(
         endpoint=lyrion_test_endpoint,
         player_id="fake-player-ir-interface",
@@ -175,7 +172,8 @@ async def test_fake_player_ir_button_interface_emits_repeat_and_updates_state(
         await player.press_ir_button("repeat")
         status = await wait_for_playlist_repeat(rpc_client, 1)
         assert playlist_repeat(status) == 1
-        assert lyrion_test_endpoint.fake_server.slimproto_events[-1][0] == b"IR  "
+        if lyrion_test_endpoint.fake_server is not None:
+            assert lyrion_test_endpoint.fake_server.slimproto_events[-1][0] == b"IR  "
 
         await player.press_ir_code(0x768938C7)
         status = await wait_for_playlist_repeat(rpc_client, 2)
@@ -217,13 +215,15 @@ async def test_fake_player_ir_mute_toggles_mixer_muting_state(
         await player.toggle_mute()
         status = await rpc_client.send(["status", 0, 100])
         assert int(status.get("mixer muting", 0)) == 1
-        assert player.is_muted() is True
-        assert lyrion_test_endpoint.fake_server.slimproto_events[-1][0] == b"IR  "
+        if lyrion_test_endpoint.fake_server is not None:
+            assert player.is_muted() is True
+            assert lyrion_test_endpoint.fake_server.slimproto_events[-1][0] == b"IR  "
 
         await player.toggle_mute()
         status = await rpc_client.send(["status", 0, 100])
         assert int(status.get("mixer muting", 0)) == 0
-        assert player.is_muted() is False
+        if lyrion_test_endpoint.fake_server is not None:
+            assert player.is_muted() is False
     finally:
         if rpc_client is not None:
             await rpc_client.close()

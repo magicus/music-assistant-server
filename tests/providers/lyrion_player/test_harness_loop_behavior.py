@@ -23,9 +23,6 @@ async def test_loop_mode_bidirectional_sync_fake_backend(
     lyrion_test_endpoint: LyrionTestEndpoint,
 ) -> None:
     """Loop mode should stay synchronized when MA and SlimProto alternate writes."""
-    if lyrion_test_endpoint.fake_server is None:
-        pytest.skip("loop SlimProto path assertions are specific to the fake LMS backend")
-
     player = ScriptableSlimProtoPlayer(
         endpoint=lyrion_test_endpoint,
         player_id="fake-player-loop-sync",
@@ -142,9 +139,6 @@ async def test_loop_mode_stress_sequence_fake_backend(
     lyrion_test_endpoint: LyrionTestEndpoint,
 ) -> None:
     """Repeat state should remain coherent under an adversarial mixed-source write sequence."""
-    if lyrion_test_endpoint.fake_server is None:
-        pytest.skip("stress sequence assertions are specific to the fake LMS backend")
-
     player = ScriptableSlimProtoPlayer(
         endpoint=lyrion_test_endpoint,
         player_id="fake-player-loop-stress",
@@ -244,9 +238,6 @@ async def test_shuffle_mode_bidirectional_sync_fake_backend(
     lyrion_test_endpoint: LyrionTestEndpoint,
 ) -> None:
     """Shuffle mode should stay coherent across MA writes and SlimProto toggle presses."""
-    if lyrion_test_endpoint.fake_server is None:
-        pytest.skip("shuffle SlimProto path assertions are specific to the fake LMS backend")
-
     player = ScriptableSlimProtoPlayer(
         endpoint=lyrion_test_endpoint,
         player_id="fake-player-shuffle-sync",
