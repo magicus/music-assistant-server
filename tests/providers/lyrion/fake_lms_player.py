@@ -130,6 +130,22 @@ class FakeSlimProtoPlayer:
             return result
         raise RuntimeError("Fake player status response was missing a JSON-RPC result")
 
+    async def _wait_for_server_mode(self, expected_mode: str) -> None:
+        """Wait briefly for the LMS fake server to apply a state change before returning."""
+        if self.endpoint.fake_server is None:
+            self.mode = expected_mode
+            return
+
+        deadline = asyncio.get_running_loop().time() + 1.0
+        while asyncio.get_running_loop().time() < deadline:
+            current_mode = self.endpoint.fake_server.players.get(self.player_id, {}).get("mode")
+            if current_mode == expected_mode:
+                self.mode = expected_mode
+                return
+            await asyncio.sleep(0.01)
+
+        self.mode = expected_mode
+
     async def _send_command(self, command: str) -> None:
         """Send a state-changing slimproto command to the fake LMS."""
         if self._slimproto_writer is None:
@@ -138,7 +154,7 @@ class FakeSlimProtoPlayer:
         writer = self._slimproto_writer[1]
         writer.write(f"{command}\n".encode())
         await writer.drain()
-        self.mode = command
+        await self._wait_for_server_mode(command)
 
     async def close(self) -> None:
         """Close the HTTP session used by the fake player."""

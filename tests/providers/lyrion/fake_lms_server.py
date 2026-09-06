@@ -219,14 +219,23 @@ class FakeLmsServer:
         writer: asyncio.StreamWriter,
     ) -> None:
         """Handle a slimproto connection and reflect the connected player state in LMS."""
-        peername = writer.get_extra_info("peername")
-        peer = peername[0] if peername else "unknown"
-        data = await reader.read()
-        payload = data.decode("utf-8", errors="ignore").strip()
-        player_id = payload.split()[1] if payload.split() and len(payload.split()) > 1 else None
-        if not player_id:
+        player_id: str | None = None
+        try:
+            handshake = await reader.readuntil(b"\n")
+            payload = handshake.decode("utf-8", errors="ignore").strip()
+            parts = payload.split()
+            if len(parts) < 2 or parts[0].upper() != "HELLO":
+                writer.close()
+                return
+            player_id = parts[1]
+        except asyncio.IncompleteReadError:
             writer.close()
             return
+
+        if player_id is None:
+            writer.close()
+            return
+
         self.slimproto_players[player_id] = {
             "playerid": player_id,
             "name": player_id,
@@ -258,7 +267,7 @@ class FakeLmsServer:
         self._slimproto_connections[player_id] = writer
         self._notify_player_state(player_id)
         try:
-            while not reader.at_eof():
+            while True:
                 command = await reader.readuntil(b"\n")
                 text = command.decode("utf-8", errors="ignore").strip().lower()
                 if not text:
