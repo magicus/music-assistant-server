@@ -9,6 +9,7 @@ Queue sync must therefore handle mixed queues explicitly in both directions.
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING, Any, cast
 
 from music_assistant_models.enums import EventType, IdentifierType, PlaybackState, PlayerFeature
@@ -49,8 +50,11 @@ class LyrionPlayer(Player):
             PlayerFeature.PLAY_MEDIA,
             PlayerFeature.ENQUEUE,
             PlayerFeature.PAUSE,
+            PlayerFeature.NEXT_PREVIOUS,
             PlayerFeature.POWER,
             PlayerFeature.VOLUME_SET,
+            PlayerFeature.VOLUME_MUTE,
+            PlayerFeature.SEEK,
         }
         self._attr_available = True
         self._queue_sync = LyrionQueueSync(self)
@@ -206,6 +210,52 @@ class LyrionPlayer(Player):
         except ProviderUnavailableError as err:
             raise PlayerCommandFailed(f"volume_set failed: {err}") from err
         self._attr_volume_level = max(0, min(100, volume_level))
+        self.update_state()
+
+    async def volume_mute(self, muted: bool) -> None:
+        """Mute or unmute playback volume."""
+        try:
+            await self.provider.send_player_command(
+                self.player_id,
+                ["mixer", "muting", 1 if muted else 0],
+            )
+        except ProviderUnavailableError as err:
+            raise PlayerCommandFailed(f"volume_mute failed: {err}") from err
+        self._attr_volume_muted = muted
+        self.update_state()
+
+    async def next_track(self) -> None:
+        """Skip to the next track on the active LMS queue/source."""
+        try:
+            await self.provider.send_player_command(
+                self.player_id,
+                ["playlist", "index", "+1"],
+            )
+        except ProviderUnavailableError as err:
+            raise PlayerCommandFailed(f"next_track failed: {err}") from err
+
+    async def previous_track(self) -> None:
+        """Skip to the previous track on the active LMS queue/source."""
+        try:
+            await self.provider.send_player_command(
+                self.player_id,
+                ["playlist", "index", "-1"],
+            )
+        except ProviderUnavailableError as err:
+            raise PlayerCommandFailed(f"previous_track failed: {err}") from err
+
+    async def seek(self, position: int) -> None:
+        """Seek playback position in seconds on the active source."""
+        target = max(0, int(position))
+        try:
+            await self.provider.send_player_command(
+                self.player_id,
+                ["time", target],
+            )
+        except ProviderUnavailableError as err:
+            raise PlayerCommandFailed(f"seek failed: {err}") from err
+        self._attr_elapsed_time = float(target)
+        self._attr_elapsed_time_last_updated = time.time()
         self.update_state()
 
     async def sync_queue_from_lms(self) -> None:

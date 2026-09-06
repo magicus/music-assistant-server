@@ -1,0 +1,137 @@
+"""Unit tests for command dispatch in the Lyrion player implementation."""
+
+from __future__ import annotations
+
+import time
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+from music_assistant_models.errors import PlayerCommandFailed, ProviderUnavailableError
+
+from music_assistant.providers.lyrion_player.player import LyrionPlayer
+
+
+@pytest.fixture
+def mock_provider() -> MagicMock:
+    """Return a minimal provider stub for LyrionPlayer command tests."""
+    provider = MagicMock()
+    provider.instance_id = "lyrion_player"
+    provider.logger = MagicMock()
+    provider.mass = MagicMock()
+    provider.mass.subscribe = MagicMock(return_value=lambda: None)
+    provider.mass.config = MagicMock()
+    provider.mass.config.create_default_player_config = MagicMock()
+    provider.mass.config.get_base_player_config = MagicMock(return_value=MagicMock())
+    provider.send_player_command = AsyncMock()
+    return provider
+
+
+@pytest.fixture
+def player(mock_provider: MagicMock) -> LyrionPlayer:
+    """Return a LyrionPlayer instance backed by a mocked provider."""
+    return LyrionPlayer(mock_provider, "test_player", {})
+
+
+@pytest.mark.asyncio
+async def test_supported_features_include_transport_mute_and_seek(player: LyrionPlayer) -> None:
+    """Expected capabilities are exposed by the player feature set."""
+    from music_assistant_models.enums import PlayerFeature
+
+    assert PlayerFeature.NEXT_PREVIOUS in player.supported_features
+    assert PlayerFeature.VOLUME_MUTE in player.supported_features
+    assert PlayerFeature.SEEK in player.supported_features
+
+
+@pytest.mark.asyncio
+async def test_volume_mute_dispatches_lms_command(
+    player: LyrionPlayer, mock_provider: MagicMock
+) -> None:
+    """Muting maps to LMS mixer muting command and updates local state."""
+    await player.volume_mute(True)
+
+    mock_provider.send_player_command.assert_awaited_once_with(
+        "test_player", ["mixer", "muting", 1]
+    )
+    assert player.volume_muted is True
+
+
+@pytest.mark.asyncio
+async def test_volume_mute_wraps_provider_unavailable(
+    player: LyrionPlayer, mock_provider: MagicMock
+) -> None:
+    """Provider availability failures surface as PlayerCommandFailed."""
+    mock_provider.send_player_command.side_effect = ProviderUnavailableError("offline")
+
+    with pytest.raises(PlayerCommandFailed, match="volume_mute failed"):
+        await player.volume_mute(False)
+
+
+@pytest.mark.asyncio
+async def test_next_track_dispatches_playlist_index_increment(
+    player: LyrionPlayer, mock_provider: MagicMock
+) -> None:
+    """Next track maps to LMS playlist index +1."""
+    await player.next_track()
+
+    mock_provider.send_player_command.assert_awaited_once_with(
+        "test_player", ["playlist", "index", "+1"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_previous_track_dispatches_playlist_index_decrement(
+    player: LyrionPlayer, mock_provider: MagicMock
+) -> None:
+    """Previous track maps to LMS playlist index -1."""
+    await player.previous_track()
+
+    mock_provider.send_player_command.assert_awaited_once_with(
+        "test_player", ["playlist", "index", "-1"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_seek_dispatches_time_and_updates_elapsed(
+    player: LyrionPlayer, mock_provider: MagicMock
+) -> None:
+    """Seek maps to LMS time command and updates tracked elapsed state."""
+    before = time.time()
+
+    await player.seek(42)
+
+    mock_provider.send_player_command.assert_awaited_once_with("test_player", ["time", 42])
+    assert player.elapsed_time == 42.0
+    assert player.elapsed_time_last_updated is not None
+    assert player.elapsed_time_last_updated >= before
+
+
+@pytest.mark.asyncio
+async def test_seek_clamps_negative_positions(
+    player: LyrionPlayer, mock_provider: MagicMock
+) -> None:
+    """Negative seek positions clamp to zero seconds."""
+    await player.seek(-11)
+
+    mock_provider.send_player_command.assert_awaited_once_with("test_player", ["time", 0])
+    assert player.elapsed_time == 0.0
+
+
+@pytest.mark.asyncio
+async def test_transport_and_seek_wrap_provider_unavailable(
+    player: LyrionPlayer, mock_provider: MagicMock
+) -> None:
+    """Transport and seek failures are wrapped consistently."""
+    mock_provider.send_player_command.side_effect = ProviderUnavailableError("down")
+
+    with pytest.raises(PlayerCommandFailed, match="next_track failed"):
+        await player.next_track()
+
+    mock_provider.send_player_command.reset_mock(side_effect=True)
+    mock_provider.send_player_command.side_effect = ProviderUnavailableError("down")
+    with pytest.raises(PlayerCommandFailed, match="previous_track failed"):
+        await player.previous_track()
+
+    mock_provider.send_player_command.reset_mock(side_effect=True)
+    mock_provider.send_player_command.side_effect = ProviderUnavailableError("down")
+    with pytest.raises(PlayerCommandFailed, match="seek failed"):
+        await player.seek(12)

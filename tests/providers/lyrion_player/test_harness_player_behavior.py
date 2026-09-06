@@ -184,6 +184,104 @@ async def test_fake_player_ir_button_interface_emits_repeat_and_updates_state(
 
 
 @pytest.mark.asyncio
+async def test_fake_player_ir_mute_toggles_mixer_muting_state(
+    lyrion_test_endpoint: LyrionTestEndpoint,
+) -> None:
+    """Mute should be exercisable through real SlimProto IR muting frames."""
+    if lyrion_test_endpoint.fake_server is None:
+        pytest.skip("IR mute assertions are specific to the fake LMS backend")
+
+    player = ScriptableSlimProtoPlayer(
+        endpoint=lyrion_test_endpoint,
+        player_id="fake-player-ir-muting",
+        name="Fake IR Mute",
+        model="test",
+    )
+    rpc_client: EndpointRpcClient | None = None
+    try:
+        await player.connect()
+        rpc_client = EndpointRpcClient(lyrion_test_endpoint, player.rpc_player_id)
+
+        await rpc_client.send(["mixer", "muting", 0])
+        status = await rpc_client.send(["status", 0, 100])
+        assert int(status.get("mixer muting", 0)) == 0
+
+        await player.toggle_mute()
+        status = await rpc_client.send(["status", 0, 100])
+        assert int(status.get("mixer muting", 0)) == 1
+        assert player.is_muted() is True
+        assert lyrion_test_endpoint.fake_server.slimproto_events[-1][0] == b"IR  "
+
+        await player.toggle_mute()
+        status = await rpc_client.send(["status", 0, 100])
+        assert int(status.get("mixer muting", 0)) == 0
+        assert player.is_muted() is False
+    finally:
+        if rpc_client is not None:
+            await rpc_client.close()
+        await player.close()
+
+
+@pytest.mark.asyncio
+async def test_fake_player_seek_path_uses_time_command_for_exact_position(
+    lyrion_test_endpoint: LyrionTestEndpoint,
+) -> None:
+    """Seek should be validated via explicit LMS time seconds, not IR jump semantics."""
+    player = ScriptableSlimProtoPlayer(
+        endpoint=lyrion_test_endpoint,
+        player_id="fake-player-time-seek",
+        name="Fake Seek Player",
+        model="test",
+    )
+    rpc_client: EndpointRpcClient | None = None
+    try:
+        await player.connect()
+        rpc_client = EndpointRpcClient(lyrion_test_endpoint, player.rpc_player_id)
+
+        await rpc_client.send(["time", 37])
+        status = await rpc_client.send(["status", 0, 100])
+        assert float(status.get("time", 0.0)) == 37.0
+        assert player.elapsed_time == 37.0
+
+        await rpc_client.send(["time", 5])
+        status = await rpc_client.send(["status", 0, 100])
+        assert float(status.get("time", 0.0)) == 5.0
+        assert player.elapsed_time == 5.0
+    finally:
+        if rpc_client is not None:
+            await rpc_client.close()
+        await player.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.live_lyrion_docker
+async def test_seek_path_uses_jsonrpc_time_live_backend(
+    lyrion_test_endpoint: LyrionTestEndpoint,
+) -> None:
+    """Live LMS seek contract is JSON-RPC time; assert deterministic status roundtrip."""
+    player = ScriptableSlimProtoPlayer(
+        endpoint=lyrion_test_endpoint,
+        player_id="live-player-time-seek",
+        name="Live Seek Player",
+        model="test",
+    )
+    rpc_client: EndpointRpcClient | None = None
+    try:
+        await player.connect()
+        rpc_client = EndpointRpcClient(lyrion_test_endpoint, player.rpc_player_id)
+
+        await rpc_client.send(["time", 37])
+        status = await rpc_client.send(["status", 0, 100])
+        assert "time" in status
+        assert isinstance(status["time"], int | float)
+        assert float(status["time"]) >= 0.0
+    finally:
+        if rpc_client is not None:
+            await rpc_client.close()
+        await player.close()
+
+
+@pytest.mark.asyncio
 async def test_fake_player_reports_local_playback_state_across_multiple_sources(
     lyrion_test_endpoint: LyrionTestEndpoint,
 ) -> None:

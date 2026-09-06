@@ -34,6 +34,7 @@ class ScriptableSlimProtoPlayer:
         "jump_fwd": 0x7689A05F,
         "repeat": 0x768938C7,
         "shuffle": 0x7689D827,
+        "muting": 0x7689C43B,
     }
 
     @staticmethod
@@ -76,6 +77,8 @@ class ScriptableSlimProtoPlayer:
         self.name = name
         self.model = model
         self.mode = "stop"
+        self.volume_muted = False
+        self.elapsed_time = 0.0
         live_mac = self._derive_live_player_id(player_id)
         self.rpc_player_id = player_id if self.endpoint.fake_server is not None else live_mac
         self._mac_address = bytes.fromhex(live_mac.replace(":", ""))
@@ -93,6 +96,12 @@ class ScriptableSlimProtoPlayer:
         mode = state.get("mode")
         if isinstance(mode, str):
             self.mode = mode
+        muting = state.get("mixer muting")
+        if muting is not None:
+            self.volume_muted = bool(int(muting))
+        elapsed = state.get("time")
+        if elapsed is not None:
+            self.elapsed_time = float(elapsed)
 
     async def connect(self) -> dict[str, Any]:
         """Connect to the LMS using the real SlimProto HELO handshake."""
@@ -169,6 +178,11 @@ class ScriptableSlimProtoPlayer:
         await self.press_ir_button("shuffle")
         return {"playerid": self.player_id}
 
+    async def toggle_mute(self) -> dict[str, Any]:
+        """Send a mute-toggle IR button over SlimProto."""
+        await self.press_ir_button("muting")
+        return {"playerid": self.player_id}
+
     async def press_ir_button(self, button: str) -> None:
         """Send one named IR button using the built-in symbolic mapping."""
         ir_code = self._IR_BUTTON_CODES.get(button)
@@ -192,6 +206,10 @@ class ScriptableSlimProtoPlayer:
     def is_paused(self) -> bool:
         """Return whether this fake player currently interprets itself as paused."""
         return self.mode == "pause"
+
+    def is_muted(self) -> bool:
+        """Return whether this fake player currently interprets itself as muted."""
+        return self.volume_muted
 
     async def _wait_for_server_registration(self) -> None:
         """Wait until the fake LMS fully registers the connected player."""

@@ -35,6 +35,7 @@ SLIMPROTO_IR_JUMP_REW = 0x7689C03F
 SLIMPROTO_IR_JUMP_FWD = 0x7689A05F
 SLIMPROTO_IR_REPEAT = 0x768938C7
 SLIMPROTO_IR_SHUFFLE = 0x7689D827
+SLIMPROTO_IR_MUTING = 0x7689C43B
 
 
 @dataclass(slots=True, frozen=True)
@@ -175,6 +176,10 @@ class FakeLmsServer:
             return self._handle_playlist_command(player_id, command)
         if action == "playlistcontrol":
             return self._handle_playlistcontrol_command(player_id, command)
+        if action == "mixer":
+            return self._handle_mixer_command(player_id, command)
+        if action == "time":
+            return self._handle_time_command(player_id, command)
         if action == "button":
             return self._handle_button_command(player_id, command)
         if action == "player":
@@ -326,6 +331,8 @@ class FakeLmsServer:
                             self._cycle_playlist_repeat(player_id)
                         elif ir_code == SLIMPROTO_IR_SHUFFLE:
                             self._cycle_playlist_shuffle(player_id)
+                        elif ir_code == SLIMPROTO_IR_MUTING:
+                            self._toggle_player_muting(player_id)
                 elif opcode == b"DSCO":
                     await self.disconnect_player(player_id)
                     break
@@ -373,6 +380,8 @@ class FakeLmsServer:
             "playlist shuffle": int(player.get("playlist shuffle", 0)),
             "playlist repeat": int(player.get("playlist repeat", 0)),
             "playlist_timestamp": float(player.get("playlist_timestamp", 0.0)),
+            "mixer muting": int(player.get("mixer muting", 0)),
+            "time": float(player.get("time", 0.0)),
             "volume": int(player.get("volume", 50)),
             "player_name": player.get("player_name", player_id),
             "isplaying": int(player.get("isplaying", 0)),
@@ -396,6 +405,8 @@ class FakeLmsServer:
             "playlist shuffle": 0,
             "playlist repeat": 0,
             "playlist_timestamp": 0.0,
+            "mixer muting": 0,
+            "time": 0.0,
             "player_name": player_id,
             "isplaying": 0,
             "sync_master": "",
@@ -733,6 +744,39 @@ class FakeLmsServer:
             return self.set_player_mode(player_id, "stop")
         return self._status_for_player(player_id)
 
+    def _handle_mixer_command(self, player_id: str, command: list[Any]) -> dict[str, Any]:
+        """Apply LMS mixer commands relevant for player command tests."""
+        player = self._ensure_player(player_id)
+        sub_action = str(command[1]) if len(command) > 1 else ""
+
+        if sub_action == "muting":
+            if len(command) > 2:
+                player["mixer muting"] = 1 if _coerce_int(command[2], 0) else 0
+            self._notify_player_state(player_id)
+            return self._status_for_player(player_id)
+
+        return self._status_for_player(player_id)
+
+    def _toggle_player_muting(self, player_id: str) -> dict[str, Any]:
+        """Toggle muting state to emulate IR muting behavior."""
+        player = self._ensure_player(player_id)
+        current = 1 if _coerce_int(player.get("mixer muting"), 0) else 0
+        player["mixer muting"] = 0 if current else 1
+        self._notify_player_state(player_id)
+        return self._status_for_player(player_id)
+
+    def _handle_time_command(self, player_id: str, command: list[Any]) -> dict[str, Any]:
+        """Apply LMS time command (seek/read) for playback position tracking."""
+        player = self._ensure_player(player_id)
+
+        if len(command) > 1:
+            target = max(0.0, float(_coerce_int(command[1], 0)))
+            player["time"] = target
+            self._notify_player_state(player_id)
+            return self._status_for_player(player_id)
+
+        return self._status_for_player(player_id)
+
     def _build_serverstatus_result(self) -> dict[str, Any]:
         """Build the serverstatus payload expected by CometD / roster discovery."""
         players_loop = [
@@ -811,6 +855,8 @@ class FakeLmsServer:
             "stop",
             "playlist",
             "playlistcontrol",
+            "mixer",
+            "time",
             "button",
         }:
             result = await self.handle_jsonrpc_command(player_id, command)
