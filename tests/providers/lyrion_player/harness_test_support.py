@@ -144,6 +144,45 @@ def playlist_shuffle(status: dict[str, Any]) -> int:
     return int(status.get("playlist_shuffle", 0))
 
 
+def playback_mode(status: dict[str, Any]) -> str:
+    """Read playback mode from LMS status."""
+    mode = status.get("mode")
+    return str(mode) if isinstance(mode, str) else "stop"
+
+
+def sync_master(status: dict[str, Any]) -> str | None:
+    """Read sync master id from LMS status across key-name variants."""
+    for key in ("sync_master", "sync_master_id", "sync_master_playerid"):
+        value = status.get(key)
+        if isinstance(value, str):
+            cleaned = value.strip()
+            if cleaned and cleaned != "-":
+                return cleaned
+        elif value is not None:
+            cleaned = str(value).strip()
+            if cleaned and cleaned != "-":
+                return cleaned
+    return None
+
+
+def sync_slaves(status: dict[str, Any]) -> set[str]:
+    """Read sync slave ids from LMS status across field formats."""
+    if isinstance(status.get("sync_slaves"), str):
+        raw_value = str(status["sync_slaves"])
+        return {part.strip() for part in raw_value.split(",") if part.strip()}
+
+    if isinstance(status.get("sync_slaves_loop"), list):
+        members: set[str] = set()
+        for item in status["sync_slaves_loop"]:
+            if isinstance(item, dict):
+                if player_id := item.get("playerid"):
+                    members.add(str(player_id))
+            elif item:
+                members.add(str(item))
+        return members
+    return set()
+
+
 def repeat_mode_name(repeat_value: int) -> str:
     """Map LMS repeat integer to named loop mode expected by MA."""
     return {0: "none", 1: "track", 2: "playlist"}.get(repeat_value, "none")
@@ -191,6 +230,38 @@ async def wait_for_playlist_shuffle(
     latest = await client.send(["status", 0, 100])
     while asyncio.get_running_loop().time() < deadline:
         if playlist_shuffle(latest) == expected_shuffle:
+            return latest
+        await asyncio.sleep(0.1)
+        latest = await client.send(["status", 0, 100])
+    return latest
+
+
+async def wait_for_sync_master(
+    client: EndpointRpcClient,
+    expected_master: str | None,
+    timeout: float = 2.0,
+) -> dict[str, Any]:
+    """Poll status until LMS reports the expected sync master."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    latest = await client.send(["status", 0, 100])
+    while asyncio.get_running_loop().time() < deadline:
+        if sync_master(latest) == expected_master:
+            return latest
+        await asyncio.sleep(0.1)
+        latest = await client.send(["status", 0, 100])
+    return latest
+
+
+async def wait_for_mode(
+    client: EndpointRpcClient,
+    expected_mode: str,
+    timeout: float = 2.0,
+) -> dict[str, Any]:
+    """Poll status until LMS reports the expected playback mode."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    latest = await client.send(["status", 0, 100])
+    while asyncio.get_running_loop().time() < deadline:
+        if playback_mode(latest) == expected_mode:
             return latest
         await asyncio.sleep(0.1)
         latest = await client.send(["status", 0, 100])

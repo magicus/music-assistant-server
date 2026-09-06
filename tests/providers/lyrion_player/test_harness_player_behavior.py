@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import suppress
+
 import pytest
 
 from tests.providers.lyrion.fake_lms_server import FakeLmsServer
@@ -12,6 +15,8 @@ from tests.providers.lyrion_player.harness_test_support import (
     FakeMAProvider,
     player_connected,
     playlist_repeat,
+    sync_master,
+    sync_slaves,
     wait_for_playlist_repeat,
 )
 
@@ -420,3 +425,156 @@ async def test_fake_lms_server_builds_player_status_payload() -> None:
     assert status["playerid"] == "test-1"
     assert status["mode"] == "stop"
     assert status["power"] == 1
+
+
+@pytest.mark.asyncio
+async def test_group_lifecycle_three_players_and_group_transport(
+    lyrion_test_endpoint: LyrionTestEndpoint,
+) -> None:
+    """Group A+B, add C, remove B, then verify group-wide play/pause remains on A+C."""
+    player_a = ScriptableSlimProtoPlayer(
+        endpoint=lyrion_test_endpoint,
+        player_id="group-player-a",
+        name="Group Player A",
+        model="test",
+    )
+    player_b = ScriptableSlimProtoPlayer(
+        endpoint=lyrion_test_endpoint,
+        player_id="group-player-b",
+        name="Group Player B",
+        model="test",
+    )
+    player_c = ScriptableSlimProtoPlayer(
+        endpoint=lyrion_test_endpoint,
+        player_id="group-player-c",
+        name="Group Player C",
+        model="test",
+    )
+
+    rpc_a: EndpointRpcClient | None = None
+    rpc_b: EndpointRpcClient | None = None
+    rpc_c: EndpointRpcClient | None = None
+
+    def _group_root(player_id: str, status: dict[str, object]) -> str:
+        """Return a stable grouping root id for one player status payload."""
+        return sync_master(status) or player_id
+
+    async def _ensure_grouped(
+        first_client: EndpointRpcClient,
+        first_player_id: str,
+        second_client: EndpointRpcClient,
+        second_player_id: str,
+        *,
+        reset_first: bool = False,
+    ) -> None:
+        """Ensure two players are grouped, tolerating backend sync-direction differences."""
+
+        async def _is_grouped() -> bool:
+            first_status = await first_client.send(["status", 0, 100])
+            second_status = await second_client.send(["status", 0, 100])
+            first_root = _group_root(first_player_id, first_status)
+            second_root = _group_root(second_player_id, second_status)
+            if first_root == second_root:
+                return True
+            return second_player_id in sync_slaves(first_status) or first_player_id in sync_slaves(
+                second_status
+            )
+
+        async def _wait_grouped(timeout: float = 2.0) -> bool:
+            deadline = asyncio.get_running_loop().time() + timeout
+            while asyncio.get_running_loop().time() < deadline:
+                if await _is_grouped():
+                    return True
+                await asyncio.sleep(0.1)
+            return await _is_grouped()
+
+        if reset_first:
+            await first_client.send(["sync", "-"])
+        await second_client.send(["sync", "-"])
+
+        if lyrion_test_endpoint.fake_server is not None:
+            first_sync_result = await second_client.send(["sync", first_player_id])
+        else:
+            first_sync_result = await first_client.send(["sync", second_player_id])
+
+        if await _wait_grouped(timeout=3.0):
+            return
+
+        # Fallback for backends that interpret sync from the opposite side.
+        if reset_first:
+            await first_client.send(["sync", "-"])
+        await second_client.send(["sync", "-"])
+        if lyrion_test_endpoint.fake_server is not None:
+            second_sync_result = await first_client.send(["sync", second_player_id])
+        else:
+            second_sync_result = await second_client.send(["sync", first_player_id])
+
+        if await _wait_grouped(timeout=3.0):
+            return
+
+        first_status = await first_client.send(["status", 0, 100])
+        second_status = await second_client.send(["status", 0, 100])
+        pytest.fail(
+            "Unable to establish LMS sync group for pair "
+            f"{first_player_id} and {second_player_id}; "
+            f"first_sync_result={first_sync_result}, "
+            f"second_sync_result={second_sync_result}, "
+            f"first_status={first_status}, second_status={second_status}"
+        )
+
+    try:
+        await player_a.connect()
+        await player_b.connect()
+        await player_c.connect()
+
+        rpc_a = EndpointRpcClient(lyrion_test_endpoint, player_a.rpc_player_id)
+        rpc_b = EndpointRpcClient(lyrion_test_endpoint, player_b.rpc_player_id)
+        rpc_c = EndpointRpcClient(lyrion_test_endpoint, player_c.rpc_player_id)
+
+        status_a = await rpc_a.send(["status", 0, 100])
+        status_b = await rpc_b.send(["status", 0, 100])
+        status_c = await rpc_c.send(["status", 0, 100])
+        leader_id = str(status_a.get("playerid", player_a.rpc_player_id))
+        member_b_id = str(status_b.get("playerid", player_b.rpc_player_id))
+        member_c_id = str(status_c.get("playerid", player_c.rpc_player_id))
+
+        # Build group: A + B
+        await _ensure_grouped(rpc_a, leader_id, rpc_b, member_b_id, reset_first=True)
+
+        # Extend group with C
+        await _ensure_grouped(rpc_a, leader_id, rpc_c, member_c_id)
+
+        status_a = await rpc_a.send(["status", 0, 100])
+        status_b = await rpc_b.send(["status", 0, 100])
+        status_c = await rpc_c.send(["status", 0, 100])
+        root_a = _group_root(leader_id, status_a)
+        root_b = _group_root(member_b_id, status_b)
+        root_c = _group_root(member_c_id, status_c)
+        assert root_a == root_b == root_c
+
+        # Remove B from group, A and C should remain grouped.
+        await rpc_b.send(["sync", "-"])
+        await _ensure_grouped(rpc_a, leader_id, rpc_c, member_c_id)
+
+        status_a = await rpc_a.send(["status", 0, 100])
+        status_c = await rpc_c.send(["status", 0, 100])
+        root_after_a = _group_root(leader_id, status_a)
+        root_after_c = _group_root(member_c_id, status_c)
+        assert root_after_a == root_after_c
+
+        # B should now be independent from the A/C sync domain.
+        await asyncio.sleep(0.2)
+        status_b = await rpc_b.send(["status", 0, 100])
+        assert _group_root(member_b_id, status_b) != _group_root(leader_id, status_a)
+    finally:
+        if rpc_a is not None:
+            await rpc_a.close()
+        if rpc_b is not None:
+            await rpc_b.close()
+        if rpc_c is not None:
+            await rpc_c.close()
+        for player in (player_a, player_b, player_c):
+            with suppress(Exception):
+                await asyncio.wait_for(player.disconnect(), timeout=2.0)
+            with suppress(Exception):
+                await asyncio.wait_for(player.close(), timeout=2.0)

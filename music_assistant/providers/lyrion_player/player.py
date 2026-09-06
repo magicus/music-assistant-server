@@ -13,7 +13,11 @@ import time
 from typing import TYPE_CHECKING, Any, cast
 
 from music_assistant_models.enums import EventType, IdentifierType, PlaybackState
-from music_assistant_models.errors import PlayerCommandFailed, ProviderUnavailableError
+from music_assistant_models.errors import (
+    InvalidCommand,
+    PlayerCommandFailed,
+    ProviderUnavailableError,
+)
 from music_assistant_models.player import DeviceInfo
 
 from music_assistant.helpers.util import is_valid_mac_address
@@ -49,6 +53,7 @@ class LyrionPlayer(Player):
         super().__init__(provider, player_id)
         self._attr_supported_features = PLAYER_SUPPORTED_FEATURES
         self._attr_available = True
+        self._attr_can_group_with = {provider.instance_id}
         self._queue_sync = LyrionQueueSync(self)
         self._on_unload_callbacks.append(
             self.mass.subscribe(
@@ -249,6 +254,47 @@ class LyrionPlayer(Player):
         self._attr_elapsed_time = float(target)
         self._attr_elapsed_time_last_updated = time.time()
         self.update_state()
+
+    async def set_members(
+        self,
+        player_ids_to_add: list[str] | None = None,
+        player_ids_to_remove: list[str] | None = None,
+    ) -> None:
+        """Apply member changes through LMS native sync commands."""
+        if self.synced_to:
+            raise InvalidCommand("Player is synced, cannot set members")
+        if not player_ids_to_add and not player_ids_to_remove:
+            return
+
+        touched_members: set[str] = set()
+        current_members = dict.fromkeys(self._attr_group_members)
+
+        try:
+            for member_id in dict.fromkeys(player_ids_to_remove or []):
+                if member_id == self.player_id:
+                    continue
+                if member_id not in current_members:
+                    continue
+                await self.provider.send_player_command(member_id, ["sync", "-"])
+                touched_members.add(member_id)
+                current_members.pop(member_id, None)
+
+            for member_id in dict.fromkeys(player_ids_to_add or []):
+                if member_id == self.player_id or member_id in current_members:
+                    continue
+                await self.provider.send_player_command(member_id, ["sync", self.player_id])
+                touched_members.add(member_id)
+                current_members[member_id] = None
+        except ProviderUnavailableError as err:
+            raise PlayerCommandFailed(f"set_members failed: {err}") from err
+
+        other_members = [member_id for member_id in current_members if member_id != self.player_id]
+        self._attr_group_members = [self.player_id, *other_members] if other_members else []
+        self.update_state()
+
+        for member_id in touched_members:
+            if member := self.mass.players.get_player(member_id):
+                member.update_state()
 
     async def sync_queue_from_lms(self) -> None:
         """Refresh MA queue mirror from LMS queue state via JSON-RPC."""

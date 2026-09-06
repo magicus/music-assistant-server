@@ -24,6 +24,7 @@ PLAYER_SUPPORTED_FEATURES: set[PlayerFeature] = {
     PlayerFeature.PLAY_MEDIA,
     PlayerFeature.ENQUEUE,
     PlayerFeature.PAUSE,
+    PlayerFeature.SET_MEMBERS,
     PlayerFeature.NEXT_PREVIOUS,
     PlayerFeature.POWER,
     PlayerFeature.VOLUME_SET,

@@ -104,7 +104,19 @@ class LyrionCometDEventAdapter:
                 player._attr_elapsed_time = float(status["time"])
                 player._attr_elapsed_time_last_updated = time.time()
 
+        previous_group_members = tuple(player.group_members)
+        player._attr_group_members = _extract_group_members(player.player_id, status)
+
         player.update_state()
+
+        if previous_group_members != tuple(player.group_members):
+            _refresh_related_group_players(
+                self.provider,
+                player,
+                set(previous_group_members),
+                set(player.group_members),
+                status,
+            )
 
 
 def _get_status_int(status: StatusPayload, key: str) -> int | None:
@@ -122,3 +134,82 @@ def _is_invalid_player_status(status: StatusPayload) -> bool:
     """Return True when LMS reports that the status player is invalid."""
     error = status.get("error")
     return isinstance(error, str) and error == "invalid player"
+
+
+def _extract_group_members(player_id: str, status: StatusPayload) -> list[str]:
+    """Extract MA group_members from LMS sync fields in a status payload."""
+    sync_slaves = _extract_sync_slaves(status)
+    if sync_slaves:
+        members = [member_id for member_id in sync_slaves if member_id != player_id]
+        return [player_id, *members] if members else []
+
+    sync_master = _extract_sync_master(status)
+    if sync_master and sync_master != player_id:
+        return []
+    return []
+
+
+def _extract_sync_master(status: StatusPayload) -> str | None:
+    """Extract sync-master player id from LMS status payload."""
+    for key in ("sync_master", "sync_master_id", "sync_master_playerid"):
+        raw_value = status.get(key)
+        if raw_value in (None, "", "-"):
+            continue
+        if isinstance(raw_value, dict):
+            if player_id := raw_value.get("playerid"):
+                return str(player_id)
+            continue
+        return str(raw_value)
+    return None
+
+
+def _extract_sync_slaves(status: StatusPayload) -> list[str]:
+    """Extract sync-slave player ids from LMS status payload."""
+    for key in ("sync_slaves", "sync_slaves_loop"):
+        raw_value = status.get(key)
+        if not raw_value:
+            continue
+
+        result: list[str] = []
+        if isinstance(raw_value, str):
+            for part in raw_value.split(","):
+                value = part.strip()
+                if value:
+                    result.append(value)
+        elif isinstance(raw_value, list):
+            for item in raw_value:
+                if isinstance(item, dict):
+                    if player_id := item.get("playerid"):
+                        result.append(str(player_id))
+                elif item:
+                    result.append(str(item))
+
+        deduped = list(dict.fromkeys(result))
+        if deduped:
+            return deduped
+    return []
+
+
+def _refresh_related_group_players(
+    provider: LyrionPlayerProvider,
+    player: LyrionPlayer,
+    previous_members: set[str],
+    current_members: set[str],
+    status: StatusPayload,
+) -> None:
+    """Refresh players affected by a group topology change."""
+    related_ids = (previous_members | current_members) - {player.player_id}
+
+    if sync_master := _extract_sync_master(status):
+        if sync_master != player.player_id:
+            related_ids.add(sync_master)
+
+    for provider_player in provider.players:
+        if provider_player.player_id == player.player_id:
+            continue
+        if player.player_id in provider_player.group_members:
+            related_ids.add(provider_player.player_id)
+
+    for related_id in related_ids:
+        if related_player := provider.mass.players.get_player(related_id):
+            related_player.update_state()

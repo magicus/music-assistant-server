@@ -7,7 +7,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from music_assistant_models.enums import PlayerFeature
-from music_assistant_models.errors import PlayerCommandFailed, ProviderUnavailableError
+from music_assistant_models.errors import (
+    InvalidCommand,
+    PlayerCommandFailed,
+    ProviderUnavailableError,
+)
 
 from music_assistant.providers.lyrion_player.player import LyrionPlayer
 
@@ -39,6 +43,7 @@ async def test_supported_features_include_transport_mute_and_seek(player: Lyrion
     assert PlayerFeature.NEXT_PREVIOUS in player.supported_features
     assert PlayerFeature.VOLUME_MUTE in player.supported_features
     assert PlayerFeature.SEEK in player.supported_features
+    assert PlayerFeature.SET_MEMBERS in player.supported_features
 
 
 @pytest.mark.asyncio
@@ -134,3 +139,55 @@ async def test_transport_and_seek_wrap_provider_unavailable(
     mock_provider.send_player_command.side_effect = ProviderUnavailableError("down")
     with pytest.raises(PlayerCommandFailed, match="seek failed"):
         await player.seek(12)
+
+
+@pytest.mark.asyncio
+async def test_set_members_dispatches_sync_commands(
+    player: LyrionPlayer, mock_provider: MagicMock
+) -> None:
+    """Adding/removing members maps to LMS sync commands."""
+    player._attr_group_members = ["test_player", "member_a"]
+
+    await player.set_members(
+        player_ids_to_add=["member_b"],
+        player_ids_to_remove=["member_a"],
+    )
+
+    assert mock_provider.send_player_command.await_args_list[0].args == (
+        "member_a",
+        ["sync", "-"],
+    )
+    assert mock_provider.send_player_command.await_args_list[1].args == (
+        "member_b",
+        ["sync", "test_player"],
+    )
+    assert player.group_members == ["test_player", "member_b"]
+
+
+@pytest.mark.asyncio
+async def test_set_members_rejects_when_player_is_synced(
+    player: LyrionPlayer, mock_provider: MagicMock
+) -> None:
+    """A sync child can not manage group members."""
+    leader = MagicMock()
+    leader.player_id = "leader"
+    leader.provider = mock_provider
+    leader.type = "player"
+    leader.group_members = ["leader", "test_player"]
+    leader.state.available = True
+
+    mock_provider.mass.players.iter_players = MagicMock(return_value=[leader])
+
+    with pytest.raises(InvalidCommand, match="cannot set members"):
+        await player.set_members(player_ids_to_add=["member_b"])
+
+
+@pytest.mark.asyncio
+async def test_set_members_wraps_provider_unavailable(
+    player: LyrionPlayer, mock_provider: MagicMock
+) -> None:
+    """Provider failures while changing sync members are wrapped."""
+    mock_provider.send_player_command.side_effect = ProviderUnavailableError("offline")
+
+    with pytest.raises(PlayerCommandFailed, match="set_members failed"):
+        await player.set_members(player_ids_to_add=["member_a"])

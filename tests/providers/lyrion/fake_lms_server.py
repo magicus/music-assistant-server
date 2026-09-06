@@ -119,6 +119,12 @@ class FakeLmsServer:
 
     async def disconnect_player(self, player_id: str) -> dict[str, Any]:
         """Disconnect a registered fake player."""
+        for other_id, other in self.players.items():
+            if other_id == player_id:
+                continue
+            if cast("str", other.get("sync_master", "")).strip() == player_id:
+                other["sync_master"] = ""
+
         player = self.players.pop(player_id, {})
         if player:
             player["connected"] = 0
@@ -129,6 +135,7 @@ class FakeLmsServer:
             slimproto["connected"] = False
             slimproto["power"] = False
             slimproto["mode"] = "stop"
+        self._rebuild_sync_relations()
         self._notify_player_state(player_id)
         if not player:
             return {"playerid": player_id, "connected": 0, "power": 0}
@@ -137,25 +144,11 @@ class FakeLmsServer:
     def set_player_mode(self, player_id: str, mode: str) -> dict[str, Any]:
         """Update the fake player's runtime play state and notify listeners."""
         player = self._ensure_player(player_id)
-        player["mode"] = mode
-        player["isplaying"] = 1 if mode == "play" else 0
-        self._normalize_playlist_fields(player)
-        slimproto = self.slimproto_players.setdefault(
-            player_id,
-            {
-                "playerid": player_id,
-                "name": player_id,
-                "model": "test",
-                "connected": True,
-                "power": True,
-                "mode": "stop",
-                "volume": 50,
-            },
-        )
-        slimproto["mode"] = mode
-        slimproto["connected"] = True
-        slimproto["power"] = True
-        self._notify_player_state(player_id)
+        if sync_master := cast("str", player.get("sync_master", "")).strip():
+            self._apply_group_mode(sync_master, mode)
+            return self._status_for_player(player_id)
+
+        self._apply_group_mode(player_id, mode)
         return self._status_for_player(player_id)
 
     async def handle_jsonrpc_command(self, player_id: str, command: list[Any]) -> dict[str, Any]:
@@ -176,6 +169,8 @@ class FakeLmsServer:
             return self._handle_playlist_command(player_id, command)
         if action == "playlistcontrol":
             return self._handle_playlistcontrol_command(player_id, command)
+        if action == "sync":
+            return self._handle_sync_command(player_id, command)
         if action == "mixer":
             return self._handle_mixer_command(player_id, command)
         if action == "time":
@@ -385,6 +380,12 @@ class FakeLmsServer:
             "volume": int(player.get("volume", 50)),
             "player_name": player.get("player_name", player_id),
             "isplaying": int(player.get("isplaying", 0)),
+            "sync_master": str(player.get("sync_master", "")),
+            "sync_slaves": ",".join(cast("list[str]", player.get("sync_slaves", []))),
+            "sync_slaves_loop": [
+                {"playerid": child_id}
+                for child_id in cast("list[str]", player.get("sync_slaves", []))
+            ],
         }
 
     def _default_player_state(self, player_id: str) -> dict[str, Any]:
@@ -410,6 +411,7 @@ class FakeLmsServer:
             "player_name": player_id,
             "isplaying": 0,
             "sync_master": "",
+            "sync_slaves": [],
         }
 
     def _ensure_player(self, player_id: str) -> dict[str, Any]:
@@ -450,6 +452,71 @@ class FakeLmsServer:
             current_float = 0.0
         player["playlist_timestamp"] = current_float + 1.0
 
+    def _rebuild_sync_relations(self) -> None:
+        """Rebuild sync_slaves lists from players' sync_master fields."""
+        for player in self.players.values():
+            player["sync_slaves"] = []
+
+        for child_id, child in self.players.items():
+            raw_master = child.get("sync_master")
+            if not isinstance(raw_master, str):
+                continue
+            master_id = raw_master.strip()
+            if not master_id:
+                continue
+            master = self.players.get(master_id)
+            if master is None:
+                child["sync_master"] = ""
+                continue
+            sync_slaves = cast("list[str]", master.setdefault("sync_slaves", []))
+            if child_id not in sync_slaves:
+                sync_slaves.append(child_id)
+
+    def _set_sync_master(self, child_id: str, master_id: str | None) -> None:
+        """Set or clear sync-master relationship for one player."""
+        child = self._ensure_player(child_id)
+        if not master_id or master_id == child_id:
+            child["sync_master"] = ""
+        else:
+            master = self._ensure_player(master_id)
+            child["sync_master"] = master_id
+            child["mode"] = master.get("mode", "stop")
+            child["isplaying"] = master.get("isplaying", 0)
+            child["time"] = master.get("time", 0.0)
+        self._rebuild_sync_relations()
+
+    def _apply_group_mode(self, leader_id: str, mode: str) -> None:
+        """Apply playback mode to leader and all currently synced members."""
+        leader = self._ensure_player(leader_id)
+        leader["mode"] = mode
+        leader["isplaying"] = 1 if mode == "play" else 0
+        self._normalize_playlist_fields(leader)
+
+        self._rebuild_sync_relations()
+        for child_id in cast("list[str]", leader.get("sync_slaves", [])):
+            child = self._ensure_player(child_id)
+            child["mode"] = mode
+            child["isplaying"] = 1 if mode == "play" else 0
+            child["time"] = leader.get("time", 0.0)
+            self._notify_player_state(child_id)
+
+        slimproto = self.slimproto_players.setdefault(
+            leader_id,
+            {
+                "playerid": leader_id,
+                "name": leader_id,
+                "model": "test",
+                "connected": True,
+                "power": True,
+                "mode": "stop",
+                "volume": 50,
+            },
+        )
+        slimproto["mode"] = mode
+        slimproto["connected"] = True
+        slimproto["power"] = True
+        self._notify_player_state(leader_id)
+
     def _append_playlist_item(
         self,
         player: dict[str, Any],
@@ -476,6 +543,19 @@ class FakeLmsServer:
             item["album"] = album
         playlist_loop.append(item)
         self._normalize_playlist_fields(player)
+
+    def _handle_sync_command(self, player_id: str, command: list[Any]) -> dict[str, Any]:
+        """Apply LMS sync command: sync <master_id> / sync -."""
+        target = str(command[1]).strip() if len(command) > 1 else ""
+        if target in {"", "-"}:
+            self._set_sync_master(player_id, None)
+            self._notify_player_state(player_id)
+            return self._status_for_player(player_id)
+
+        self._set_sync_master(player_id, target)
+        self._notify_player_state(player_id)
+        self._notify_player_state(target)
+        return self._status_for_player(player_id)
 
     def _set_playlist_index(self, player_id: str, index_value: Any) -> dict[str, Any]:
         """Set player queue index from absolute or relative LMS index input."""
@@ -706,10 +786,8 @@ class FakeLmsServer:
             )
             player["playlist_cur_index"] = 0
             player["playlist index"] = 0
-            player["mode"] = "play"
-            player["isplaying"] = 1
             self._touch_playlist_timestamp(player)
-            self._notify_player_state(player_id)
+            self._apply_group_mode(player_id, "play")
             return self._status_for_player(player_id)
 
         if cmd_arg == "add":
@@ -854,6 +932,7 @@ class FakeLmsServer:
             "play",
             "pause",
             "stop",
+            "sync",
             "playlist",
             "playlistcontrol",
             "mixer",
