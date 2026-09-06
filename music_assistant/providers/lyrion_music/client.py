@@ -261,39 +261,56 @@ async def get_all_playlists(provider: LyrionMusicProvider) -> list[dict[str, str
     return playlists
 
 
+async def get_playlist_tracks_page(
+    provider: LyrionMusicProvider,
+    playlist_id: str,
+    offset: int = 0,
+    limit: int = BROWSE_PAGE_SIZE,
+) -> tuple[list[Track], bool]:
+    """Return one paged playlist track response using LMS playlists/tracks."""
+    result = await rpc_request(
+        provider,
+        player_id="",
+        command=[
+            "playlists",
+            "tracks",
+            offset,
+            limit,
+            f"playlist_id:{playlist_id}",
+            TRACK_TAGS,
+        ],
+    )
+    raw_items = cast(
+        "list[dict[str, Any]]",
+        result.get("playlisttracks_loop", []),
+    )
+    tracks: list[Track] = []
+    for raw_track in raw_items:
+        if parsers.extract_item_id(raw_track, id_keys=("id", "track_id")) is None:
+            continue
+        tracks.append(parsers.parse_track(provider, raw_track))
+
+    expected_total = _extract_browse_total_count(result)
+    if expected_total is not None:
+        has_more = offset + len(raw_items) < expected_total
+    else:
+        has_more = len(raw_items) >= limit
+    return tracks, has_more
+
+
 async def get_playlist_tracks(provider: LyrionMusicProvider, playlist_id: str) -> list[Track]:
     """Return all tracks for a playlist id."""
     tracks: list[Track] = []
     offset = 0
     while True:
-        result = await rpc_request(
+        page, has_more = await get_playlist_tracks_page(
             provider,
-            player_id="",
-            command=[
-                "playlists",
-                "tracks",
-                offset,
-                BROWSE_PAGE_SIZE,
-                f"playlist_id:{playlist_id}",
-                TRACK_TAGS,
-            ],
+            playlist_id,
+            offset=offset,
         )
-        raw_items = cast(
-            "list[dict[str, Any]]",
-            result.get("playlisttracks_loop", []),
-        )
-        if not raw_items:
+        if not page:
             break
-        for raw_track in raw_items:
-            if parsers.extract_item_id(raw_track, id_keys=("id", "track_id")) is None:
-                continue
-            tracks.append(parsers.parse_track(provider, raw_track))
-
-        expected_total = _extract_browse_total_count(result)
-        if expected_total is not None:
-            has_more = offset + len(raw_items) < expected_total
-        else:
-            has_more = len(raw_items) >= BROWSE_PAGE_SIZE
+        tracks.extend(page)
         if not has_more:
             break
         offset += BROWSE_PAGE_SIZE

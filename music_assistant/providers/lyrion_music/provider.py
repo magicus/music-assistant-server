@@ -323,9 +323,9 @@ async def _browse_playlists(
     if sub_item_id is not None and track_offset is None:
         return []
     offset = track_offset or 0
-    playlist_tracks, has_more = await client.get_tracks_page(
+    playlist_tracks, has_more = await client.get_playlist_tracks_page(
         provider,
-        filter_value=f"playlist_id:{playlist_id}",
+        playlist_id,
         offset=offset,
     )
     playlist_track_items: BrowseItems = [*playlist_tracks]

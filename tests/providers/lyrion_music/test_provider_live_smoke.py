@@ -1,30 +1,16 @@
 # mypy: disable-error-code="arg-type"
 """
-Live LMS smoke tests for lyrion_music provider.
+Smoke tests for lyrion_music provider across fake and Docker LMS backends.
 
 These tests are intentionally data-agnostic and only verify that the provider
-can talk to a Docker-managed LMS endpoint without crashing.
+can talk to the active seeded LMS endpoint without crashing.
 """
 
 from __future__ import annotations
 
-import pytest
 from music_assistant_models.media_items import BrowseFolder
 
 from music_assistant.providers.lyrion_music.provider import LyrionMusicProvider
-
-pytestmark = pytest.mark.live_lyrion_docker
-
-
-@pytest.fixture(autouse=True)
-def _require_live_lyrion_docker(pytestconfig: pytest.Config) -> None:
-    """Keep smoke tests pinned to Docker live mode only."""
-    if pytestconfig.getoption("--live-lyrion-docker"):
-        return
-    if pytestconfig.getoption("-k") and "live" in str(pytestconfig.getoption("-k")).lower():
-        # Allow explicit selection in developer loops while still requiring docker flag.
-        pass
-    pytest.skip("Run with --live-lyrion-docker for Docker-managed LMS smoke tests")
 
 
 async def test_live_browse_root_has_expected_sections(
