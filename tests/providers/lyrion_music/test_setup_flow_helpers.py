@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio
 import socket
 from types import SimpleNamespace
-from typing import Any, Self
+from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -14,6 +14,7 @@ from music_assistant_models.errors import SetupFailedError
 
 from music_assistant.providers.lyrion_music import setup_flow
 from music_assistant.providers.lyrion_music.shared import setup_flow as shared_setup_flow
+from tests.providers.lyrion.rpc_test_doubles import FakeResponse
 
 
 class _FakeWriter:
@@ -21,27 +22,6 @@ class _FakeWriter:
         return None
 
     def close(self) -> None:
-        return None
-
-
-class _FakeResponse:
-    """Async response context manager for setup-flow HTTP checks."""
-
-    def __init__(self, body: Any, status: int = 200) -> None:
-        self._body = body
-        self.status = status
-
-    async def json(self) -> Any:
-        return self._body
-
-    def raise_for_status(self) -> None:
-        if self.status >= 400:
-            raise RuntimeError("status error")
-
-    async def __aenter__(self) -> Self:
-        return self
-
-    async def __aexit__(self, *args: object) -> None:
         return None
 
 
@@ -111,7 +91,7 @@ async def test_run_lms_setup_flow_retries_on_finish_error() -> None:
 async def test_validate_lms_endpoint_happy_path() -> None:
     """Endpoint validator should succeed for reachable endpoint with LMS result."""
     http_session = Mock()
-    http_session.post = Mock(return_value=_FakeResponse({"result": {"count": 1}}))
+    http_session.post = Mock(return_value=FakeResponse({"result": {"count": 1}}))
 
     with (
         patch.object(
@@ -134,7 +114,7 @@ async def test_validate_lms_endpoint_happy_path() -> None:
 async def test_validate_lms_endpoint_errors() -> None:
     """Endpoint validator should raise typed setup errors for bad input/state."""
     http_session = Mock()
-    http_session.post = Mock(return_value=_FakeResponse({"result": {"count": 1}}))
+    http_session.post = Mock(return_value=FakeResponse({"result": {"count": 1}}))
 
     with pytest.raises(SetupFailedError, match="host_required"):
         await shared_setup_flow.validate_lms_endpoint(
@@ -168,7 +148,7 @@ async def test_validate_lms_endpoint_errors() -> None:
 async def test_validate_lms_endpoint_unreachable_and_not_lyrion() -> None:
     """Validator should map network and payload problems to setup errors."""
     http_session = Mock()
-    http_session.post = Mock(return_value=_FakeResponse({"result": None}))
+    http_session.post = Mock(return_value=FakeResponse({"result": None}))
 
     with (
         patch.object(
@@ -207,7 +187,7 @@ async def test_validate_lms_endpoint_unreachable_and_not_lyrion() -> None:
         )
 
     bad_json_session = Mock()
-    bad_json_session.post = Mock(return_value=_FakeResponse(ValueError("bad json")))
+    bad_json_session.post = Mock(return_value=FakeResponse(ValueError("bad json")))
     bad_json_session.post.return_value.json = AsyncMock(side_effect=ValueError("bad json"))
     with (
         patch.object(

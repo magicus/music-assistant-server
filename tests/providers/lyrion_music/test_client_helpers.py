@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Callable
 from types import SimpleNamespace
-from typing import Any, Self
+from typing import Any
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -13,48 +13,7 @@ from aiohttp import ClientError
 from music_assistant_models.errors import MediaNotFoundError, ProviderUnavailableError
 
 from music_assistant.providers.lyrion_music import client
-
-
-class _Response:
-    """Minimal async response context manager for rpc tests."""
-
-    def __init__(self, *, payload: dict[str, Any], status_error: Exception | None = None) -> None:
-        self._payload = payload
-        self._status_error = status_error
-
-    async def json(self) -> dict[str, Any]:
-        return self._payload
-
-    def raise_for_status(self) -> None:
-        if self._status_error is not None:
-            raise self._status_error
-
-    async def __aenter__(self) -> Self:
-        return self
-
-    async def __aexit__(self, *args: object) -> None:
-        return None
-
-
-class _FakeRpcTransport:
-    """Route JSON-RPC payloads to a local handler and capture requests."""
-
-    def __init__(
-        self,
-        handler: Callable[[str, list[Any]], dict[str, Any] | Exception],
-    ) -> None:
-        self._handler = handler
-        self.commands: list[list[Any]] = []
-
-    def post(self, _url: str, json: dict[str, Any], timeout: Any) -> _Response:
-        del timeout
-        player_id = str(json["params"][0])
-        command = list(json["params"][1])
-        self.commands.append(command)
-        result = self._handler(player_id, command)
-        if isinstance(result, Exception):
-            raise result
-        return _Response(payload={"result": result})
+from tests.providers.lyrion.rpc_test_doubles import FakeResponse, FakeRpcTransport
 
 
 def _provider(
@@ -77,7 +36,7 @@ def _provider(
     provider.get_setup_value = Mock(side_effect=_get_setup_value)
     provider._disabled_batch_lookup_keys = set()
     if rpc_handler is not None:
-        transport = _FakeRpcTransport(rpc_handler)
+        transport = FakeRpcTransport(rpc_handler)
         provider.mass.http_session.post = Mock(side_effect=transport.post)
         provider._fake_rpc_transport = transport
     return provider
@@ -456,7 +415,7 @@ async def test_rpc_request_success_and_error_paths() -> None:
     """rpc_request should map transport/protocol failures to ProviderUnavailableError."""
     provider = _provider()
 
-    provider.mass.http_session.post.return_value = _Response(payload={"result": {"ok": True}})
+    provider.mass.http_session.post.return_value = FakeResponse({"result": {"ok": True}})
     assert await client.rpc_request(provider, "", ["serverstatus"]) == {"ok": True}
 
     with pytest.raises(ProviderUnavailableError, match="not configured"):
@@ -470,19 +429,19 @@ async def test_rpc_request_success_and_error_paths() -> None:
     with pytest.raises(ProviderUnavailableError, match="connection"):
         await client.rpc_request(provider, "", ["serverstatus"])
 
-    bad_json_response = _Response(payload={"result": {"x": 1}})
+    bad_json_response = FakeResponse({"result": {"x": 1}})
     bad_json_response.json = AsyncMock(side_effect=ValueError("bad json"))
     provider.mass.http_session.post = Mock(return_value=bad_json_response)
     with pytest.raises(ProviderUnavailableError, match="invalid JSON"):
         await client.rpc_request(provider, "", ["serverstatus"])
 
     provider.mass.http_session.post = Mock(
-        return_value=_Response(payload={"error": {"code": -1, "message": "nope"}})
+        return_value=FakeResponse({"error": {"code": -1, "message": "nope"}})
     )
     with pytest.raises(ProviderUnavailableError, match="failed with code"):
         await client.rpc_request(provider, "", ["albums"])
 
-    provider.mass.http_session.post = Mock(return_value=_Response(payload={"result": None}))
+    provider.mass.http_session.post = Mock(return_value=FakeResponse({"result": None}))
     with pytest.raises(ProviderUnavailableError, match="missing result"):
         await client.rpc_request(provider, "", ["albums"])
 
