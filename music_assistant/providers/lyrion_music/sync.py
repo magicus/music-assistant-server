@@ -11,7 +11,7 @@ from time import monotonic
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from music_assistant_models.enums import MediaType
-from music_assistant_models.errors import MediaNotFoundError
+from music_assistant_models.errors import MediaNotFoundError, ProviderUnavailableError
 from music_assistant_models.media_items import Album, Artist, ProviderMapping, Track
 
 from music_assistant.controllers.tasks import (
@@ -243,7 +243,7 @@ async def _sync_library_artwork(
                 continue
             await controller.update_item_in_library(int(library_item.item_id), provider_item)
             updated_items += 1
-        except (MediaNotFoundError, ValueError) as err:
+        except (MediaNotFoundError, ProviderUnavailableError, ValueError) as err:
             skipped_items += 1
             provider.logger.warning(
                 "Skipping %s artwork refresh for %s (%s): %s",

@@ -80,9 +80,13 @@ async def rpc_request(
             f"Lyrion server at {host}:{port} did not respond in time ({timeout}s). "
             "Verify that Lyrion is running and reachable."
         ) from err
-    except (ClientError, ValueError) as err:
+    except ValueError as err:
         raise ProviderUnavailableError(
-            f"Lyrion JSON-RPC request to {host}:{port} failed: {err}"
+            f"Lyrion JSON-RPC connection request to {host}:{port} returned invalid JSON: {err}"
+        ) from err
+    except ClientError as err:
+        raise ProviderUnavailableError(
+            f"Lyrion JSON-RPC connection request to {host}:{port} failed: {err}"
         ) from err
 
     if error_payload := cast("dict[str, Any] | None", data.get("error")):

@@ -35,9 +35,17 @@ def _provider(
     *, host: str | None = "127.0.0.1", port: int | None = 9000, token: str | None = None
 ) -> Any:
     provider = Mock()
-    provider._get_configured_host = Mock(return_value=host)
-    provider._get_configured_port = Mock(return_value=port)
-    provider.get_setup_value = Mock(return_value=token)
+
+    def _get_setup_value(key: str, default: Any = None) -> Any:
+        if key == artwork.CONF_ARTWORK_CACHE_BUSTER:
+            return token
+        if key == "lms_host":
+            return host
+        if key == "port":
+            return port if port is not None else default
+        return default
+
+    provider.get_setup_value = Mock(side_effect=_get_setup_value)
     provider.mass.http_session.get = Mock()
     return provider
 

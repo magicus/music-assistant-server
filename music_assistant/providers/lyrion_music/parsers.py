@@ -19,6 +19,8 @@ from music_assistant_models.media_items import (
     UniqueList,
 )
 
+from music_assistant.providers.lyrion.client import get_configured_host, get_configured_port
+
 from . import artwork
 from .constants import STREAM_PATH_TEMPLATE
 
@@ -284,10 +286,10 @@ def to_lms_stream_url(provider: LyrionMusicProvider, track_id: str, raw_url: str
     """Resolve track stream URL."""
     if raw_url and raw_url.startswith(("http://", "https://")):
         return raw_url
-    host = provider.get_configured_host()
+    host = get_configured_host(provider)
     if host is None:
         raise ProviderUnavailableError("Lyrion host is not configured")
-    port = provider.get_configured_port()
+    port = get_configured_port(provider, default=None)
     if port is None:
         raise ProviderUnavailableError("Lyrion port is not configured")
     encoded_track_id = quote(track_id, safe="")

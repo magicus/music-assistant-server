@@ -12,6 +12,7 @@ import pytest
 from aiohttp import ClientError
 from music_assistant_models.errors import MediaNotFoundError, ProviderUnavailableError
 
+from music_assistant.providers.lyrion import client as shared_client
 from music_assistant.providers.lyrion_music import client
 from tests.providers.lyrion.rpc_test_doubles import FakeResponse, FakeRpcTransport
 
@@ -27,9 +28,9 @@ def _provider(
     provider.mass.http_session.post = Mock()
 
     def _get_setup_value(key: str, default: Any = None) -> Any:
-        if key == client.CONF_LMS_HOST:
+        if key == shared_client.CONF_LMS_HOST:
             return host
-        if key == client.CONF_LMS_PORT:
+        if key == shared_client.CONF_LMS_PORT:
             return port if port is not None else default
         return default
 
@@ -416,42 +417,42 @@ async def test_rpc_request_success_and_error_paths() -> None:
     provider = _provider()
 
     provider.mass.http_session.post.return_value = FakeResponse({"result": {"ok": True}})
-    assert await client.rpc_request(provider, "", ["serverstatus"]) == {"ok": True}
+    assert await shared_client.rpc_request(provider, "", ["serverstatus"]) == {"ok": True}
 
     with pytest.raises(ProviderUnavailableError, match="not configured"):
-        await client.rpc_request(_provider(host=" "), "", ["serverstatus"])
+        await shared_client.rpc_request(_provider(host=" "), "", ["serverstatus"])
 
     provider.mass.http_session.post = Mock(side_effect=TimeoutError)
     with pytest.raises(ProviderUnavailableError, match="did not respond in time"):
-        await client.rpc_request(provider, "", ["serverstatus"])
+        await shared_client.rpc_request(provider, "", ["serverstatus"])
 
     provider.mass.http_session.post = Mock(side_effect=ClientError("boom"))
     with pytest.raises(ProviderUnavailableError, match="connection"):
-        await client.rpc_request(provider, "", ["serverstatus"])
+        await shared_client.rpc_request(provider, "", ["serverstatus"])
 
     bad_json_response = FakeResponse({"result": {"x": 1}})
     bad_json_response.json = AsyncMock(side_effect=ValueError("bad json"))
     provider.mass.http_session.post = Mock(return_value=bad_json_response)
     with pytest.raises(ProviderUnavailableError, match="invalid JSON"):
-        await client.rpc_request(provider, "", ["serverstatus"])
+        await shared_client.rpc_request(provider, "", ["serverstatus"])
 
     provider.mass.http_session.post = Mock(
         return_value=FakeResponse({"error": {"code": -1, "message": "nope"}})
     )
     with pytest.raises(ProviderUnavailableError, match="failed with code"):
-        await client.rpc_request(provider, "", ["albums"])
+        await shared_client.rpc_request(provider, "", ["albums"])
 
     provider.mass.http_session.post = Mock(return_value=FakeResponse({"result": None}))
     with pytest.raises(ProviderUnavailableError, match="missing result"):
-        await client.rpc_request(provider, "", ["albums"])
+        await shared_client.rpc_request(provider, "", ["albums"])
 
 
 def test_get_configured_host_and_port() -> None:
     """Host and port accessors should normalize and coerce setup values."""
-    assert client.get_configured_host(_provider(host=" host.local ")) == "host.local"
-    assert client.get_configured_host(_provider(host=None)) is None
-    assert client.get_configured_host(_provider(host=42)) is None
+    assert shared_client.get_configured_host(_provider(host=" host.local ")) == "host.local"
+    assert shared_client.get_configured_host(_provider(host=None)) is None
+    assert shared_client.get_configured_host(_provider(host=42)) is None
 
-    assert client.get_configured_port(_provider(port="9000")) == 9000
-    assert client.get_configured_port(_provider(port="bad"), default=1234) == 1234
-    assert client.get_configured_port(_provider(port=None), default=None) is None
+    assert shared_client.get_configured_port(_provider(port="9000")) == 9000
+    assert shared_client.get_configured_port(_provider(port="bad"), default=1234) == 1234
+    assert shared_client.get_configured_port(_provider(port=None), default=None) is None

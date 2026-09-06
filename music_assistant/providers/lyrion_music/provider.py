@@ -32,6 +32,12 @@ from music_assistant_models.streamdetails import StreamDetails
 
 from music_assistant.controllers.cache import use_cache
 from music_assistant.models.music_provider import MusicProvider
+from music_assistant.providers.lyrion.client import (
+    get_configured_host as get_shared_configured_host,
+)
+from music_assistant.providers.lyrion.client import (
+    get_configured_port as get_shared_configured_port,
+)
 from music_assistant.providers.lyrion.setup_flow import validate_lms_endpoint
 
 from . import artwork, client, parsers, sync
@@ -477,6 +483,14 @@ class LyrionMusicProvider(MusicProvider):
             http_session=self.mass.http_session,
             translation_owner=self.translation_owner,
         )
+
+    def get_configured_host(self) -> str | None:
+        """Return configured LMS host for this provider."""
+        return get_shared_configured_host(self)
+
+    def get_configured_port(self, default: int | None = None) -> int | None:
+        """Return configured LMS port for this provider."""
+        return get_shared_configured_port(self, default)
 
     async def loaded_in_mass(self) -> None:
         """Subscribe to sync-completed events once provider is active."""

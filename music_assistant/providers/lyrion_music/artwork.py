@@ -11,6 +11,8 @@ from music_assistant_models.enums import ImageType
 from music_assistant_models.errors import ProviderUnavailableError
 from music_assistant_models.media_items import MediaItemImage, UniqueList
 
+from music_assistant.providers.lyrion.client import get_configured_host, get_configured_port
+
 from . import parsers
 from .constants import ARTWORK_VALIDATION_TIMEOUT, CONF_ARTWORK_CACHE_BUSTER, RPC_TIMEOUT
 
@@ -170,10 +172,10 @@ def normalize_artist_artwork_path(path: str) -> str:
 
 def to_lms_absolute_url(provider: LyrionMusicProvider, path: str) -> str:
     """Build an absolute LMS URL from a relative path."""
-    host = provider.get_configured_host()
+    host = get_configured_host(provider)
     if host is None:
         raise ProviderUnavailableError("Lyrion host is not configured")
-    port = provider.get_configured_port()
+    port = get_configured_port(provider, default=None)
     if port is None:
         raise ProviderUnavailableError("Lyrion port is not configured")
     return f"http://{host}:{port}{path}"
