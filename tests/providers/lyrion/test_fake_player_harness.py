@@ -132,6 +132,18 @@ def _player_connected(status: dict[str, Any]) -> int:
     return int(status.get("player_connected", 0))
 
 
+def _playlist_repeat(status: dict[str, Any]) -> int:
+    """Read repeat mode from LMS status across key-name variants."""
+    if "playlist repeat" in status:
+        return int(status["playlist repeat"])
+    return int(status.get("playlist_repeat", 0))
+
+
+def _repeat_mode_name(repeat_value: int) -> str:
+    """Map LMS repeat integer to named loop mode expected by MA."""
+    return {0: "none", 1: "track", 2: "playlist"}.get(repeat_value, "none")
+
+
 async def _wait_for_playlist_index(
     client: EndpointRpcClient,
     expected_index: int,
@@ -142,6 +154,22 @@ async def _wait_for_playlist_index(
     latest = await client.send(["status", 0, 100])
     while asyncio.get_running_loop().time() < deadline:
         if _playlist_index(latest) == expected_index:
+            return latest
+        await asyncio.sleep(0.1)
+        latest = await client.send(["status", 0, 100])
+    return latest
+
+
+async def _wait_for_playlist_repeat(
+    client: EndpointRpcClient,
+    expected_repeat: int,
+    timeout: float = 2.0,
+) -> dict[str, Any]:
+    """Poll status until LMS reports the expected repeat value."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    latest = await client.send(["status", 0, 100])
+    while asyncio.get_running_loop().time() < deadline:
+        if _playlist_repeat(latest) == expected_repeat:
             return latest
         await asyncio.sleep(0.1)
         latest = await client.send(["status", 0, 100])
@@ -270,6 +298,48 @@ async def test_fake_player_uses_real_slimproto_button_events_for_play_and_pause(
         assert player.endpoint.fake_server.slimproto_events[-1][0] == b"BUTN"
         assert player.endpoint.fake_server.players["fake-player-button"]["mode"] == "pause"
     finally:
+        await player.close()
+
+
+@pytest.mark.asyncio
+async def test_fake_player_ir_button_interface_emits_repeat_and_updates_state(
+    lyrion_test_endpoint: LyrionTestEndpoint,
+) -> None:
+    """Named and raw IR interfaces should emit IR frames and drive repeat state updates."""
+    if lyrion_test_endpoint.fake_server is None:
+        pytest.skip("IR interface assertions are specific to the fake LMS backend")
+
+    player = ScriptableSlimProtoPlayer(
+        endpoint=lyrion_test_endpoint,
+        player_id="fake-player-ir-interface",
+        name="Fake IR Interface",
+        model="test",
+    )
+    rpc_client: EndpointRpcClient | None = None
+    try:
+        await player.connect()
+        rpc_client = EndpointRpcClient(lyrion_test_endpoint, player.rpc_player_id)
+
+        await rpc_client.send(["playlist", "repeat", 0])
+        status = await rpc_client.send(["status", 0, 100])
+        assert _playlist_repeat(status) == 0
+
+        await player.press_ir_button("repeat")
+        status = await _wait_for_playlist_repeat(rpc_client, 1)
+        assert _playlist_repeat(status) == 1
+        assert lyrion_test_endpoint.fake_server.slimproto_events[-1][0] == b"IR  "
+
+        await player.press_ir_code(0x768938C7)
+        status = await _wait_for_playlist_repeat(rpc_client, 2)
+        assert _playlist_repeat(status) == 2
+
+        player.register_ir_button("repeat_alias", 0x768938C7)
+        await player.press_ir_button("repeat_alias")
+        status = await _wait_for_playlist_repeat(rpc_client, 0)
+        assert _playlist_repeat(status) == 0
+    finally:
+        if rpc_client is not None:
+            await rpc_client.close()
         await player.close()
 
 
@@ -562,6 +632,232 @@ async def test_queue_duplicate_swap_and_bridge_hops_keep_index_valid(
         assert len(values) == 5
         assert sorted(counts.values()) == [1, 4]
         assert 0 <= _playlist_index(status) <= 4
+    finally:
+        if provider_client is not None:
+            await provider_client.close()
+        if direct_rpc_client is not None:
+            await direct_rpc_client.close()
+        await player.close()
+
+
+@pytest.mark.asyncio
+async def test_loop_mode_bidirectional_sync_fake_backend(
+    lyrion_test_endpoint: LyrionTestEndpoint,
+) -> None:
+    """Loop mode should stay synchronized when MA and SlimProto alternate writes."""
+    if lyrion_test_endpoint.fake_server is None:
+        pytest.skip("loop SlimProto path assertions are specific to the fake LMS backend")
+
+    player = ScriptableSlimProtoPlayer(
+        endpoint=lyrion_test_endpoint,
+        player_id="fake-player-loop-sync",
+        name="Fake Loop Sync",
+        model="test",
+    )
+    provider_client: ProviderStyleRpcClient | None = None
+    direct_rpc_client: EndpointRpcClient | None = None
+    try:
+        await player.connect()
+        provider_client = ProviderStyleRpcClient(lyrion_test_endpoint, player.rpc_player_id)
+        direct_rpc_client = EndpointRpcClient(lyrion_test_endpoint, player.rpc_player_id)
+
+        status = await direct_rpc_client.send(["status", 0, 100])
+        assert _playlist_repeat(status) == 0
+        assert _repeat_mode_name(_playlist_repeat(status)) == "none"
+
+        # MA/provider path: set track repeat.
+        await provider_client.send_player_command(["playlist", "repeat", 1])
+        status = await direct_rpc_client.send(["status", 0, 100])
+        assert _playlist_repeat(status) == 1
+        assert _repeat_mode_name(_playlist_repeat(status)) == "track"
+
+        # SlimProto path: one repeat button press should advance to playlist repeat.
+        await player.toggle_repeat()
+        status = await _wait_for_playlist_repeat(direct_rpc_client, 2)
+        assert _playlist_repeat(status) == 2
+        assert _repeat_mode_name(_playlist_repeat(status)) == "playlist"
+
+        # MA/provider path: explicitly force none.
+        await provider_client.send_player_command(["playlist", "repeat", 0])
+        status = await direct_rpc_client.send(["status", 0, 100])
+        assert _playlist_repeat(status) == 0
+        assert _repeat_mode_name(_playlist_repeat(status)) == "none"
+
+        # Multi-toggle sequence with last-writer-wins checks after each step.
+        await player.toggle_repeat()  # none -> track
+        status = await _wait_for_playlist_repeat(direct_rpc_client, 1)
+        assert _playlist_repeat(status) == 1
+
+        await provider_client.send_player_command(["playlist", "repeat", 2])
+        status = await direct_rpc_client.send(["status", 0, 100])
+        assert _playlist_repeat(status) == 2
+
+        await player.toggle_repeat()  # playlist -> none
+        status = await _wait_for_playlist_repeat(direct_rpc_client, 0)
+        assert _playlist_repeat(status) == 0
+
+        await provider_client.send_player_command(["playlist", "repeat", 1])
+        status = await direct_rpc_client.send(["status", 0, 100])
+        assert _playlist_repeat(status) == 1
+
+        await player.toggle_repeat()  # track -> playlist
+        status = await _wait_for_playlist_repeat(direct_rpc_client, 2)
+        assert _playlist_repeat(status) == 2
+        assert _repeat_mode_name(_playlist_repeat(status)) == "playlist"
+    finally:
+        if provider_client is not None:
+            await provider_client.close()
+        if direct_rpc_client is not None:
+            await direct_rpc_client.close()
+        await player.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.live_lyrion_docker
+async def test_loop_mode_last_writer_wins_live_backend(
+    lyrion_test_endpoint: LyrionTestEndpoint,
+) -> None:
+    """Live LMS should keep repeat mode coherent as MA and SlimProto alternate repeat writes."""
+    player = ScriptableSlimProtoPlayer(
+        endpoint=lyrion_test_endpoint,
+        player_id="fake-player-loop-sync-live",
+        name="Fake Loop Sync Live",
+        model="test",
+    )
+    provider_client: ProviderStyleRpcClient | None = None
+    direct_rpc_client: EndpointRpcClient | None = None
+    try:
+        await player.connect()
+        provider_client = ProviderStyleRpcClient(lyrion_test_endpoint, player.rpc_player_id)
+        direct_rpc_client = EndpointRpcClient(lyrion_test_endpoint, player.rpc_player_id)
+
+        await provider_client.send_player_command(["playlist", "repeat", 0])
+        status = await direct_rpc_client.send(["status", 0, 100])
+        assert _playlist_repeat(status) == 0
+
+        await provider_client.send_player_command(["playlist", "repeat", 1])
+        status = await direct_rpc_client.send(["status", 0, 100])
+        assert _playlist_repeat(status) == 1
+
+        # SlimProto write should override the MA/provider-set value.
+        await player.toggle_repeat()
+        status = await _wait_for_playlist_repeat(direct_rpc_client, 2)
+        assert _playlist_repeat(status) == 2
+        assert _repeat_mode_name(_playlist_repeat(status)) == "playlist"
+
+        await provider_client.send_player_command(["playlist", "repeat", 0])
+        status = await direct_rpc_client.send(["status", 0, 100])
+        assert _playlist_repeat(status) == 0
+
+        await player.toggle_repeat()
+        status = await _wait_for_playlist_repeat(direct_rpc_client, 1)
+        assert _playlist_repeat(status) == 1
+
+        await player.toggle_repeat()
+        status = await _wait_for_playlist_repeat(direct_rpc_client, 2)
+        assert _playlist_repeat(status) == 2
+    finally:
+        if provider_client is not None:
+            await provider_client.close()
+        if direct_rpc_client is not None:
+            await direct_rpc_client.close()
+        await player.close()
+
+
+@pytest.mark.asyncio
+async def test_loop_mode_stress_sequence_fake_backend(
+    lyrion_test_endpoint: LyrionTestEndpoint,
+) -> None:
+    """Repeat state should remain coherent under an adversarial mixed-source write sequence."""
+    if lyrion_test_endpoint.fake_server is None:
+        pytest.skip("stress sequence assertions are specific to the fake LMS backend")
+
+    player = ScriptableSlimProtoPlayer(
+        endpoint=lyrion_test_endpoint,
+        player_id="fake-player-loop-stress",
+        name="Fake Loop Stress",
+        model="test",
+    )
+    provider_client: ProviderStyleRpcClient | None = None
+    direct_rpc_client: EndpointRpcClient | None = None
+    try:
+        await player.connect()
+        provider_client = ProviderStyleRpcClient(lyrion_test_endpoint, player.rpc_player_id)
+        direct_rpc_client = EndpointRpcClient(lyrion_test_endpoint, player.rpc_player_id)
+
+        steps: list[tuple[str, int]] = [
+            ("ma:0", 0),
+            ("sp", 1),
+            ("rpc:2", 2),
+            ("sp", 0),
+            ("ma:1", 1),
+            ("sp", 2),
+            ("rpc:0", 0),
+            ("sp", 1),
+            ("ma:2", 2),
+            ("sp", 0),
+            ("rpc:1", 1),
+            ("sp", 2),
+        ]
+
+        for action, expected in steps:
+            if action == "sp":
+                await player.toggle_repeat()
+            elif action.startswith("ma:"):
+                await provider_client.send_player_command(
+                    ["playlist", "repeat", int(action.split(":", 1)[1])]
+                )
+            else:
+                await direct_rpc_client.send(["playlist", "repeat", int(action.split(":", 1)[1])])
+
+            status = await _wait_for_playlist_repeat(direct_rpc_client, expected)
+            assert _playlist_repeat(status) == expected
+
+        final_status = await direct_rpc_client.send(["status", 0, 100])
+        assert _playlist_repeat(final_status) == 2
+        assert _repeat_mode_name(_playlist_repeat(final_status)) == "playlist"
+    finally:
+        if provider_client is not None:
+            await provider_client.close()
+        if direct_rpc_client is not None:
+            await direct_rpc_client.close()
+        await player.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.live_lyrion_docker
+async def test_loop_mode_slimproto_triple_toggle_live_backend(
+    lyrion_test_endpoint: LyrionTestEndpoint,
+) -> None:
+    """Three consecutive SlimProto repeat presses should cycle 0 -> 1 -> 2 -> 0 on live LMS."""
+    player = ScriptableSlimProtoPlayer(
+        endpoint=lyrion_test_endpoint,
+        player_id="fake-player-loop-triple-live",
+        name="Fake Loop Triple Live",
+        model="test",
+    )
+    provider_client: ProviderStyleRpcClient | None = None
+    direct_rpc_client: EndpointRpcClient | None = None
+    try:
+        await player.connect()
+        provider_client = ProviderStyleRpcClient(lyrion_test_endpoint, player.rpc_player_id)
+        direct_rpc_client = EndpointRpcClient(lyrion_test_endpoint, player.rpc_player_id)
+
+        await provider_client.send_player_command(["playlist", "repeat", 0])
+        status = await _wait_for_playlist_repeat(direct_rpc_client, 0)
+        assert _playlist_repeat(status) == 0
+
+        await player.toggle_repeat()
+        status = await _wait_for_playlist_repeat(direct_rpc_client, 1)
+        assert _playlist_repeat(status) == 1
+
+        await player.toggle_repeat()
+        status = await _wait_for_playlist_repeat(direct_rpc_client, 2)
+        assert _playlist_repeat(status) == 2
+
+        await player.toggle_repeat()
+        status = await _wait_for_playlist_repeat(direct_rpc_client, 0)
+        assert _playlist_repeat(status) == 0
     finally:
         if provider_client is not None:
             await provider_client.close()

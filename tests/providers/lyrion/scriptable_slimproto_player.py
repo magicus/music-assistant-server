@@ -20,15 +20,19 @@ from .lms_server_harness import LyrionTestEndpoint
 class ScriptableSlimProtoPlayer:
     """Small scriptable player that speaks the real SlimProto wire format."""
 
+    # Use a Squeezebox2-compatible device id so LMS enables IR processing.
+    _HELO_DEVICE_ID = 4
+
     _BUTTON_CODES = {
         "play": 131090,
         "pause": 131095,
         "stop": 131082,
     }
 
-    _IR_CODES = {
+    _IR_BUTTON_CODES = {
         "jump_rew": 0x7689C03F,
         "jump_fwd": 0x7689A05F,
+        "repeat": 0x768938C7,
     }
 
     @staticmethod
@@ -40,7 +44,7 @@ class ScriptableSlimProtoPlayer:
     def _make_helo_payload(player_id: str, mac_address: bytes, name: str, model: str) -> bytes:
         """Encode minimal HELO payload with the player identity and capabilities."""
         return (
-            b"\x0c\x00"  # deviceid=12 (squeezeplay), revision=0
+            bytes((ScriptableSlimProtoPlayer._HELO_DEVICE_ID, 0))
             + mac_address
             + b"\x00" * 16
             + struct.pack("!H", 0)
@@ -75,6 +79,7 @@ class ScriptableSlimProtoPlayer:
         self.rpc_player_id = player_id if self.endpoint.fake_server is not None else live_mac
         self._mac_address = bytes.fromhex(live_mac.replace(":", ""))
         self._slimproto_writer: asyncio.StreamWriter | None = None
+        self._last_ir_send_time: float = 0.0
         self._server_state_listener: Callable[[str, dict[str, Any]], None] | None = None
         if self.endpoint.fake_server is not None:
             self._server_state_listener = self._on_server_state_changed
@@ -145,13 +150,34 @@ class ScriptableSlimProtoPlayer:
 
     async def next_track(self) -> dict[str, Any]:
         """Send a next-track button command over SlimProto."""
-        await self._send_ir_command("jump_fwd")
+        await self.press_ir_button("jump_fwd")
         return {"playerid": self.player_id}
 
     async def previous_track(self) -> dict[str, Any]:
         """Send a previous-track button command over SlimProto."""
-        await self._send_ir_command("jump_rew")
+        await self.press_ir_button("jump_rew")
         return {"playerid": self.player_id}
+
+    async def toggle_repeat(self) -> dict[str, Any]:
+        """Send a repeat-toggle button command over SlimProto."""
+        await self.press_ir_button("repeat")
+        return {"playerid": self.player_id}
+
+    async def press_ir_button(self, button: str) -> None:
+        """Send one named IR button using the built-in symbolic mapping."""
+        ir_code = self._IR_BUTTON_CODES.get(button)
+        if ir_code is None:
+            msg = f"Unsupported slimproto IR button: {button}"
+            raise ValueError(msg)
+        await self.press_ir_code(ir_code)
+
+    async def press_ir_code(self, ir_code: int, *, code_format: int = 0, bits: int = 32) -> None:
+        """Send one raw IR code frame for custom button scenarios."""
+        await self._send_ir_frame(ir_code=ir_code, code_format=code_format, bits=bits)
+
+    def register_ir_button(self, button: str, ir_code: int) -> None:
+        """Register or override one named IR button mapping for a test scenario."""
+        self._IR_BUTTON_CODES[button] = ir_code
 
     def is_playing(self) -> bool:
         """Return whether this fake player currently interprets itself as playing."""
@@ -206,21 +232,25 @@ class ScriptableSlimProtoPlayer:
             await self._wait_for_server_mode(command)
             return
 
-    async def _send_ir_command(self, command: str) -> None:
-        """Send a SlimProto IR frame for transport navigation commands."""
+    async def _send_ir_frame(self, *, ir_code: int, code_format: int = 0, bits: int = 32) -> None:
+        """Send one SlimProto IR frame with caller-provided code payload."""
         if self._slimproto_writer is None:
             msg = "Scriptable SlimProto player is not connected"
             raise RuntimeError(msg)
         writer = self._slimproto_writer[1]
-        ir_code = self._IR_CODES.get(command)
-        if ir_code is None:
-            msg = f"Unsupported slimproto IR command: {command}"
-            raise ValueError(msg)
+
+        # LMS treats same-button presses within IRMINTIME as hold/repeat; space frames as singles.
+        now = asyncio.get_running_loop().time()
+        min_interval = 0.16
+        elapsed = now - self._last_ir_send_time
+        if elapsed < min_interval:
+            await asyncio.sleep(min_interval - elapsed)
 
         timestamp = int(asyncio.get_running_loop().time() * 1000) & 0xFFFFFFFF
-        payload = struct.pack("!LBBL", timestamp, 0, 32, ir_code)
+        payload = struct.pack("!LBBL", timestamp, code_format, bits, ir_code)
         writer.write(self._make_frame(b"IR  ", payload))
         await writer.drain()
+        self._last_ir_send_time = asyncio.get_running_loop().time()
 
     async def close(self) -> None:
         """Close open SlimProto resources held by the test player."""

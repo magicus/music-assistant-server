@@ -33,6 +33,7 @@ SLIMPROTO_BUTTON_JUMP_REW = 131088
 SLIMPROTO_BUTTON_JUMP_FWD = 131089
 SLIMPROTO_IR_JUMP_REW = 0x7689C03F
 SLIMPROTO_IR_JUMP_FWD = 0x7689A05F
+SLIMPROTO_IR_REPEAT = 0x768938C7
 
 
 @dataclass(slots=True, frozen=True)
@@ -320,6 +321,8 @@ class FakeLmsServer:
                             self._advance_playlist_index(player_id, +1)
                         elif ir_code == SLIMPROTO_IR_JUMP_REW:
                             self._advance_playlist_index(player_id, -1)
+                        elif ir_code == SLIMPROTO_IR_REPEAT:
+                            self._cycle_playlist_repeat(player_id)
                 elif opcode == b"DSCO":
                     await self.disconnect_player(player_id)
                     break
@@ -491,6 +494,15 @@ class FakeLmsServer:
         """Move queue index forward/backward and mark player as playing."""
         current = _coerce_int(self._ensure_player(player_id).get("playlist_cur_index"), 0)
         return self._set_playlist_index(player_id, current + delta)
+
+    def _cycle_playlist_repeat(self, player_id: str) -> dict[str, Any]:
+        """Cycle repeat mode using LMS semantics: 0 -> 1 -> 2 -> 0."""
+        player = self._ensure_player(player_id)
+        current = _coerce_int(player.get("playlist repeat"), 0)
+        next_value = (1, 2, 0)[current % 3]
+        player["playlist repeat"] = next_value
+        self._notify_player_state(player_id)
+        return self._status_for_player(player_id)
 
     def _handle_playlist_command(self, player_id: str, command: list[Any]) -> dict[str, Any]:
         """Apply LMS playlist commands to fake queue state."""
