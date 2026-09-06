@@ -12,13 +12,14 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING, Any, cast
 
-from music_assistant_models.enums import EventType, IdentifierType, PlaybackState, PlayerFeature
+from music_assistant_models.enums import EventType, IdentifierType, PlaybackState
 from music_assistant_models.errors import PlayerCommandFailed, ProviderUnavailableError
 from music_assistant_models.player import DeviceInfo
 
 from music_assistant.helpers.util import is_valid_mac_address
 from music_assistant.models.player import Player, PlayerMedia
 
+from .constants import PLAYER_SUPPORTED_FEATURES
 from .queue import LyrionQueueSync
 
 if TYPE_CHECKING:
@@ -46,16 +47,7 @@ class LyrionPlayer(Player):
         :param initial_data: Player metadata returned by LMS players call.
         """
         super().__init__(provider, player_id)
-        self._attr_supported_features = {
-            PlayerFeature.PLAY_MEDIA,
-            PlayerFeature.ENQUEUE,
-            PlayerFeature.PAUSE,
-            PlayerFeature.NEXT_PREVIOUS,
-            PlayerFeature.POWER,
-            PlayerFeature.VOLUME_SET,
-            PlayerFeature.VOLUME_MUTE,
-            PlayerFeature.SEEK,
-        }
+        self._attr_supported_features = PLAYER_SUPPORTED_FEATURES
         self._attr_available = True
         self._queue_sync = LyrionQueueSync(self)
         self._on_unload_callbacks.append(

@@ -1,5 +1,7 @@
 """Constants for the Lyrion player provider."""
 
+from music_assistant_models.enums import PlayerFeature, ProviderFeature
+
 from music_assistant.constants import CONF_PORT
 
 CONF_LMS_HOST = "lms_host"
@@ -13,6 +15,21 @@ COMETD_CONNECT_TIMEOUT = 35
 COMETD_PLAYERSTATUS_TAGS = "tags:cdegilopqrstuyAABEGIKNPSTV"
 COMETD_SERVERSTATUS_SUBSCRIBE_INTERVAL = 30
 COMETD_SERVERSTATUS_BATCH_SIZE = 500
+
+SUPPORTED_FEATURES: set[ProviderFeature] = {
+    ProviderFeature.REMOVE_PLAYER,
+}
+
+PLAYER_SUPPORTED_FEATURES: set[PlayerFeature] = {
+    PlayerFeature.PLAY_MEDIA,
+    PlayerFeature.ENQUEUE,
+    PlayerFeature.PAUSE,
+    PlayerFeature.NEXT_PREVIOUS,
+    PlayerFeature.POWER,
+    PlayerFeature.VOLUME_SET,
+    PlayerFeature.VOLUME_MUTE,
+    PlayerFeature.SEEK,
+}
 
 # Queue sync tuning defaults.
 MAX_SYNC_QUEUE_ITEMS = 500

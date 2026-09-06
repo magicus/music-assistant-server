@@ -29,4 +29,5 @@ SUPPORTED_FEATURES: set[ProviderFeature] = {
     ProviderFeature.LIBRARY_TRACKS,
     ProviderFeature.LIBRARY_PLAYLISTS,
     ProviderFeature.SEARCH,
+    ProviderFeature.ARTIST_ALBUMS,
 }

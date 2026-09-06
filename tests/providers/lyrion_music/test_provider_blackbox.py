@@ -46,7 +46,7 @@ async def test_search_finds_seeded_records(
     """Search should find known names from the seeded catalog."""
     results = await lyrion_provider.search(
         "async",
-        lyrion_provider.supported_media_types,
+        list(lyrion_provider.supported_media_types),
         limit=10,
     )
     assert any(item.name == "The Async Awaiters" for item in results.artists)

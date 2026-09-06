@@ -13,7 +13,7 @@ from music_assistant.providers.lyrion_music import client as lyrion_client
 from music_assistant.providers.lyrion_music import provider as lyrion_provider_mod
 from music_assistant.providers.lyrion_music.provider import LyrionMusicProvider
 from tests.providers.lyrion.fake_lms_server import FakeLmsServer
-from tests.providers.lyrion.fixtures import LyrionTestEndpoint
+from tests.providers.lyrion.lms_server_harness import LyrionTestEndpoint
 
 
 @pytest.fixture(autouse=True)
@@ -79,6 +79,15 @@ async def test_get_album_tracks_returns_sorted_disc_track_order(
     """Album track list should be sorted by disc and track numbers."""
     tracks = await lyrion_provider.get_album_tracks("alb4")
     assert [track.item_id for track in tracks] == ["t6", "t7"]
+
+
+async def test_get_artist_albums_returns_artist_discography(
+    lyrion_provider: LyrionMusicProvider,
+) -> None:
+    """Artist albums should return the full discography for the given artist."""
+    albums = await lyrion_provider.get_artist_albums("a1")
+
+    assert [album.item_id for album in albums] == ["alb1", "alb2"]
 
 
 async def test_direct_item_lookups_and_playlist_tracks(

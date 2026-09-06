@@ -83,7 +83,7 @@ async def test_queue_state_stays_consistent_when_three_sources_alternate_aggress
 
 @pytest.mark.asyncio
 @pytest.mark.live_lyrion_docker
-async def test_queue_duplicate_track_reordering_survives_cross_source_churn(
+async def test_queue_duplicate_track_reordering_survives_cross_source_churn(  # noqa: PLR0915
     lyrion_test_endpoint: LyrionTestEndpoint,
 ) -> None:
     """A duplicate-heavy queue should keep coherent ordering/index while updates alternate across all control paths."""

@@ -1,5 +1,7 @@
 """Python orchestration for on-demand live LMS tests in Docker."""
 
+# ruff: noqa: PLW0603,T201,S603,S310
+
 from __future__ import annotations
 
 import json
@@ -9,9 +11,10 @@ import socket
 import subprocess
 import textwrap
 import time
+from collections.abc import Generator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.error import URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -195,7 +198,8 @@ def _json_rpc(
         headers={"Content-Type": "application/json"},
     )
     with urlopen(req, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
+        result = json.loads(response.read().decode("utf-8"))
+        return cast("dict[str, Any]", result)
 
 
 def _extract_loop_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
@@ -355,16 +359,13 @@ def _write_server_prefs(config_dir: Path) -> None:
     prefs_dir.mkdir(parents=True, exist_ok=True)
     server_prefs = prefs_dir / "server.prefs"
     server_prefs.write_text(
-        "\n".join(
-            (
-                "wizardDone: 1",
-                "protectSettings: 0",
-                "audiodir: /music",
-                "playlistdir: /music/Playlists",
-                "rescaninterval: 0",
-            )
-        )
-        + "\n",
+        (
+            "wizardDone: 1\n"
+            "protectSettings: 0\n"
+            "audiodir: /music\n"
+            "playlistdir: /music/Playlists\n"
+            "rescaninterval: 0\n"
+        ),
         encoding="utf-8",
     )
 
@@ -543,7 +544,7 @@ def _bring_down_lms(*, ignore_errors: bool = False) -> None:
 
 
 @pytest.fixture(scope="session")
-def lyrion_live_lms_endpoint(pytestconfig: pytest.Config) -> LiveLmsEndpoint:
+def lyrion_live_lms_endpoint(pytestconfig: pytest.Config) -> Generator[LiveLmsEndpoint]:
     """
     Provide a Docker-managed live LMS endpoint for on-demand integration tests.
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 from music_assistant.providers.lyrion_player.cometd_events import LmsPlayerPlaylistChangedEvent
@@ -38,7 +39,7 @@ class _StubProvider:
 async def test_serverstatus_players_loop_triggers_on_roster_change() -> None:
     """Serverstatus player-id set changes should schedule rediscovery exactly once per change."""
     provider = _StubProvider(["player_a"])
-    stream = LyrionCometDEventStream(provider, _noop_event_callback)
+    stream = LyrionCometDEventStream(provider, _noop_event_callback)  # type: ignore[arg-type]
 
     await stream._handle_message(
         {
@@ -78,7 +79,7 @@ async def test_serverstatus_players_loop_triggers_on_roster_change() -> None:
 async def test_serverstatus_player_count_fallback_triggers_when_changed() -> None:
     """Fallback to player-count diffing when serverstatus omits players_loop."""
     provider = _StubProvider(["player_a"])
-    stream = LyrionCometDEventStream(provider, _noop_event_callback)
+    stream = LyrionCometDEventStream(provider, _noop_event_callback)  # type: ignore[arg-type]
 
     await stream._handle_message(
         {
@@ -101,7 +102,7 @@ async def test_schedule_players_discovery_coalesces_overlapping_triggers() -> No
     """Overlapping discovery triggers should coalesce into one task with one replay pass."""
     provider = LyrionPlayerProvider.__new__(LyrionPlayerProvider)
     provider.logger = MagicMock()
-    provider.mass = SimpleNamespace(create_task=asyncio.create_task)
+    provider.mass = cast("Any", SimpleNamespace(create_task=asyncio.create_task))
     provider.unloading = False
     provider._discover_players_task = None
     provider._discover_players_again = False
@@ -115,22 +116,23 @@ async def test_schedule_players_discovery_coalesces_overlapping_triggers() -> No
         if calls == 1:
             await gate.wait()
 
-    provider.discover_players = _discover_players  # type: ignore[method-assign]
+    cast("Any", provider).discover_players = _discover_players
 
     provider.schedule_players_discovery()
     await asyncio.sleep(0)
     provider.schedule_players_discovery()
     gate.set()
 
-    assert provider._discover_players_task is not None
-    await provider._discover_players_task
+    task = cast("Any", provider._discover_players_task)
+    assert task is not None
+    await task
     assert calls == 2
 
 
 async def test_serverstatus_connected_updates_player_availability() -> None:
     """Serverstatus connected flag should update MA availability for known players."""
     provider = _StubProvider(["player_a"])
-    stream = LyrionCometDEventStream(provider, _noop_event_callback)
+    stream = LyrionCometDEventStream(cast("Any", provider), _noop_event_callback)
 
     updates = 0
 
@@ -162,7 +164,7 @@ async def test_serverstatus_connected_updates_player_availability() -> None:
 async def test_invalid_player_status_triggers_rediscovery() -> None:
     """An invalid-player status payload should schedule rediscovery."""
     provider = _StubProvider(["player_a"])
-    stream = LyrionCometDEventStream(provider, _noop_event_callback)
+    stream = LyrionCometDEventStream(cast("Any", provider), _noop_event_callback)
 
     await stream._handle_message(
         {
@@ -182,7 +184,7 @@ async def test_playerstatus_playlist_change_detects_space_delimited_keys() -> No
     async def _capture_event(event: object) -> None:
         emitted_events.append(event)
 
-    stream = LyrionCometDEventStream(provider, _capture_event)
+    stream = LyrionCometDEventStream(cast("Any", provider), _capture_event)
 
     await stream._handle_player_status(
         "player_a",

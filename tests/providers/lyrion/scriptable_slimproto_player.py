@@ -12,7 +12,8 @@ import asyncio
 import hashlib
 import struct
 from collections.abc import Callable
-from typing import Any
+from contextlib import suppress
+from typing import Any, ClassVar
 
 from .lms_server_harness import LyrionTestEndpoint
 
@@ -23,13 +24,13 @@ class ScriptableSlimProtoPlayer:
     # Use a Squeezebox2-compatible device id so LMS enables IR processing.
     _HELO_DEVICE_ID = 4
 
-    _BUTTON_CODES = {
+    _BUTTON_CODES: ClassVar[dict[str, int]] = {
         "play": 131090,
         "pause": 131095,
         "stop": 131082,
     }
 
-    _IR_BUTTON_CODES = {
+    _IR_BUTTON_CODES: ClassVar[dict[str, int]] = {
         "jump_rew": 0x7689C03F,
         "jump_fwd": 0x7689A05F,
         "repeat": 0x768938C7,
@@ -82,7 +83,7 @@ class ScriptableSlimProtoPlayer:
         live_mac = self._derive_live_player_id(player_id)
         self.rpc_player_id = player_id if self.endpoint.fake_server is not None else live_mac
         self._mac_address = bytes.fromhex(live_mac.replace(":", ""))
-        self._slimproto_writer: asyncio.StreamWriter | None = None
+        self._slimproto_writer: tuple[asyncio.StreamReader, asyncio.StreamWriter] | None = None
         self._last_ir_send_time: float = 0.0
         self._server_state_listener: Callable[[str, dict[str, Any]], None] | None = None
         if self.endpoint.fake_server is not None:
@@ -109,6 +110,7 @@ class ScriptableSlimProtoPlayer:
             self.endpoint.host,
             self.endpoint.slimproto_port,
         )
+        assert self._slimproto_writer is not None
         writer = self._slimproto_writer[1]
         helo_payload = self._make_helo_payload(
             self.player_id,
@@ -136,10 +138,8 @@ class ScriptableSlimProtoPlayer:
                 writer.write(self._make_frame(b"DSCO", b"\x00"))
                 await writer.drain()
                 writer.close()
-                try:
+                with suppress(ConnectionResetError):
                     await writer.wait_closed()
-                except ConnectionResetError:
-                    pass
             self._slimproto_writer = None
 
         if self.endpoint.fake_server is not None:

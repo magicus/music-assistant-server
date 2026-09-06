@@ -217,7 +217,7 @@ class FakeLmsServer:
                 writer.close()
         self._slimproto_connections.clear()
 
-    async def _handle_slimproto_client(
+    async def _handle_slimproto_client(  # noqa: PLR0915
         self,
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
@@ -431,10 +431,7 @@ class FakeLmsServer:
             player.get("playlist_cur_index", player.get("playlist index", 0)),
             0,
         )
-        if tracks <= 0:
-            current_index = 0
-        else:
-            current_index = max(0, min(tracks - 1, current_index))
+        current_index = 0 if tracks <= 0 else max(0, min(tracks - 1, current_index))
 
         player["playlist_tracks"] = tracks
         player["playlist tracks"] = tracks
@@ -548,7 +545,11 @@ class FakeLmsServer:
         self._notify_player_state(player_id)
         return self._status_for_player(player_id)
 
-    def _handle_playlist_command(self, player_id: str, command: list[Any]) -> dict[str, Any]:
+    def _handle_playlist_command(  # noqa: PLR0915
+        self,
+        player_id: str,
+        command: list[Any],
+    ) -> dict[str, Any]:
         """Apply LMS playlist commands to fake queue state."""
         player = self._ensure_player(player_id)
         sub_action = str(command[1]) if len(command) > 1 else ""

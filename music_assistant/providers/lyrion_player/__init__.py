@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from music_assistant_models.enums import ProviderFeature
-
+from .constants import SUPPORTED_FEATURES
 from .provider import LyrionPlayerProvider
 
 if TYPE_CHECKING:
@@ -14,10 +13,6 @@ if TYPE_CHECKING:
 
     from music_assistant.mass import MusicAssistant
     from music_assistant.models import ProviderInstanceType
-
-SUPPORTED_FEATURES: set[ProviderFeature] = {
-    ProviderFeature.REMOVE_PLAYER,
-}
 
 
 async def setup(

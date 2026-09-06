@@ -589,6 +589,22 @@ class LyrionMusicProvider(MusicProvider):
         """
         return await client.get_album_tracks(self, prov_album_id)
 
+    async def get_artist_albums(self, prov_artist_id: str) -> list[Album]:
+        """Get all albums for the given artist id."""
+        albums: list[Album] = []
+        offset = 0
+        while True:
+            page, has_more = await client.get_albums_page(
+                self,
+                filter_value=f"artist_id:{prov_artist_id}",
+                offset=offset,
+            )
+            albums.extend(page)
+            if not has_more:
+                break
+            offset += BROWSE_PAGE_SIZE
+        return albums
+
     async def get_stream_details(
         self,
         item_id: str,

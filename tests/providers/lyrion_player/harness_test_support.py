@@ -68,7 +68,7 @@ class EndpointRpcClient:
             raise RuntimeError("JSON-RPC response payload was unexpectedly empty")
         result = data.get("result")
         if not isinstance(result, dict):
-            raise RuntimeError("JSON-RPC response is missing result payload")
+            raise TypeError("JSON-RPC response is missing result payload")
         return result
 
     async def close(self) -> None:

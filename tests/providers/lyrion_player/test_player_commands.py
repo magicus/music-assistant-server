@@ -6,6 +6,7 @@ import time
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from music_assistant_models.enums import PlayerFeature
 from music_assistant_models.errors import PlayerCommandFailed, ProviderUnavailableError
 
 from music_assistant.providers.lyrion_player.player import LyrionPlayer
@@ -35,8 +36,6 @@ def player(mock_provider: MagicMock) -> LyrionPlayer:
 @pytest.mark.asyncio
 async def test_supported_features_include_transport_mute_and_seek(player: LyrionPlayer) -> None:
     """Expected capabilities are exposed by the player feature set."""
-    from music_assistant_models.enums import PlayerFeature
-
     assert PlayerFeature.NEXT_PREVIOUS in player.supported_features
     assert PlayerFeature.VOLUME_MUTE in player.supported_features
     assert PlayerFeature.SEEK in player.supported_features
