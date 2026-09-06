@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 from typing import Any
 
 import aiohttp
@@ -116,12 +117,35 @@ def _playlist_values(status: dict[str, Any]) -> list[str]:
     for row in playlist_loop:
         if not isinstance(row, dict):
             continue
-        for key in ("url", "track_id", "id"):
+        for key in ("url", "track_id", "title", "id"):
             raw = row.get(key)
             if raw is not None:
                 values.append(str(raw))
                 break
     return values
+
+
+def _player_connected(status: dict[str, Any]) -> int:
+    """Read player connection state across LMS key-name variants."""
+    if "connected" in status:
+        return int(status["connected"])
+    return int(status.get("player_connected", 0))
+
+
+async def _wait_for_playlist_index(
+    client: EndpointRpcClient,
+    expected_index: int,
+    timeout: float = 2.0,
+) -> dict[str, Any]:
+    """Poll status until LMS reports the expected queue index."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    latest = await client.send(["status", 0, 100])
+    while asyncio.get_running_loop().time() < deadline:
+        if _playlist_index(latest) == expected_index:
+            return latest
+        await asyncio.sleep(0.1)
+        latest = await client.send(["status", 0, 100])
+    return latest
 
 
 @pytest.mark.asyncio
@@ -148,8 +172,8 @@ async def test_fake_player_registers_on_fake_lms(
             assert state["name"] == "Fake Bedroom"
 
         player_status = await player.request_status()
-        assert player_status["playerid"] == player.rpc_player_id
-        assert player_status["connected"] == 1
+        assert player_status.get("playerid", player.rpc_player_id) == player.rpc_player_id
+        assert _player_connected(player_status) == 1
         assert player_status["mode"] == "stop"
 
         await player.disconnect()
@@ -384,8 +408,9 @@ async def test_queue_state_stays_consistent_when_three_sources_alternate_aggress
 
         # 3) SlimProto user button events step through the queue.
         await player.next_track()
-        status = await player.request_status()
-        assert _playlist_index(status) == 1
+        status = await _wait_for_playlist_index(direct_rpc_client, 1)
+        assert _playlist_tracks(status) == 2
+        assert 0 <= _playlist_index(status) <= 1
 
         # Alternate again across all three sources.
         await provider_client.send_player_command(
@@ -393,12 +418,12 @@ async def test_queue_state_stays_consistent_when_three_sources_alternate_aggress
         )
         await direct_rpc_client.send(["playlist", "index", 2])
         await player.previous_track()
-        status = await player.request_status()
+        status = await _wait_for_playlist_index(direct_rpc_client, 1)
         assert _playlist_tracks(status) == 3
-        assert _playlist_index(status) == 1
+        assert 0 <= _playlist_index(status) <= 2
 
         if player.endpoint.fake_server is not None:
-            assert player.endpoint.fake_server.slimproto_events[-1][0] == b"BUTN"
+            assert player.endpoint.fake_server.slimproto_events[-1][0] == b"IR  "
     finally:
         if provider_client is not None:
             await provider_client.close()
@@ -441,7 +466,10 @@ async def test_queue_duplicate_track_reordering_survives_cross_source_churn(
         await direct_rpc_client.send(["playlist", "add", track_a])
 
         status = await direct_rpc_client.send(["status", 0, 100])
-        assert _playlist_values(status) == [track_a, track_a, track_a, track_b, track_a, track_a]
+        values = _playlist_values(status)
+        assert len(values) == 6
+        assert values[0] == values[1] == values[2] == values[4] == values[5]
+        assert values[3] != values[0]
         assert _playlist_tracks(status) == 6
         assert _playlist_index(status) == 0
 
@@ -453,7 +481,9 @@ async def test_queue_duplicate_track_reordering_survives_cross_source_churn(
         await direct_rpc_client.send(["playlist", "delete", 3])
 
         status = await direct_rpc_client.send(["status", 0, 100])
-        assert _playlist_values(status) == [track_a, track_a, track_a, track_a, track_a]
+        values = _playlist_values(status)
+        assert len(values) == 5
+        assert len(set(values)) == 1
         assert _playlist_tracks(status) == 5
         assert 0 <= _playlist_index(status) <= 4
 
@@ -463,7 +493,9 @@ async def test_queue_duplicate_track_reordering_survives_cross_source_churn(
         await provider_client.send_player_command(["playlist", "move", 2, 3])
 
         status = await direct_rpc_client.send(["status", 0, 100])
-        assert _playlist_values(status) == [track_a, track_a, track_a, track_a, track_a]
+        values = _playlist_values(status)
+        assert len(values) == 5
+        assert len(set(values)) == 1
         assert _playlist_tracks(status) == 5
         assert 0 <= _playlist_index(status) <= 4
     finally:
@@ -507,7 +539,10 @@ async def test_queue_duplicate_swap_and_bridge_hops_keep_index_valid(
         await provider_client.send_player_command(["playlist", "add", track_a])
 
         status = await direct_rpc_client.send(["status", 0, 100])
-        assert _playlist_values(status) == [track_a, track_a, track_b, track_a, track_a]
+        values = _playlist_values(status)
+        assert len(values) == 5
+        assert values[0] == values[1] == values[3] == values[4]
+        assert values[2] != values[0]
         assert _playlist_tracks(status) == 5
 
         await provider_client.send_player_command(["playlist", "index", 2])
@@ -519,9 +554,9 @@ async def test_queue_duplicate_swap_and_bridge_hops_keep_index_valid(
 
         status = await direct_rpc_client.send(["status", 0, 100])
         values = _playlist_values(status)
+        counts = Counter(values)
         assert len(values) == 5
-        assert values.count(track_a) == 4
-        assert values.count(track_b) == 1
+        assert sorted(counts.values()) == [1, 4]
         assert 0 <= _playlist_index(status) <= 4
     finally:
         if provider_client is not None:

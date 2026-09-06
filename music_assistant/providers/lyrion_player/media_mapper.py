@@ -123,6 +123,12 @@ class LyrionMediaMapper:
             value = item.get(key)
             if isinstance(value, str) and value.startswith(("http://", "https://")):
                 return LmsQueueEntry(kind="url", value=value)
+
+        # LMS may expose transient queue rows with only a title that still
+        # carries the stream URL, while URL-specific keys are absent.
+        title_value = item.get("title")
+        if isinstance(title_value, str) and title_value.startswith(("http://", "https://")):
+            return LmsQueueEntry(kind="url", value=title_value)
         return None
 
     @staticmethod

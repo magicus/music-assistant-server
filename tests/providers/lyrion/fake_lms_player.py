@@ -20,8 +20,11 @@ class FakeSlimProtoPlayer:
         "play": 131090,
         "pause": 131095,
         "stop": 131082,
-        "jump_rew": 131083,
-        "jump_fwd": 131086,
+    }
+
+    _IR_CODES = {
+        "jump_rew": 0x7689C03F,
+        "jump_fwd": 0x7689A05F,
     }
 
     @staticmethod
@@ -139,12 +142,12 @@ class FakeSlimProtoPlayer:
 
     async def next_track(self) -> dict[str, Any]:
         """Send a next-track button command over SlimProto."""
-        await self._send_command("jump_fwd")
+        await self._send_ir_command("jump_fwd")
         return {"playerid": self.player_id}
 
     async def previous_track(self) -> dict[str, Any]:
         """Send a previous-track button command over SlimProto."""
-        await self._send_command("jump_rew")
+        await self._send_ir_command("jump_rew")
         return {"playerid": self.player_id}
 
     def is_playing(self) -> bool:
@@ -212,7 +215,8 @@ class FakeSlimProtoPlayer:
         if button is None:
             msg = f"Unsupported slimproto command: {command}"
             raise ValueError(msg)
-        timestamp = 0
+        timestamp = int(asyncio.get_running_loop().time() * 1000) & 0xFFFFFFFF
+
         writer.write(self._make_frame(b"BUTN", struct.pack("!LL", timestamp, button)))
         await writer.drain()
         if command in {"play", "pause", "stop"}:
@@ -221,6 +225,22 @@ class FakeSlimProtoPlayer:
 
         if self.endpoint.fake_server is not None:
             await self.request_status()
+
+    async def _send_ir_command(self, command: str) -> None:
+        """Send a SlimProto IR frame for transport navigation commands."""
+        if self._slimproto_writer is None:
+            msg = "Fake slimproto player is not connected"
+            raise RuntimeError(msg)
+        writer = self._slimproto_writer[1]
+        ir_code = self._IR_CODES.get(command)
+        if ir_code is None:
+            msg = f"Unsupported slimproto IR command: {command}"
+            raise ValueError(msg)
+
+        timestamp = int(asyncio.get_running_loop().time() * 1000) & 0xFFFFFFFF
+        payload = struct.pack("!LBBL", timestamp, 0, 32, ir_code)
+        writer.write(self._make_frame(b"IR  ", payload))
+        await writer.drain()
 
     async def close(self) -> None:
         """Close the HTTP session used by the fake player."""

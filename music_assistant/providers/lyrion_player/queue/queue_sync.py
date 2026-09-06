@@ -284,7 +284,7 @@ class LyrionQueueSync:
             status.get("playlist_loop", []),
         )
         lms_queue_entries: list[_LmsMirrorEntry] = []
-        for item in playlist_items:
+        for index, item in enumerate(playlist_items):
             if not isinstance(item, dict):
                 return None
             entry = self._media_mapper.extract_lms_entry_from_playlist_item(item)
@@ -296,7 +296,14 @@ class LyrionQueueSync:
                     )
                 )
                 continue
-            return None
+
+            if self._lms_model is None:
+                return None
+            if len(self._lms_model.entries) != len(playlist_items):
+                return None
+            if index >= len(self._lms_model.entries):
+                return None
+            lms_queue_entries.append(self._lms_model.entries[index])
 
         current_index = self._parse_status_int(status, ("playlist_cur_index", "playlist index"), 0)
         shuffle_mode = self._parse_status_int(status, ("playlist shuffle", "playlist_shuffle"), 0)

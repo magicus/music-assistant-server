@@ -29,8 +29,10 @@ PNG_1X1_BYTES = (
 SLIMPROTO_BUTTON_PLAY = 131090
 SLIMPROTO_BUTTON_PAUSE = 131095
 SLIMPROTO_BUTTON_STOP = 131082
-SLIMPROTO_BUTTON_JUMP_REW = 131083
-SLIMPROTO_BUTTON_JUMP_FWD = 131086
+SLIMPROTO_BUTTON_JUMP_REW = 131088
+SLIMPROTO_BUTTON_JUMP_FWD = 131089
+SLIMPROTO_IR_JUMP_REW = 0x7689C03F
+SLIMPROTO_IR_JUMP_FWD = 0x7689A05F
 
 
 @dataclass(slots=True, frozen=True)
@@ -310,6 +312,13 @@ class FakeLmsServer:
                         elif button == SLIMPROTO_BUTTON_JUMP_FWD:
                             self._advance_playlist_index(player_id, +1)
                         elif button == SLIMPROTO_BUTTON_JUMP_REW:
+                            self._advance_playlist_index(player_id, -1)
+                elif opcode == b"IR  ":
+                    if len(payload) >= 10:
+                        _, _, _, ir_code = struct.unpack("!LBBL", payload[:10])
+                        if ir_code == SLIMPROTO_IR_JUMP_FWD:
+                            self._advance_playlist_index(player_id, +1)
+                        elif ir_code == SLIMPROTO_IR_JUMP_REW:
                             self._advance_playlist_index(player_id, -1)
                 elif opcode == b"DSCO":
                     await self.disconnect_player(player_id)
