@@ -33,6 +33,7 @@ class ScriptableSlimProtoPlayer:
         "jump_rew": 0x7689C03F,
         "jump_fwd": 0x7689A05F,
         "repeat": 0x768938C7,
+        "shuffle": 0x7689D827,
     }
 
     @staticmethod
@@ -161,6 +162,11 @@ class ScriptableSlimProtoPlayer:
     async def toggle_repeat(self) -> dict[str, Any]:
         """Send a repeat-toggle button command over SlimProto."""
         await self.press_ir_button("repeat")
+        return {"playerid": self.player_id}
+
+    async def toggle_shuffle(self) -> dict[str, Any]:
+        """Send a shuffle-toggle button command over SlimProto."""
+        await self.press_ir_button("shuffle")
         return {"playerid": self.player_id}
 
     async def press_ir_button(self, button: str) -> None:

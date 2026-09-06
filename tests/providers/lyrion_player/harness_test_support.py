@@ -137,6 +137,13 @@ def playlist_repeat(status: dict[str, Any]) -> int:
     return int(status.get("playlist_repeat", 0))
 
 
+def playlist_shuffle(status: dict[str, Any]) -> int:
+    """Read shuffle mode from LMS status across key-name variants."""
+    if "playlist shuffle" in status:
+        return int(status["playlist shuffle"])
+    return int(status.get("playlist_shuffle", 0))
+
+
 def repeat_mode_name(repeat_value: int) -> str:
     """Map LMS repeat integer to named loop mode expected by MA."""
     return {0: "none", 1: "track", 2: "playlist"}.get(repeat_value, "none")
@@ -168,6 +175,22 @@ async def wait_for_playlist_repeat(
     latest = await client.send(["status", 0, 100])
     while asyncio.get_running_loop().time() < deadline:
         if playlist_repeat(latest) == expected_repeat:
+            return latest
+        await asyncio.sleep(0.1)
+        latest = await client.send(["status", 0, 100])
+    return latest
+
+
+async def wait_for_playlist_shuffle(
+    client: EndpointRpcClient,
+    expected_shuffle: int,
+    timeout: float = 2.0,
+) -> dict[str, Any]:
+    """Poll status until LMS reports the expected shuffle value."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    latest = await client.send(["status", 0, 100])
+    while asyncio.get_running_loop().time() < deadline:
+        if playlist_shuffle(latest) == expected_shuffle:
             return latest
         await asyncio.sleep(0.1)
         latest = await client.send(["status", 0, 100])

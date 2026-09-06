@@ -34,6 +34,7 @@ SLIMPROTO_BUTTON_JUMP_FWD = 131089
 SLIMPROTO_IR_JUMP_REW = 0x7689C03F
 SLIMPROTO_IR_JUMP_FWD = 0x7689A05F
 SLIMPROTO_IR_REPEAT = 0x768938C7
+SLIMPROTO_IR_SHUFFLE = 0x7689D827
 
 
 @dataclass(slots=True, frozen=True)
@@ -323,6 +324,8 @@ class FakeLmsServer:
                             self._advance_playlist_index(player_id, -1)
                         elif ir_code == SLIMPROTO_IR_REPEAT:
                             self._cycle_playlist_repeat(player_id)
+                        elif ir_code == SLIMPROTO_IR_SHUFFLE:
+                            self._cycle_playlist_shuffle(player_id)
                 elif opcode == b"DSCO":
                     await self.disconnect_player(player_id)
                     break
@@ -504,6 +507,36 @@ class FakeLmsServer:
         self._notify_player_state(player_id)
         return self._status_for_player(player_id)
 
+    def _cycle_playlist_shuffle(self, player_id: str) -> dict[str, Any]:
+        """Cycle shuffle mode using LMS semantics: 0 -> 1 -> 2 -> 0."""
+        player = self._ensure_player(player_id)
+        current = _coerce_int(player.get("playlist shuffle"), 0)
+        next_value = (1, 2, 0)[current % 3]
+        return self._set_playlist_shuffle(player_id, next_value)
+
+    def _set_playlist_shuffle(self, player_id: str, shuffle_mode: int) -> dict[str, Any]:
+        """Set shuffle mode and emulate visible queue reshuffle side-effects."""
+        player = self._ensure_player(player_id)
+        current_mode = _coerce_int(player.get("playlist shuffle"), 0)
+        target_mode = max(0, min(2, _coerce_int(shuffle_mode, 0)))
+
+        if target_mode == current_mode:
+            self._notify_player_state(player_id)
+            return self._status_for_player(player_id)
+
+        playlist_loop = cast("list[dict[str, Any]]", player.setdefault("playlist_loop", []))
+        if len(playlist_loop) > 1 and target_mode in (1, 2):
+            # Emulate a deterministic reshuffle so tests can assert visible queue movement.
+            if current_mode in (1, 2):
+                playlist_loop[:] = playlist_loop[1:] + playlist_loop[:1]
+            else:
+                playlist_loop.reverse()
+
+        player["playlist shuffle"] = target_mode
+        self._touch_playlist_timestamp(player)
+        self._notify_player_state(player_id)
+        return self._status_for_player(player_id)
+
     def _handle_playlist_command(self, player_id: str, command: list[Any]) -> dict[str, Any]:
         """Apply LMS playlist commands to fake queue state."""
         player = self._ensure_player(player_id)
@@ -590,9 +623,7 @@ class FakeLmsServer:
             return self._status_for_player(player_id)
 
         if sub_action == "shuffle" and len(command) > 2:
-            player["playlist shuffle"] = _coerce_int(command[2], 0)
-            self._notify_player_state(player_id)
-            return self._status_for_player(player_id)
+            return self._set_playlist_shuffle(player_id, _coerce_int(command[2], 0))
 
         if sub_action == "zap" and len(command) > 2:
             return self._handle_playlist_command(player_id, ["playlist", "delete", command[2]])

@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock, Mock
+
+import pytest
+from music_assistant_models.enums import RepeatMode
 
 from music_assistant.providers.lyrion_player.media_mapper import LmsQueueEntry, LyrionMediaMapper
 from music_assistant.providers.lyrion_player.queue.queue_sync import (
@@ -102,3 +107,32 @@ def test_parse_lms_queue_state_returns_none_for_partial_row_after_length_change(
     parsed = queue_sync._parse_lms_queue_state(status)
 
     assert parsed is None
+
+
+@pytest.mark.asyncio
+async def test_apply_lms_modes_maps_album_shuffle_to_ma_enabled() -> None:
+    """LMS shuffle album mode (2) should map to MA shuffle_enabled=True."""
+    player_queues = Mock()
+    queue = SimpleNamespace(repeat_mode=RepeatMode.OFF, shuffle_enabled=False)
+    player_queues.get = Mock(return_value=queue)
+    player_queues.set_repeat = AsyncMock()
+    player_queues.set_shuffle = AsyncMock()
+
+    queue_sync = object.__new__(LyrionQueueSync)
+    queue_sync.player = SimpleNamespace(
+        player_id="test-player",
+        mass=SimpleNamespace(player_queues=player_queues),
+    )
+
+    await queue_sync._apply_lms_modes_to_ma(
+        _LmsQueueSnapshot(
+            entries=(),
+            current_index=0,
+            shuffle_mode=2,
+            repeat_mode=0,
+            playback_mode="stop",
+        )
+    )
+
+    player_queues.set_repeat.assert_not_awaited()
+    player_queues.set_shuffle.assert_awaited_once_with("test-player", True)
