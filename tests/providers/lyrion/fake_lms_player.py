@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import struct
 from collections.abc import Callable
 from typing import Any
@@ -25,14 +26,14 @@ class FakeSlimProtoPlayer:
 
     @staticmethod
     def _make_frame(command: bytes, payload: bytes = b"") -> bytes:
-        """Build a real SlimProto frame: 2-byte length + 4-byte opcode + payload."""
-        return struct.pack("!H", len(payload) + 4) + command + payload
+        """Build a real SlimProto frame: 4-byte opcode + 4-byte payload length + payload."""
+        return command + struct.pack("!I", len(payload)) + payload
 
     @staticmethod
     def _make_helo_payload(player_id: str, mac_address: bytes, name: str, model: str) -> bytes:
         """Encode minimal HELO payload with the player identity and capabilities."""
         return (
-            b"\x0c\x00\x00\x00\x00\x00\x00\x00"  # deviceid=12, revision=0
+            b"\x0c\x00"  # deviceid=12 (squeezeplay), revision=0
             + mac_address
             + b"\x00" * 16
             + struct.pack("!H", 0)
@@ -63,10 +64,9 @@ class FakeSlimProtoPlayer:
         self.name = name
         self.model = model
         self.mode = "stop"
-        self.rpc_player_id = (
-            player_id if self.endpoint.fake_server is not None else "00:00:00:00:00:00"
-        )
-        self._mac_address = b"\x00\x00\x00\x00\x00\x00"
+        live_mac = self._derive_live_player_id(player_id)
+        self.rpc_player_id = player_id if self.endpoint.fake_server is not None else live_mac
+        self._mac_address = bytes.fromhex(live_mac.replace(":", ""))
         self._session = aiohttp.ClientSession()
         self._slimproto_writer: asyncio.StreamWriter | None = None
         self._server_state_listener: Callable[[str, dict[str, Any]], None] | None = None
@@ -213,7 +213,7 @@ class FakeSlimProtoPlayer:
             msg = f"Unsupported slimproto command: {command}"
             raise ValueError(msg)
         timestamp = 0
-        writer.write(self._make_frame(b"butn", struct.pack("!LL", timestamp, button)))
+        writer.write(self._make_frame(b"BUTN", struct.pack("!LL", timestamp, button)))
         await writer.drain()
         if command in {"play", "pause", "stop"}:
             await self._wait_for_server_mode(command)
@@ -231,3 +231,11 @@ class FakeSlimProtoPlayer:
                 await writer.wait_closed()
             self._slimproto_writer = None
         await self._session.close()
+
+    @staticmethod
+    def _derive_live_player_id(seed: str) -> str:
+        """Create a deterministic locally administered MAC string from an arbitrary seed."""
+        digest = hashlib.sha1(seed.encode()).digest()
+        first_octet = (digest[0] | 0x02) & 0xFE
+        mac = bytes([first_octet, digest[1], digest[2], digest[3], digest[4], digest[5]])
+        return ":".join(f"{octet:02x}" for octet in mac)

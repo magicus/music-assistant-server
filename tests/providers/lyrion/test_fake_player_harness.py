@@ -93,55 +93,6 @@ class ProviderStyleRpcClient:
         await self._rpc.close()
 
 
-async def _resolve_live_player_id(
-    endpoint: LyrionTestEndpoint,
-    preferred_player_id: str,
-) -> str | None:
-    """
-    Resolve a working live LMS player id from serverstatus.
-
-    Returns ``preferred_player_id`` immediately on fake backend.
-    """
-    if endpoint.fake_server is not None:
-        return preferred_player_id
-
-    session = aiohttp.ClientSession()
-    payload = {
-        "id": 1,
-        "method": "slim.request",
-        "params": ["", ["serverstatus", 0, 200]],
-    }
-    try:
-        for _ in range(10):
-            try:
-                async with session.post(
-                    f"{endpoint.base_url}/jsonrpc.js", json=payload
-                ) as response:
-                    response.raise_for_status()
-                    data = await response.json()
-                result = data.get("result")
-                if isinstance(result, dict):
-                    players = result.get("players_loop")
-                    if isinstance(players, list):
-                        for item in players:
-                            if not isinstance(item, dict):
-                                continue
-                            player_id = item.get("playerid")
-                            if isinstance(player_id, str) and player_id:
-                                return player_id
-            except (
-                aiohttp.ClientConnectionError,
-                aiohttp.ClientPayloadError,
-                aiohttp.ServerDisconnectedError,
-            ):
-                pass
-            await asyncio.sleep(0.2)
-    finally:
-        await session.close()
-
-    return None
-
-
 def _playlist_index(status: dict[str, Any]) -> int:
     """Read current queue index from LMS status across key-name variants."""
     if "playlist_cur_index" in status:
@@ -187,13 +138,6 @@ async def test_fake_player_registers_on_fake_lms(
 
     try:
         await player.connect()
-        resolved_player_id = await _resolve_live_player_id(
-            player.endpoint,
-            player.player_id,
-        )
-        if resolved_player_id is None:
-            pytest.skip("Live LMS did not expose any player id for queue command routing")
-        player.rpc_player_id = resolved_player_id
         state = (
             player.endpoint.fake_server.players["fake-player-1"]
             if player.endpoint.fake_server
@@ -204,7 +148,7 @@ async def test_fake_player_registers_on_fake_lms(
             assert state["name"] == "Fake Bedroom"
 
         player_status = await player.request_status()
-        assert player_status["playerid"] == "fake-player-1"
+        assert player_status["playerid"] == player.rpc_player_id
         assert player_status["connected"] == 1
         assert player_status["mode"] == "stop"
 
@@ -291,11 +235,11 @@ async def test_fake_player_uses_real_slimproto_button_events_for_play_and_pause(
             pytest.skip("Protocol-level button assertion only applies to fake backend")
 
         await player.play()
-        assert player.endpoint.fake_server.slimproto_events[-1][0] == b"butn"
+        assert player.endpoint.fake_server.slimproto_events[-1][0] == b"BUTN"
         assert player.endpoint.fake_server.players["fake-player-button"]["mode"] == "play"
 
         await player.pause()
-        assert player.endpoint.fake_server.slimproto_events[-1][0] == b"butn"
+        assert player.endpoint.fake_server.slimproto_events[-1][0] == b"BUTN"
         assert player.endpoint.fake_server.players["fake-player-button"]["mode"] == "pause"
     finally:
         await player.close()
@@ -413,12 +357,8 @@ async def test_queue_state_stays_consistent_when_three_sources_alternate_aggress
     direct_rpc_client: EndpointRpcClient | None = None
     try:
         await player.connect()
-        resolved_player_id = await _resolve_live_player_id(lyrion_test_endpoint, player.player_id)
-        if resolved_player_id is None:
-            pytest.skip("Live LMS did not expose any player id for queue command routing")
-        player.rpc_player_id = resolved_player_id
-        provider_client = ProviderStyleRpcClient(lyrion_test_endpoint, resolved_player_id)
-        direct_rpc_client = EndpointRpcClient(lyrion_test_endpoint, resolved_player_id)
+        provider_client = ProviderStyleRpcClient(lyrion_test_endpoint, player.rpc_player_id)
+        direct_rpc_client = EndpointRpcClient(lyrion_test_endpoint, player.rpc_player_id)
 
         await provider_client.send_player_command(["playlist", "clear"])
         await direct_rpc_client.send(["playlist", "add", "http://queue.local/track-a.mp3"])
@@ -458,7 +398,7 @@ async def test_queue_state_stays_consistent_when_three_sources_alternate_aggress
         assert _playlist_index(status) == 1
 
         if player.endpoint.fake_server is not None:
-            assert player.endpoint.fake_server.slimproto_events[-1][0] == b"butn"
+            assert player.endpoint.fake_server.slimproto_events[-1][0] == b"BUTN"
     finally:
         if provider_client is not None:
             await provider_client.close()
@@ -487,12 +427,8 @@ async def test_queue_duplicate_track_reordering_survives_cross_source_churn(
     direct_rpc_client: EndpointRpcClient | None = None
     try:
         await player.connect()
-        resolved_player_id = await _resolve_live_player_id(lyrion_test_endpoint, player.player_id)
-        if resolved_player_id is None:
-            pytest.skip("Live LMS did not expose any player id for queue command routing")
-        player.rpc_player_id = resolved_player_id
-        provider_client = ProviderStyleRpcClient(lyrion_test_endpoint, resolved_player_id)
-        direct_rpc_client = EndpointRpcClient(lyrion_test_endpoint, resolved_player_id)
+        provider_client = ProviderStyleRpcClient(lyrion_test_endpoint, player.rpc_player_id)
+        direct_rpc_client = EndpointRpcClient(lyrion_test_endpoint, player.rpc_player_id)
 
         await provider_client.send_player_command(["playlist", "clear"])
 
@@ -558,12 +494,8 @@ async def test_queue_duplicate_swap_and_bridge_hops_keep_index_valid(
     direct_rpc_client: EndpointRpcClient | None = None
     try:
         await player.connect()
-        resolved_player_id = await _resolve_live_player_id(lyrion_test_endpoint, player.player_id)
-        if resolved_player_id is None:
-            pytest.skip("Live LMS did not expose any player id for queue command routing")
-        player.rpc_player_id = resolved_player_id
-        provider_client = ProviderStyleRpcClient(lyrion_test_endpoint, resolved_player_id)
-        direct_rpc_client = EndpointRpcClient(lyrion_test_endpoint, resolved_player_id)
+        provider_client = ProviderStyleRpcClient(lyrion_test_endpoint, player.rpc_player_id)
+        direct_rpc_client = EndpointRpcClient(lyrion_test_endpoint, player.rpc_player_id)
 
         await provider_client.send_player_command(["playlist", "clear"])
 

@@ -219,14 +219,13 @@ class FakeLmsServer:
         model = "test"
 
         async def _read_frame() -> tuple[bytes, bytes] | None:
-            prefix = await reader.readexactly(2)
-            if len(prefix) < 2:
+            header = await reader.readexactly(8)
+            if len(header) < 8:
                 return None
-            length = struct.unpack("!H", prefix)[0]
-            frame = await reader.readexactly(length)
-            if len(frame) < 4:
-                return None
-            return frame[:4], frame[4:]
+            opcode = header[:4]
+            length = struct.unpack("!I", header[4:])[0]
+            payload = await reader.readexactly(length)
+            return opcode, payload
 
         try:
             while True:
@@ -236,6 +235,9 @@ class FakeLmsServer:
                 opcode, payload = frame
                 self.slimproto_events.append((opcode, payload))
                 if opcode == b"HELO":
+                    if len(payload) >= 8:
+                        mac = ":".join(f"{byte:02x}" for byte in payload[2:8])
+                        player_id = mac
                     text = payload.decode("utf-8", errors="ignore")
                     for marker in ("PlayerID=", "Name=", "ModelName="):
                         idx = text.find(marker)
@@ -248,7 +250,7 @@ class FakeLmsServer:
                         elif marker == "ModelName=":
                             model = text[idx + len(marker) :].split(",", 1)[0]
                     if player_id is None:
-                        player_id = "unknown-player"
+                        player_id = "00:00:00:00:00:00"
                     break
                 if opcode == b"DSCO":
                     return
@@ -296,7 +298,7 @@ class FakeLmsServer:
                         self.set_player_mode(player_id, "play")
                     elif action == b"q":
                         self.set_player_mode(player_id, "stop")
-                elif opcode == b"butn":
+                elif opcode in {b"BUTN", b"butn"}:
                     if len(payload) >= 8:
                         _, button = struct.unpack("!LL", payload[:8])
                         if button == SLIMPROTO_BUTTON_PLAY:
