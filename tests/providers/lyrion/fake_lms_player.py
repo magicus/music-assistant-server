@@ -119,6 +119,14 @@ class FakeSlimProtoPlayer:
         await self._send_command("pause")
         return {"playerid": self.player_id, "mode": "pause"}
 
+    def is_playing(self) -> bool:
+        """Return whether this fake player currently interprets itself as playing."""
+        return self.mode == "play"
+
+    def is_paused(self) -> bool:
+        """Return whether this fake player currently interprets itself as paused."""
+        return self.mode == "pause"
+
     async def request_status(self) -> dict[str, Any]:
         """Return runtime status for the player using the active backend's real contract."""
         if self.endpoint.fake_server is None:

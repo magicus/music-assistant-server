@@ -154,6 +154,102 @@ async def test_fake_player_uses_real_slimproto_button_events_for_play_and_pause(
 
 
 @pytest.mark.asyncio
+async def test_fake_player_reports_local_playback_state_across_multiple_sources(
+    lyrion_test_endpoint: LyrionTestEndpoint,
+) -> None:
+    """A fake player should expose its own local state even when various sync sources update it in quick succession."""
+    if lyrion_test_endpoint.fake_server is None:
+        pytest.skip("local-state assertions are only meaningful for the fake LMS backend")
+
+    player = FakeSlimProtoPlayer(
+        endpoint=lyrion_test_endpoint,
+        player_id="fake-player-local-state",
+        name="Fake Local State",
+        model="test",
+    )
+    provider = FakeMAProvider(lyrion_test_endpoint.fake_server, player.player_id)
+
+    await player.connect()
+    try:
+        assert player.mode == "stop"
+        assert player.is_paused() is False
+        assert player.is_playing() is False
+
+        await player.play()
+        assert player.is_playing() is True
+        assert player.is_paused() is False
+
+        await provider.send_player_command(["pause"])
+        assert player.is_paused() is True
+        assert player.mode == "pause"
+
+        await player.play()
+        assert player.is_playing() is True
+
+        await provider.send_player_command(["play"])
+        assert player.is_playing() is True
+
+        await player.pause()
+        assert player.is_paused() is True
+    finally:
+        await player.close()
+
+
+@pytest.mark.asyncio
+async def test_fake_players_keep_state_in_sync_when_play_pause_sources_conflict(
+    lyrion_test_endpoint: LyrionTestEndpoint,
+) -> None:
+    """A real-world nagging case: two players toggling state from different sources should leave the last writer in charge."""
+    if lyrion_test_endpoint.fake_server is None:
+        pytest.skip("the conflict case is validated against the fake LMS backend")
+
+    player_a = FakeSlimProtoPlayer(
+        endpoint=lyrion_test_endpoint,
+        player_id="fake-player-a",
+        name="Fake A",
+        model="test",
+    )
+    player_b = FakeSlimProtoPlayer(
+        endpoint=lyrion_test_endpoint,
+        player_id="fake-player-b",
+        name="Fake B",
+        model="test",
+    )
+    provider_a = FakeMAProvider(lyrion_test_endpoint.fake_server, "fake-player-a")
+    provider_b = FakeMAProvider(lyrion_test_endpoint.fake_server, "fake-player-b")
+
+    await player_a.connect()
+    await player_b.connect()
+    try:
+        await player_a.play()
+        assert player_a.is_playing() is True
+        assert player_b.is_playing() is False
+
+        await provider_b.send_player_command(["pause"])
+        assert player_b.is_paused() is True
+        assert player_a.is_playing() is True
+
+        await player_b.play()
+        assert player_b.is_playing() is True
+        assert player_a.is_playing() is True
+
+        await provider_a.send_player_command(["pause"])
+        assert player_a.is_paused() is True
+        assert player_b.is_playing() is True
+
+        await player_a.play()
+        assert player_a.is_playing() is True
+        assert player_b.is_playing() is True
+
+        await player_b.pause()
+        assert player_b.is_paused() is True
+        assert player_a.is_playing() is True
+    finally:
+        await player_a.close()
+        await player_b.close()
+
+
+@pytest.mark.asyncio
 async def test_fake_player_harness_uses_same_endpoint_contract_for_real_lms() -> None:
     """The player only depends on the shared endpoint contract, not the backend implementation."""
     endpoint = LyrionTestEndpoint(
