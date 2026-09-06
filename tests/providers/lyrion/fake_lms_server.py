@@ -775,19 +775,29 @@ class FakeLmsServer:
         )
 
         if cmd_arg == "load":
-            player["playlist_loop"] = []
-            self._append_playlist_item(
-                player,
-                track_id=track_id,
-                url=url,
-                title=title,
-                artist=artist,
-                album=album,
-            )
-            player["playlist_cur_index"] = 0
-            player["playlist index"] = 0
-            self._touch_playlist_timestamp(player)
-            self._apply_group_mode(player_id, "play")
+            # Mirror LMS grouped transport behavior: loading on a grouped player
+            # updates queue state for the whole sync domain.
+            leader_id = cast("str", player.get("sync_master", "")).strip() or player_id
+            leader = self._ensure_player(leader_id)
+            self._rebuild_sync_relations()
+            group_member_ids = [leader_id, *cast("list[str]", leader.get("sync_slaves", []))]
+            for member_id in group_member_ids:
+                group_player = self._ensure_player(member_id)
+                group_player["playlist_loop"] = []
+                self._append_playlist_item(
+                    group_player,
+                    track_id=track_id,
+                    url=url,
+                    title=title,
+                    artist=artist,
+                    album=album,
+                )
+                group_player["playlist_cur_index"] = 0
+                group_player["playlist index"] = 0
+                self._touch_playlist_timestamp(group_player)
+                self._notify_player_state(member_id)
+
+            self._apply_group_mode(leader_id, "play")
             return self._status_for_player(player_id)
 
         if cmd_arg == "add":

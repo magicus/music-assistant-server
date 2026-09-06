@@ -13,6 +13,7 @@ from tests.providers.lyrion.scriptable_slimproto_player import ScriptableSlimPro
 from tests.providers.lyrion_player.harness_test_support import (
     EndpointRpcClient,
     FakeMAProvider,
+    ProviderStyleRpcClient,
     player_connected,
     playlist_repeat,
     sync_master,
@@ -567,6 +568,248 @@ async def test_group_lifecycle_three_players_and_group_transport(
         status_b = await rpc_b.send(["status", 0, 100])
         assert _group_root(member_b_id, status_b) != _group_root(leader_id, status_a)
     finally:
+        if rpc_a is not None:
+            await rpc_a.close()
+        if rpc_b is not None:
+            await rpc_b.close()
+        if rpc_c is not None:
+            await rpc_c.close()
+        for player in (player_a, player_b, player_c):
+            with suppress(Exception):
+                await asyncio.wait_for(player.disconnect(), timeout=2.0)
+            with suppress(Exception):
+                await asyncio.wait_for(player.close(), timeout=2.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.live_lyrion_docker
+async def test_live_group_transport_three_players_with_member_removal(
+    lyrion_test_endpoint: LyrionTestEndpoint,
+) -> None:
+    """Live LMS: load/play follows active group and excludes removed member."""
+    player_a = ScriptableSlimProtoPlayer(
+        endpoint=lyrion_test_endpoint,
+        player_id="live-group-player-a",
+        name="Live Group Player A",
+        model="test",
+    )
+    player_b = ScriptableSlimProtoPlayer(
+        endpoint=lyrion_test_endpoint,
+        player_id="live-group-player-b",
+        name="Live Group Player B",
+        model="test",
+    )
+    player_c = ScriptableSlimProtoPlayer(
+        endpoint=lyrion_test_endpoint,
+        player_id="live-group-player-c",
+        name="Live Group Player C",
+        model="test",
+    )
+
+    rpc_a: EndpointRpcClient | None = None
+    rpc_b: EndpointRpcClient | None = None
+    rpc_c: EndpointRpcClient | None = None
+
+    def _group_root(player_id: str, status: dict[str, object]) -> str:
+        return sync_master(status) or player_id
+
+    def _first_track_id(status: dict[str, object]) -> str | None:
+        playlist_loop = status.get("playlist_loop")
+        if not isinstance(playlist_loop, list) or not playlist_loop:
+            return None
+        first = playlist_loop[0]
+        if not isinstance(first, dict):
+            return None
+        for key in ("id", "track_id"):
+            value = first.get(key)
+            if value is not None:
+                return str(value)
+        return None
+
+    async def _wait_until_grouped(
+        first_client: EndpointRpcClient,
+        first_player_id: str,
+        second_client: EndpointRpcClient,
+        second_player_id: str,
+        timeout: float = 4.0,
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        deadline = asyncio.get_running_loop().time() + timeout
+        first_status = await first_client.send(["status", 0, 100])
+        second_status = await second_client.send(["status", 0, 100])
+        while asyncio.get_running_loop().time() < deadline:
+            first_root = _group_root(first_player_id, first_status)
+            second_root = _group_root(second_player_id, second_status)
+            if first_root == second_root:
+                return first_status, second_status
+            if second_player_id in sync_slaves(first_status):
+                return first_status, second_status
+            if first_player_id in sync_slaves(second_status):
+                return first_status, second_status
+            await asyncio.sleep(0.1)
+            first_status = await first_client.send(["status", 0, 100])
+            second_status = await second_client.send(["status", 0, 100])
+        pytest.fail(
+            "Players did not become grouped in time; "
+            f"first_status={first_status}, second_status={second_status}"
+        )
+
+    async def _ensure_grouped(
+        anchor_client: EndpointRpcClient,
+        anchor_player_id: str,
+        member_client: EndpointRpcClient,
+        member_player_id: str,
+        *,
+        reset_anchor: bool = False,
+    ) -> None:
+        if reset_anchor:
+            await anchor_client.send(["sync", "-"])
+        await member_client.send(["sync", "-"])
+
+        if lyrion_test_endpoint.fake_server is not None:
+            await member_client.send(["sync", anchor_player_id])
+        else:
+            await anchor_client.send(["sync", member_player_id])
+
+        first_status, second_status = await _wait_until_grouped(
+            anchor_client,
+            anchor_player_id,
+            member_client,
+            member_player_id,
+        )
+        first_root = _group_root(anchor_player_id, first_status)
+        second_root = _group_root(member_player_id, second_status)
+        if first_root == second_root:
+            return
+
+        if reset_anchor:
+            await anchor_client.send(["sync", "-"])
+        await member_client.send(["sync", "-"])
+
+        if lyrion_test_endpoint.fake_server is not None:
+            await anchor_client.send(["sync", member_player_id])
+        else:
+            await member_client.send(["sync", anchor_player_id])
+
+        await _wait_until_grouped(
+            anchor_client,
+            anchor_player_id,
+            member_client,
+            member_player_id,
+        )
+
+    async def _wait_for_track_ids(
+        expected_ids: dict[str, str],
+        timeout: float = 6.0,
+    ) -> dict[str, dict[str, object]]:
+        assert rpc_a is not None and rpc_b is not None and rpc_c is not None
+        client_by_id = {
+            player_a.rpc_player_id: rpc_a,
+            player_b.rpc_player_id: rpc_b,
+            player_c.rpc_player_id: rpc_c,
+        }
+        deadline = asyncio.get_running_loop().time() + timeout
+        last_status: dict[str, dict[str, object]] = {}
+        while asyncio.get_running_loop().time() < deadline:
+            all_match = True
+            for player_id, expected_track_id in expected_ids.items():
+                status = await client_by_id[player_id].send(["status", 0, 100])
+                last_status[player_id] = status
+                if _first_track_id(status) != expected_track_id:
+                    all_match = False
+            if all_match:
+                return last_status
+            await asyncio.sleep(0.1)
+
+        pytest.fail(
+            "Timed out waiting for expected track ids; "
+            f"expected_ids={expected_ids}, last_status={last_status}"
+        )
+
+    try:
+        await player_a.connect()
+        await player_b.connect()
+        await player_c.connect()
+
+        rpc_a = EndpointRpcClient(lyrion_test_endpoint, player_a.rpc_player_id)
+        rpc_b = EndpointRpcClient(lyrion_test_endpoint, player_b.rpc_player_id)
+        rpc_c = EndpointRpcClient(lyrion_test_endpoint, player_c.rpc_player_id)
+
+        status_a = await rpc_a.send(["status", 0, 100])
+        status_b = await rpc_b.send(["status", 0, 100])
+        status_c = await rpc_c.send(["status", 0, 100])
+        leader_id = str(status_a.get("playerid", player_a.rpc_player_id))
+        member_b_id = str(status_b.get("playerid", player_b.rpc_player_id))
+        member_c_id = str(status_c.get("playerid", player_c.rpc_player_id))
+
+        titles_result = await rpc_a.send(["titles", 0, 2])
+        titles_loop = titles_result.get("titles_loop")
+        if not isinstance(titles_loop, list) or len(titles_loop) < 2:
+            pytest.skip("Need at least two LMS titles for transport propagation test")
+        first_title = titles_loop[0]
+        second_title = titles_loop[1]
+        if not isinstance(first_title, dict) or "id" not in first_title:
+            pytest.skip("Unable to resolve first playable LMS track id")
+        if not isinstance(second_title, dict) or "id" not in second_title:
+            pytest.skip("Unable to resolve second playable LMS track id")
+        first_track_id = str(first_title["id"])
+        second_track_id = str(second_title["id"])
+
+        # Build initial group A+B+C.
+        await _ensure_grouped(rpc_a, leader_id, rpc_b, member_b_id, reset_anchor=True)
+        await _ensure_grouped(rpc_a, leader_id, rpc_c, member_c_id)
+
+        status_a = await rpc_a.send(["status", 0, 100])
+        status_b = await rpc_b.send(["status", 0, 100])
+        status_c = await rpc_c.send(["status", 0, 100])
+        root_before = _group_root(leader_id, status_a)
+        assert root_before == _group_root(member_b_id, status_b)
+        assert root_before == _group_root(member_c_id, status_c)
+
+        provider_by_id = {
+            leader_id: ProviderStyleRpcClient(lyrion_test_endpoint, leader_id),
+            member_b_id: ProviderStyleRpcClient(lyrion_test_endpoint, member_b_id),
+            member_c_id: ProviderStyleRpcClient(lyrion_test_endpoint, member_c_id),
+        }
+
+        # Robust transport trigger for live LMS: load + explicit play.
+        await provider_by_id[root_before].send_player_command(
+            ["playlistcontrol", "cmd:load", f"track_id:{first_track_id}"]
+        )
+        await provider_by_id[root_before].send_player_command(["play"])
+
+        await _wait_for_track_ids(
+            {
+                leader_id: first_track_id,
+                member_b_id: first_track_id,
+                member_c_id: first_track_id,
+            }
+        )
+
+        # Remove B and verify next load/play only propagates inside remaining A/C group.
+        await rpc_b.send(["sync", "-"])
+        await _ensure_grouped(rpc_a, leader_id, rpc_c, member_c_id)
+
+        status_a = await rpc_a.send(["status", 0, 100])
+        status_c = await rpc_c.send(["status", 0, 100])
+        root_after = _group_root(leader_id, status_a)
+        assert root_after == _group_root(member_c_id, status_c)
+
+        await provider_by_id[root_after].send_player_command(
+            ["playlistcontrol", "cmd:load", f"track_id:{second_track_id}"]
+        )
+        await provider_by_id[root_after].send_player_command(["play"])
+
+        await _wait_for_track_ids(
+            {
+                leader_id: second_track_id,
+                member_c_id: second_track_id,
+                member_b_id: first_track_id,
+            }
+        )
+    finally:
+        if "provider_by_id" in locals():
+            for client in provider_by_id.values():
+                await client.close()
         if rpc_a is not None:
             await rpc_a.close()
         if rpc_b is not None:
