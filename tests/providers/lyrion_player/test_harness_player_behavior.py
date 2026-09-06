@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
+from unittest.mock import MagicMock
 
 import pytest
 
+from music_assistant.providers.lyrion_player.player import LyrionPlayer
 from tests.providers.lyrion.fake_lms_server import FakeLmsServer
 from tests.providers.lyrion.lms_server_harness import LyrionTestEndpoint
 from tests.providers.lyrion.scriptable_slimproto_player import ScriptableSlimProtoPlayer
@@ -426,6 +428,187 @@ async def test_fake_lms_server_builds_player_status_payload() -> None:
     assert status["playerid"] == "test-1"
     assert status["mode"] == "stop"
     assert status["power"] == 1
+
+
+@pytest.mark.asyncio
+async def test_ma_volume_change_disables_lms_sync_volume_before_grouped_volume_change(
+    lyrion_test_endpoint: LyrionTestEndpoint,
+) -> None:
+    """MA-driven Lyrion volume changes must disable LMS syncVolume first."""
+    player_a = ScriptableSlimProtoPlayer(
+        endpoint=lyrion_test_endpoint,
+        player_id="sync-volume-guard-a",
+        name="Sync Volume Guard A",
+        model="test",
+    )
+    player_b = ScriptableSlimProtoPlayer(
+        endpoint=lyrion_test_endpoint,
+        player_id="sync-volume-guard-b",
+        name="Sync Volume Guard B",
+        model="test",
+    )
+    player_c = ScriptableSlimProtoPlayer(
+        endpoint=lyrion_test_endpoint,
+        player_id="sync-volume-guard-c",
+        name="Sync Volume Guard C",
+        model="test",
+    )
+
+    rpc_a: EndpointRpcClient | None = None
+    rpc_b: EndpointRpcClient | None = None
+    rpc_c: EndpointRpcClient | None = None
+
+    async def _wait_until_grouped(
+        first_client: EndpointRpcClient,
+        first_player_id: str,
+        second_client: EndpointRpcClient,
+        second_player_id: str,
+        timeout: float = 4.0,
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        deadline = asyncio.get_running_loop().time() + timeout
+        first_status = await first_client.send(["status", 0, 100])
+        second_status = await second_client.send(["status", 0, 100])
+        while asyncio.get_running_loop().time() < deadline:
+            first_root = sync_master(first_status) or first_player_id
+            second_root = sync_master(second_status) or second_player_id
+            if first_root == second_root:
+                return first_status, second_status
+            if second_player_id in sync_slaves(first_status):
+                return first_status, second_status
+            if first_player_id in sync_slaves(second_status):
+                return first_status, second_status
+            await asyncio.sleep(0.1)
+            first_status = await first_client.send(["status", 0, 100])
+            second_status = await second_client.send(["status", 0, 100])
+        pytest.fail(
+            "Players did not become grouped in time; "
+            f"first_status={first_status}, second_status={second_status}"
+        )
+
+    async def _ensure_grouped(
+        anchor_client: EndpointRpcClient,
+        anchor_player_id: str,
+        member_client: EndpointRpcClient,
+        member_player_id: str,
+        *,
+        reset_anchor: bool = False,
+    ) -> None:
+        if reset_anchor:
+            await anchor_client.send(["sync", "-"])
+        await member_client.send(["sync", "-"])
+
+        if lyrion_test_endpoint.fake_server is not None:
+            await member_client.send(["sync", anchor_player_id])
+        else:
+            await anchor_client.send(["sync", member_player_id])
+
+        first_status, second_status = await _wait_until_grouped(
+            anchor_client,
+            anchor_player_id,
+            member_client,
+            member_player_id,
+        )
+        if (sync_master(first_status) or anchor_player_id) == (
+            sync_master(second_status) or member_player_id
+        ):
+            return
+
+        if reset_anchor:
+            await anchor_client.send(["sync", "-"])
+        await member_client.send(["sync", "-"])
+
+        if lyrion_test_endpoint.fake_server is not None:
+            await anchor_client.send(["sync", member_player_id])
+        else:
+            await member_client.send(["sync", anchor_player_id])
+
+        await _wait_until_grouped(
+            anchor_client,
+            anchor_player_id,
+            member_client,
+            member_player_id,
+        )
+
+    async def _playerpref_sync_volume(client: EndpointRpcClient, value: int | None = None) -> int:
+        command: list[object] = ["playerpref", "syncVolume", "?"]
+        if value is not None:
+            command = ["playerpref", "syncVolume", value]
+        result = await client.send(command)
+        return int(result.get("_p2", 0))
+
+    try:
+        await player_a.connect()
+        await player_b.connect()
+        await player_c.connect()
+
+        rpc_a = EndpointRpcClient(lyrion_test_endpoint, player_a.rpc_player_id)
+        rpc_b = EndpointRpcClient(lyrion_test_endpoint, player_b.rpc_player_id)
+        rpc_c = EndpointRpcClient(lyrion_test_endpoint, player_c.rpc_player_id)
+
+        leader_id = player_a.rpc_player_id
+        member_b_id = player_b.rpc_player_id
+        member_c_id = player_c.rpc_player_id
+
+        await _ensure_grouped(rpc_a, leader_id, rpc_b, member_b_id, reset_anchor=True)
+        await _ensure_grouped(rpc_a, leader_id, rpc_c, member_c_id)
+
+        await rpc_a.send(["mixer", "volume", 20])
+        await rpc_b.send(["mixer", "volume", 40])
+        await rpc_c.send(["mixer", "volume", 60])
+        await rpc_a.send(["playerpref", "syncVolume", 1])
+        await rpc_b.send(["playerpref", "syncVolume", 1])
+        await rpc_c.send(["playerpref", "syncVolume", 1])
+
+        provider = MagicMock()
+        provider.instance_id = "lyrion_player"
+        provider.logger = MagicMock()
+        provider.mass = MagicMock()
+        provider.mass.subscribe = MagicMock(return_value=lambda: None)
+        provider.mass.config = MagicMock()
+        provider.mass.config.create_default_player_config = MagicMock()
+        provider.mass.config.get_base_player_config = MagicMock(return_value=MagicMock())
+
+        client_by_id = {
+            leader_id: rpc_a,
+            member_b_id: rpc_b,
+            member_c_id: rpc_c,
+        }
+
+        async def _send_player_command(player_id: str, command: list[object]) -> dict[str, object]:
+            return await client_by_id[player_id].send(command)
+
+        provider.send_player_command = _send_player_command
+
+        leader_player = LyrionPlayer(
+            provider,
+            leader_id,
+            {"name": "Sync Volume Guard A", "model": "test"},
+        )
+        leader_player._attr_group_members = [leader_id, member_b_id, member_c_id]
+
+        await leader_player.volume_set(33)
+
+        status_a = await rpc_a.send(["status", 0, 100])
+        status_b = await rpc_b.send(["status", 0, 100])
+        status_c = await rpc_c.send(["status", 0, 100])
+        assert int(status_a.get("mixer volume", status_a.get("volume", 0))) == 33
+        assert int(status_b.get("mixer volume", status_b.get("volume", 0))) == 40
+        assert int(status_c.get("mixer volume", status_c.get("volume", 0))) == 60
+        assert await _playerpref_sync_volume(rpc_a) == 0
+        assert await _playerpref_sync_volume(rpc_b) == 1
+        assert await _playerpref_sync_volume(rpc_c) == 1
+    finally:
+        if rpc_a is not None:
+            await rpc_a.close()
+        if rpc_b is not None:
+            await rpc_b.close()
+        if rpc_c is not None:
+            await rpc_c.close()
+        for player in (player_a, player_b, player_c):
+            with suppress(Exception):
+                await asyncio.wait_for(player.disconnect(), timeout=2.0)
+            with suppress(Exception):
+                await asyncio.wait_for(player.close(), timeout=2.0)
 
 
 @pytest.mark.asyncio

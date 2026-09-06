@@ -171,6 +171,8 @@ class FakeLmsServer:
             return self._handle_playlistcontrol_command(player_id, command)
         if action == "sync":
             return self._handle_sync_command(player_id, command)
+        if action == "playerpref":
+            return self._handle_playerpref_command(player_id, command)
         if action == "mixer":
             return self._handle_mixer_command(player_id, command)
         if action == "time":
@@ -410,6 +412,7 @@ class FakeLmsServer:
             "time": 0.0,
             "player_name": player_id,
             "isplaying": 0,
+            "syncVolume": 0,
             "sync_master": "",
             "sync_slaves": [],
         }
@@ -833,10 +836,55 @@ class FakeLmsServer:
             return self.set_player_mode(player_id, "stop")
         return self._status_for_player(player_id)
 
+    def _handle_playerpref_command(self, player_id: str, command: list[Any]) -> dict[str, Any]:
+        """Apply LMS playerpref commands relevant for syncVolume tests."""
+        player = self._ensure_player(player_id)
+        pref_name = str(command[1]) if len(command) > 1 else ""
+        if pref_name != "syncVolume":
+            return self._status_for_player(player_id)
+
+        if len(command) < 3 or command[2] == "?":
+            return {"_p2": player.get("syncVolume", 0)}
+
+        player["syncVolume"] = 1 if _coerce_int(command[2], 0) else 0
+        self._notify_player_state(player_id)
+        return {"_p2": player["syncVolume"]}
+
     def _handle_mixer_command(self, player_id: str, command: list[Any]) -> dict[str, Any]:
         """Apply LMS mixer commands relevant for player command tests."""
         player = self._ensure_player(player_id)
         sub_action = str(command[1]) if len(command) > 1 else ""
+
+        if sub_action == "volume":
+            current_volume = _coerce_int(player.get("volume"), 50)
+            if (
+                len(command) > 2
+                and isinstance(command[2], str)
+                and str(command[2]).startswith(("+", "-"))
+            ):
+                new_volume = current_volume + _coerce_int(command[2], 0)
+            elif len(command) > 2:
+                new_volume = _coerce_int(command[2], current_volume)
+            else:
+                new_volume = current_volume
+            new_volume = max(0, min(100, new_volume))
+
+            leader_id = cast("str", player.get("sync_master", "")).strip() or player_id
+            leader = self._ensure_player(leader_id)
+            self._rebuild_sync_relations()
+            if _coerce_int(player.get("syncVolume"), 0):
+                group_member_ids = [leader_id, *cast("list[str]", leader.get("sync_slaves", []))]
+                for member_id in group_member_ids:
+                    group_player = self._ensure_player(member_id)
+                    if not _coerce_int(group_player.get("syncVolume"), 0):
+                        continue
+                    group_player["volume"] = new_volume
+                    self._notify_player_state(member_id)
+                return self._status_for_player(player_id)
+
+            player["volume"] = new_volume
+            self._notify_player_state(player_id)
+            return self._status_for_player(player_id)
 
         if sub_action == "muting":
             if len(command) > 2:
@@ -943,6 +991,7 @@ class FakeLmsServer:
             "pause",
             "stop",
             "sync",
+            "playerpref",
             "playlist",
             "playlistcontrol",
             "mixer",
