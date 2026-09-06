@@ -3,26 +3,25 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, cast
 
 from aiohttp import ClientError, ClientTimeout
 from music_assistant_models.errors import ProviderUnavailableError
 
-from music_assistant.providers.lyrion_player.cometd_events import (
-    LmsPlayerEventCallback,
-    LmsPlayerPlaybackChangedEvent,
-    LmsPlayerPlaylistChangedEvent,
-    LmsPlayerPowerChangedEvent,
-    LmsPlayerRepeatChangedEvent,
-    LmsPlayerSeekedEvent,
-    LmsPlayerShuffleChangedEvent,
-    LmsPlayerStatusUpdatedEvent,
-    LmsPlayerVolumeChangedEvent,
-    StatusPayload,
-)
-
 from .bayeux_client import BayeuxClient
+
+if TYPE_CHECKING:
+    from music_assistant.providers.lyrion_player.cometd_events import (
+        LmsPlayerEventCallback,
+        StatusPayload,
+    )
+
+    from .provider import LyrionPlayerProvider
+
+StatusPayload = dict[str, Any]
+LmsPlayerEventCallback = Callable[[Any], Awaitable[None]]
 from .constants import (
     COMETD_CONNECT_TIMEOUT,
     COMETD_PLAYERSTATUS_TAGS,
@@ -31,9 +30,6 @@ from .constants import (
     COMETD_SERVERSTATUS_SUBSCRIBE_INTERVAL,
     RPC_TIMEOUT,
 )
-
-if TYPE_CHECKING:
-    from .provider import LyrionPlayerProvider
 
 
 class LyrionCometDEventStream:
@@ -319,6 +315,17 @@ class LyrionCometDEventStream:
         partial: StatusPayload,
     ) -> None:
         """Merge one playerstatus payload, compute diffs, and emit events."""
+        from music_assistant.providers.lyrion_player.cometd_events import (
+            LmsPlayerPlaybackChangedEvent,
+            LmsPlayerPlaylistChangedEvent,
+            LmsPlayerPowerChangedEvent,
+            LmsPlayerRepeatChangedEvent,
+            LmsPlayerSeekedEvent,
+            LmsPlayerShuffleChangedEvent,
+            LmsPlayerStatusUpdatedEvent,
+            LmsPlayerVolumeChangedEvent,
+        )
+
         if _is_invalid_player_payload(partial):
             self._status_by_player.pop(player_id, None)
             self.mark_player_removed(player_id)

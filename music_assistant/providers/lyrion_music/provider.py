@@ -32,7 +32,7 @@ from music_assistant_models.streamdetails import StreamDetails
 
 from music_assistant.controllers.cache import use_cache
 from music_assistant.models.music_provider import MusicProvider
-from music_assistant.providers.lyrion_music.shared.setup_flow import validate_lms_endpoint
+from music_assistant.providers.lyrion.setup_flow import validate_lms_endpoint
 
 from . import artwork, client, parsers, sync
 from .constants import (

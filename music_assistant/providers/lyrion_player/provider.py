@@ -18,7 +18,8 @@ from music_assistant_models.errors import (
 )
 
 from music_assistant.models.player_provider import PlayerProvider
-from music_assistant.providers.lyrion_music.shared.setup_flow import validate_lms_endpoint
+from music_assistant.providers.lyrion.lyrion_cometd import LyrionCometDEventStream
+from music_assistant.providers.lyrion.setup_flow import validate_lms_endpoint
 
 from .cometd_event_adapter import LyrionCometDEventAdapter
 from .constants import (
@@ -28,7 +29,6 @@ from .constants import (
     PLAYERS_BATCH_SIZE,
     RPC_TIMEOUT,
 )
-from music_assistant.providers.lyrion_music.shared.lyrion_cometd import LyrionCometDEventStream
 from .player import LyrionPlayer
 
 

@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from music_assistant.providers.lyrion_music.shared.lyrion_cometd import (
-    LyrionCometDEventStream,
-)
+from music_assistant.providers.lyrion.lyrion_cometd import LyrionCometDEventStream
 
 __all__ = ["LyrionCometDEventStream"]
 

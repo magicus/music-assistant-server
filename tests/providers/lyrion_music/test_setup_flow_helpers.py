@@ -12,8 +12,8 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from music_assistant_models.errors import SetupFailedError
 
+from music_assistant.providers.lyrion import setup_flow as shared_setup_flow
 from music_assistant.providers.lyrion_music import setup_flow
-from music_assistant.providers.lyrion_music.shared import setup_flow as shared_setup_flow
 from tests.providers.lyrion.rpc_test_doubles import FakeResponse
 
 
@@ -100,7 +100,7 @@ async def test_validate_lms_endpoint_happy_path() -> None:
             new=AsyncMock(return_value=[object()]),
         ),
         patch(
-            "music_assistant.providers.lyrion_music.shared.setup_flow.asyncio.open_connection",
+            "music_assistant.providers.lyrion.setup_flow.asyncio.open_connection",
             new=AsyncMock(return_value=(object(), _FakeWriter())),
         ),
     ):
@@ -157,7 +157,7 @@ async def test_validate_lms_endpoint_unreachable_and_not_lyrion() -> None:
             new=AsyncMock(return_value=[object()]),
         ),
         patch(
-            "music_assistant.providers.lyrion_music.shared.setup_flow.asyncio.open_connection",
+            "music_assistant.providers.lyrion.setup_flow.asyncio.open_connection",
             new=AsyncMock(side_effect=OSError("no route")),
         ),
         pytest.raises(SetupFailedError, match="endpoint_unreachable"),
@@ -175,7 +175,7 @@ async def test_validate_lms_endpoint_unreachable_and_not_lyrion() -> None:
             new=AsyncMock(return_value=[object()]),
         ),
         patch(
-            "music_assistant.providers.lyrion_music.shared.setup_flow.asyncio.open_connection",
+            "music_assistant.providers.lyrion.setup_flow.asyncio.open_connection",
             new=AsyncMock(return_value=(object(), _FakeWriter())),
         ),
         pytest.raises(SetupFailedError, match="serverstatus_invalid"),
@@ -196,7 +196,7 @@ async def test_validate_lms_endpoint_unreachable_and_not_lyrion() -> None:
             new=AsyncMock(return_value=[object()]),
         ),
         patch(
-            "music_assistant.providers.lyrion_music.shared.setup_flow.asyncio.open_connection",
+            "music_assistant.providers.lyrion.setup_flow.asyncio.open_connection",
             new=AsyncMock(return_value=(object(), _FakeWriter())),
         ),
         pytest.raises(SetupFailedError, match="endpoint_not_lyrion"),

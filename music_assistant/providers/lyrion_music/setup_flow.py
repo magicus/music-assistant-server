@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from music_assistant.providers.lyrion_music.shared.setup_flow import run_lms_setup_flow
+from music_assistant.providers.lyrion.setup_flow import run_lms_setup_flow
 
 from .constants import CONF_LMS_HOST, CONF_LMS_PORT, DEFAULT_LMS_PORT
 
