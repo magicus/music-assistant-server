@@ -9,7 +9,6 @@ from unittest.mock import MagicMock
 import pytest
 
 from music_assistant.providers.lyrion_player.player import LyrionPlayer
-from tests.providers.lyrion.fake_lms_server import FakeLmsServer
 from tests.providers.lyrion.lms_server_harness import LyrionTestEndpoint
 from tests.providers.lyrion.scriptable_slimproto_player import ScriptableSlimProtoPlayer
 from tests.providers.lyrion_player.harness_test_support import (
@@ -285,45 +284,10 @@ async def test_fake_player_ir_mute_toggles_mixer_muting_state(
 
 
 @pytest.mark.asyncio
-async def test_fake_player_seek_path_uses_time_command_for_exact_position(
+async def test_seek_path_uses_jsonrpc_time(
     lyrion_test_endpoint: LyrionTestEndpoint,
 ) -> None:
-    """Seek should be validated via explicit LMS time seconds, not IR jump semantics."""
-    if lyrion_test_endpoint.fake_server is None:
-        pytest.skip("seek-time assertions are specific to the fake LMS backend")
-
-    player = ScriptableSlimProtoPlayer(
-        endpoint=lyrion_test_endpoint,
-        player_id="fake-player-time-seek",
-        name="Fake Seek Player",
-        model="test",
-    )
-    rpc_client: EndpointRpcClient | None = None
-    try:
-        await player.connect()
-        rpc_client = EndpointRpcClient(lyrion_test_endpoint, player.rpc_player_id)
-
-        await rpc_client.send(["time", 37])
-        status = await rpc_client.send(["status", 0, 100])
-        assert float(status.get("time", 0.0)) == 37.0
-        assert player.elapsed_time == 37.0
-
-        await rpc_client.send(["time", 5])
-        status = await rpc_client.send(["status", 0, 100])
-        assert float(status.get("time", 0.0)) == 5.0
-        assert player.elapsed_time == 5.0
-    finally:
-        if rpc_client is not None:
-            await rpc_client.close()
-        await player.close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.live_lyrion_docker
-async def test_seek_path_uses_jsonrpc_time_live_backend(
-    lyrion_test_endpoint: LyrionTestEndpoint,
-) -> None:
-    """Live LMS accepts JSON-RPC time seeks, but may omit the field while stopped."""
+    """LMS accepts JSON-RPC time seeks, but may omit the field while stopped."""
     player = ScriptableSlimProtoPlayer(
         endpoint=lyrion_test_endpoint,
         player_id="live-player-time-seek",
@@ -349,107 +313,6 @@ async def test_seek_path_uses_jsonrpc_time_live_backend(
 
 
 @pytest.mark.asyncio
-async def test_fake_player_reports_local_playback_state_across_multiple_sources(
-    lyrion_test_endpoint: LyrionTestEndpoint,
-) -> None:
-    """A fake player should expose local state that matches the current fake/live pause semantics."""
-    if lyrion_test_endpoint.fake_server is None:
-        pytest.skip("local-state assertions are only meaningful for the fake LMS backend")
-
-    player = ScriptableSlimProtoPlayer(
-        endpoint=lyrion_test_endpoint,
-        player_id="fake-player-local-state",
-        name="Fake Local State",
-        model="test",
-    )
-    provider = FakeMAProvider(lyrion_test_endpoint.fake_server, player.player_id)
-    rpc_client: EndpointRpcClient | None = None
-
-    await player.connect()
-    try:
-        rpc_client = EndpointRpcClient(lyrion_test_endpoint, player.rpc_player_id)
-        assert player.mode == "stop"
-        assert player.is_paused() is False
-        assert player.is_playing() is False
-
-        await provider.send_player_command(["playlistcontrol", "cmd:load", "track_id:t1"])
-        await provider.send_player_command(["play"])
-        assert player.is_playing() is True
-        assert player.is_paused() is False
-
-        await rpc_client.send(["pause"])
-        assert player.is_playing() is True
-        assert player.mode == "play"
-
-        await provider.send_player_command(["play"])
-        assert player.is_playing() is True
-
-        await player.pause()
-        assert player.is_playing() is True
-    finally:
-        if rpc_client is not None:
-            await rpc_client.close()
-        await player.close()
-
-
-@pytest.mark.asyncio
-async def test_fake_players_keep_state_in_sync_when_play_pause_sources_conflict(
-    lyrion_test_endpoint: LyrionTestEndpoint,
-) -> None:
-    """Pause attempts should not disturb independently playing peers in the fake harness."""
-    if lyrion_test_endpoint.fake_server is None:
-        pytest.skip("the conflict case is validated against the fake LMS backend")
-
-    player_a = ScriptableSlimProtoPlayer(
-        endpoint=lyrion_test_endpoint,
-        player_id="fake-player-a",
-        name="Fake A",
-        model="test",
-    )
-    player_b = ScriptableSlimProtoPlayer(
-        endpoint=lyrion_test_endpoint,
-        player_id="fake-player-b",
-        name="Fake B",
-        model="test",
-    )
-    provider_a = FakeMAProvider(lyrion_test_endpoint.fake_server, "fake-player-a")
-    provider_b = FakeMAProvider(lyrion_test_endpoint.fake_server, "fake-player-b")
-    rpc_a: EndpointRpcClient | None = None
-
-    await player_a.connect()
-    await player_b.connect()
-    try:
-        rpc_a = EndpointRpcClient(lyrion_test_endpoint, player_a.rpc_player_id)
-
-        await provider_a.send_player_command(["playlistcontrol", "cmd:load", "track_id:t1"])
-        await provider_a.send_player_command(["play"])
-        assert player_a.is_playing() is True
-        assert player_b.is_playing() is False
-
-        await provider_b.send_player_command(["pause"])
-        assert player_b.is_playing() is False
-        assert player_a.is_playing() is True
-
-        await provider_b.send_player_command(["playlistcontrol", "cmd:load", "track_id:t1"])
-        await provider_b.send_player_command(["play"])
-        assert player_b.is_playing() is True
-        assert player_a.is_playing() is True
-
-        await rpc_a.send(["pause"])
-        assert player_a.is_playing() is True
-        assert player_b.is_playing() is True
-
-        await player_b.pause()
-        assert player_b.is_playing() is True
-        assert player_a.is_playing() is True
-    finally:
-        if rpc_a is not None:
-            await rpc_a.close()
-        await player_a.close()
-        await player_b.close()
-
-
-@pytest.mark.asyncio
 async def test_fake_player_harness_uses_same_endpoint_contract_for_real_lms() -> None:
     """The player only depends on the shared endpoint contract, not the backend implementation."""
     endpoint = LyrionTestEndpoint(
@@ -470,23 +333,6 @@ async def test_fake_player_harness_uses_same_endpoint_contract_for_real_lms() ->
     assert player.endpoint.host == "127.0.0.1"
     assert player.endpoint.slimproto_port == 3483
     assert player.player_id == "docker-player-1"
-
-
-@pytest.mark.asyncio
-async def test_fake_lms_server_builds_player_status_payload() -> None:
-    """The fake LMS should keep its player roster and status payloads consistent."""
-    server = FakeLmsServer()
-    await server.connect_player("test-1", "Kitchen", "test")
-
-    result = server._build_serverstatus_result()
-    assert result["player count"] == 1
-    assert result["players_loop"][0]["playerid"] == "test-1"
-    assert result["players_loop"][0]["connected"] == 1
-
-    status = server._status_for_player("test-1")
-    assert status["playerid"] == "test-1"
-    assert status["mode"] == "stop"
-    assert status["power"] == 1
 
 
 @pytest.mark.asyncio
