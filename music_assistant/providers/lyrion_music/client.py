@@ -8,15 +8,14 @@ from dataclasses import dataclass
 from time import monotonic
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-from aiohttp import ClientError, ClientTimeout
 from music_assistant_models.errors import MediaNotFoundError, ProviderUnavailableError
 
-from music_assistant.constants import VERBOSE_LOG_LEVEL
 from music_assistant.controllers.tasks import (
     get_current_task,
     update_current_task_progress,
     update_current_task_progress_text,
 )
+from music_assistant.providers.lyrion.client import rpc_request
 
 from . import parsers
 from .constants import (
@@ -25,10 +24,6 @@ from .constants import (
     ARTWORK_WORKER_COUNT,
     BATCH_LOOKUP_SIZE,
     BROWSE_PAGE_SIZE,
-    CONF_LMS_HOST,
-    CONF_LMS_PORT,
-    DEFAULT_LMS_PORT,
-    RPC_TIMEOUT,
     TRACK_TAGS,
 )
 
@@ -1026,83 +1021,3 @@ def _chunked(item_ids: list[str], chunk_size: int) -> Iterable[list[str]]:
     """Yield stable chunks from a list of ids."""
     for offset in range(0, len(item_ids), chunk_size):
         yield item_ids[offset : offset + chunk_size]
-
-
-async def rpc_request(
-    provider: LyrionMusicProvider, player_id: str, command: list[Any]
-) -> dict[str, Any]:
-    """Execute one LMS JSON-RPC request."""
-    host = get_configured_host(provider)
-    if not host:
-        raise ProviderUnavailableError("Lyrion host is not configured")
-    port = get_configured_port(provider)
-    payload = {
-        "id": 1,
-        "method": "slim.request",
-        "params": [player_id, command],
-    }
-    url = f"http://{host}:{port}/jsonrpc.js"
-    provider.logger.log(
-        VERBOSE_LOG_LEVEL,
-        "Lyrion RPC %s -> %s:%s",
-        command[0],
-        host,
-        port,
-    )
-
-    try:
-        async with provider.mass.http_session.post(
-            url, json=payload, timeout=ClientTimeout(total=RPC_TIMEOUT)
-        ) as response:
-            response.raise_for_status()
-            data = cast("dict[str, Any]", await response.json())
-    except TimeoutError as err:
-        raise ProviderUnavailableError(
-            f"Lyrion server at {host}:{port} did not respond in time "
-            f"({RPC_TIMEOUT}s). Verify that Lyrion is running and reachable."
-        ) from err
-    except ClientError as err:
-        raise ProviderUnavailableError(
-            f"Lyrion JSON-RPC connection to {host}:{port} failed: {err}. "
-            "Verify host/port and local network connectivity."
-        ) from err
-    except ValueError as err:
-        raise ProviderUnavailableError(
-            f"Lyrion JSON-RPC returned invalid JSON for command {command[0]}"
-        ) from err
-
-    if error_payload := cast("dict[str, Any] | None", data.get("error")):
-        error_code = error_payload.get("code", "unknown")
-        error_message = error_payload.get("message", "unknown JSON-RPC error")
-        raise ProviderUnavailableError(
-            f"Lyrion JSON-RPC command {command[0]} failed with code {error_code}: {error_message}"
-        )
-
-    result = cast("dict[str, Any] | None", data.get("result"))
-    if result is None:
-        raise ProviderUnavailableError(
-            f"Lyrion JSON-RPC response for command {command[0]} is missing result payload"
-        )
-    return result
-
-
-def get_configured_host(provider: LyrionMusicProvider) -> str | None:
-    """Return configured host from setup data with config fallback."""
-    raw_host = provider.get_setup_value(CONF_LMS_HOST)
-    if not isinstance(raw_host, str):
-        return None
-    host = raw_host.strip()
-    return host or None
-
-
-def get_configured_port(
-    provider: LyrionMusicProvider, default: int | None = DEFAULT_LMS_PORT
-) -> int | None:
-    """Return configured port from setup data with config fallback."""
-    raw_port = provider.get_setup_value(CONF_LMS_PORT, default)
-    if raw_port is None:
-        return None
-    try:
-        return int(cast("int | str", raw_port))
-    except TypeError, ValueError:
-        return default

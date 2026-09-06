@@ -8,7 +8,7 @@ from contextlib import suppress
 from typing import Any, cast
 from urllib.parse import urlencode
 
-from aiohttp import ClientError, ClientTimeout, ServerDisconnectedError, web
+from aiohttp import web
 from music_assistant_models.config_entries import ConfigEntry
 from music_assistant_models.enums import ConfigEntryType
 from music_assistant_models.errors import (
@@ -18,17 +18,16 @@ from music_assistant_models.errors import (
 )
 
 from music_assistant.models.player_provider import PlayerProvider
+from music_assistant.providers.lyrion.client import (
+    get_configured_host,
+    get_configured_port,
+    rpc_request,
+)
 from music_assistant.providers.lyrion.lyrion_cometd import LyrionCometDEventStream
 from music_assistant.providers.lyrion.setup_flow import validate_lms_endpoint
 
 from .cometd_event_adapter import LyrionCometDEventAdapter
-from .constants import (
-    CONF_LMS_HOST,
-    CONF_LMS_PORT,
-    DEFAULT_LMS_PORT,
-    PLAYERS_BATCH_SIZE,
-    RPC_TIMEOUT,
-)
+from .constants import CONF_LMS_HOST, CONF_LMS_PORT, DEFAULT_LMS_PORT, PLAYERS_BATCH_SIZE
 from .player import LyrionPlayer
 
 
@@ -319,76 +318,19 @@ class LyrionPlayerProvider(PlayerProvider):
         player_id: str,
         command: list[Any],
     ) -> dict[str, Any]:
-        """
-        Execute one LMS JSON-RPC request.
-
-        :param player_id: LMS player id.
-            Empty string for server-level commands.
-        :param command: LMS command list.
-        """
-        host = self._get_configured_host()
-        if not host:
-            raise ProviderUnavailableError("Lyrion host is not configured")
-        port = self._get_configured_port()
-        payload = {
-            "id": 1,
-            "method": "slim.request",
-            "params": [player_id, command],
-        }
-        url = f"http://{host}:{port}/jsonrpc.js"
-        self.logger.debug(
-            "Lyrion RPC request to %s:%s with command %s",
-            host,
-            port,
-            command,
-        )
-
-        last_error: Exception | None = None
-        for attempt in range(2):
-            try:
-                async with self.mass.http_session.post(
-                    url,
-                    json=payload,
-                    timeout=ClientTimeout(total=RPC_TIMEOUT),
-                ) as response:
-                    response.raise_for_status()
-                    data = cast("dict[str, Any]", await response.json())
-                break
-            except (
-                ServerDisconnectedError,
-                ClientError,
-                TimeoutError,
-                ValueError,
-            ) as err:
-                last_error = err
-                if attempt == 0 and isinstance(err, ServerDisconnectedError):
-                    self.logger.debug(
-                        ("Retrying Lyrion RPC request to %s:%s after disconnect"),
-                        host,
-                        port,
-                    )
-                    continue
-                raise ProviderUnavailableError(
-                    f"Lyrion JSON-RPC request to {host}:{port} failed: {err}"
-                ) from err
-
-        assert last_error is None or isinstance(data, dict)
-
-        result = cast("dict[str, Any] | None", data.get("result"))
-        if result is None:
-            raise ProviderUnavailableError("Lyrion JSON-RPC response is missing result payload")
-        return result
+        """Execute one LMS JSON-RPC request via the shared Lyrion transport."""
+        return await rpc_request(self, player_id=player_id, command=command)
 
     def _get_configured_host(self) -> str | None:
         """Backward-compatible wrapper for internal host access."""
-        return self.get_configured_host()
+        return get_configured_host(self)
 
     def _get_configured_port(
         self,
         default: int | None = DEFAULT_LMS_PORT,
     ) -> int | None:
         """Backward-compatible wrapper for internal port access."""
-        return self.get_configured_port(default)
+        return get_configured_port(self, default)
 
     async def _run_discover_players_loop(self) -> None:
         """Run player discovery once or repeatedly while new triggers arrive."""
