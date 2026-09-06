@@ -9,9 +9,9 @@ from typing import Any
 import aiohttp
 import pytest
 
-from tests.providers.lyrion.fake_lms_player import FakeSlimProtoPlayer
 from tests.providers.lyrion.fake_lms_server import FakeLmsServer
 from tests.providers.lyrion.lms_server_harness import LyrionTestEndpoint
+from tests.providers.lyrion.scriptable_slimproto_player import ScriptableSlimProtoPlayer
 
 
 class FakeMAProvider:
@@ -153,15 +153,17 @@ async def test_fake_player_registers_on_fake_lms(
     lyrion_test_endpoint: LyrionTestEndpoint,
 ) -> None:
     """A fake slimproto player should show up as a connected LMS player on the active backend."""
-    player = FakeSlimProtoPlayer(
+    player = ScriptableSlimProtoPlayer(
         endpoint=lyrion_test_endpoint,
         player_id="fake-player-1",
         name="Fake Bedroom",
         model="test",
     )
 
+    rpc_client: EndpointRpcClient | None = None
     try:
         await player.connect()
+        rpc_client = EndpointRpcClient(lyrion_test_endpoint, player.rpc_player_id)
         state = (
             player.endpoint.fake_server.players["fake-player-1"]
             if player.endpoint.fake_server
@@ -171,13 +173,15 @@ async def test_fake_player_registers_on_fake_lms(
             assert state["connected"] == 1
             assert state["name"] == "Fake Bedroom"
 
-        player_status = await player.request_status()
+        player_status = await rpc_client.send(["status", 0, 100])
         assert player_status.get("playerid", player.rpc_player_id) == player.rpc_player_id
         assert _player_connected(player_status) == 1
         assert player_status["mode"] == "stop"
 
         await player.disconnect()
     finally:
+        if rpc_client is not None:
+            await rpc_client.close()
         await player.close()
 
 
@@ -186,7 +190,7 @@ async def test_fake_player_detects_connect_and_disconnect_events(
     lyrion_test_endpoint: LyrionTestEndpoint,
 ) -> None:
     """The active LMS backend should report when a slimproto player connects and disconnects."""
-    player = FakeSlimProtoPlayer(
+    player = ScriptableSlimProtoPlayer(
         endpoint=lyrion_test_endpoint,
         player_id="fake-player-2",
         name="Fake Office",
@@ -214,7 +218,7 @@ async def test_fake_player_and_ma_provider_sync_play_and_pause_states(
     lyrion_test_endpoint: LyrionTestEndpoint,
 ) -> None:
     """Both MA commands and slimproto player commands should update the same underlying LMS state."""
-    player = FakeSlimProtoPlayer(
+    player = ScriptableSlimProtoPlayer(
         endpoint=lyrion_test_endpoint,
         player_id="fake-player-3",
         name="Fake Kitchen",
@@ -247,7 +251,7 @@ async def test_fake_player_uses_real_slimproto_button_events_for_play_and_pause(
     lyrion_test_endpoint: LyrionTestEndpoint,
 ) -> None:
     """Fake play and pause should be emitted as real SlimProto button events."""
-    player = FakeSlimProtoPlayer(
+    player = ScriptableSlimProtoPlayer(
         endpoint=lyrion_test_endpoint,
         player_id="fake-player-button",
         name="Fake Button Player",
@@ -277,7 +281,7 @@ async def test_fake_player_reports_local_playback_state_across_multiple_sources(
     if lyrion_test_endpoint.fake_server is None:
         pytest.skip("local-state assertions are only meaningful for the fake LMS backend")
 
-    player = FakeSlimProtoPlayer(
+    player = ScriptableSlimProtoPlayer(
         endpoint=lyrion_test_endpoint,
         player_id="fake-player-local-state",
         name="Fake Local State",
@@ -319,13 +323,13 @@ async def test_fake_players_keep_state_in_sync_when_play_pause_sources_conflict(
     if lyrion_test_endpoint.fake_server is None:
         pytest.skip("the conflict case is validated against the fake LMS backend")
 
-    player_a = FakeSlimProtoPlayer(
+    player_a = ScriptableSlimProtoPlayer(
         endpoint=lyrion_test_endpoint,
         player_id="fake-player-a",
         name="Fake A",
         model="test",
     )
-    player_b = FakeSlimProtoPlayer(
+    player_b = ScriptableSlimProtoPlayer(
         endpoint=lyrion_test_endpoint,
         player_id="fake-player-b",
         name="Fake B",
@@ -371,7 +375,7 @@ async def test_queue_state_stays_consistent_when_three_sources_alternate_aggress
     lyrion_test_endpoint: LyrionTestEndpoint,
 ) -> None:
     """Queue transitions should remain coherent when MA/provider, direct JSON-RPC and SlimProto updates interleave."""
-    player = FakeSlimProtoPlayer(
+    player = ScriptableSlimProtoPlayer(
         endpoint=lyrion_test_endpoint,
         player_id="fake-player-queue-adversarial",
         name="Fake Queue Adversarial",
@@ -391,18 +395,18 @@ async def test_queue_state_stays_consistent_when_three_sources_alternate_aggress
         )
         await direct_rpc_client.send(["playlist", "add", "http://queue.local/track-c.mp3"])
 
-        status = await player.request_status()
+        status = await direct_rpc_client.send(["status", 0, 100])
         assert _playlist_tracks(status) == 3
         assert _playlist_index(status) == 0
 
         # 1) MA/provider path changes active queue index.
         await provider_client.send_player_command(["playlist", "index", 1])
-        status = await player.request_status()
+        status = await direct_rpc_client.send(["status", 0, 100])
         assert _playlist_index(status) == 1
 
         # 2) Direct LMS JSON-RPC mutates queue shape under the player.
         await direct_rpc_client.send(["playlist", "delete", 0])
-        status = await player.request_status()
+        status = await direct_rpc_client.send(["status", 0, 100])
         assert _playlist_tracks(status) == 2
         assert _playlist_index(status) == 0
 
@@ -438,7 +442,7 @@ async def test_queue_duplicate_track_reordering_survives_cross_source_churn(
     lyrion_test_endpoint: LyrionTestEndpoint,
 ) -> None:
     """A duplicate-heavy queue should keep coherent ordering/index while updates alternate across all control paths."""
-    player = FakeSlimProtoPlayer(
+    player = ScriptableSlimProtoPlayer(
         endpoint=lyrion_test_endpoint,
         player_id="fake-player-queue-dupes",
         name="Fake Queue Dupes",
@@ -512,7 +516,7 @@ async def test_queue_duplicate_swap_and_bridge_hops_keep_index_valid(
     lyrion_test_endpoint: LyrionTestEndpoint,
 ) -> None:
     """Moving duplicate items across a middle sentinel should not corrupt queue length or active index bounds."""
-    player = FakeSlimProtoPlayer(
+    player = ScriptableSlimProtoPlayer(
         endpoint=lyrion_test_endpoint,
         player_id="fake-player-queue-bridge",
         name="Fake Queue Bridge",
@@ -577,7 +581,7 @@ async def test_fake_player_harness_uses_same_endpoint_contract_for_real_lms() ->
         slimproto_port=3483,
     )
 
-    player = FakeSlimProtoPlayer(
+    player = ScriptableSlimProtoPlayer(
         endpoint=endpoint,
         player_id="docker-player-1",
         name="Docker Player",
