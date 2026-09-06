@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -46,6 +48,10 @@ class FakeLmsServer:
         self.missing_large_artist_images: set[str] = {"a3"}
         self.missing_large_album_images: set[str] = {"alb6"}
         self.players: dict[str, dict[str, Any]] = {}
+        self.slimproto_players: dict[str, dict[str, Any]] = {}
+        self._player_state_listeners: list[Callable[[str, dict[str, Any]], None]] = []
+        self._slimproto_server: asyncio.Server | None = None
+        self._slimproto_connections: dict[str, asyncio.StreamWriter] = {}
 
         self.artists: list[dict[str, Any]] = fake_artists()
         self.albums: list[dict[str, Any]] = fake_albums()
@@ -53,6 +59,25 @@ class FakeLmsServer:
         self.playlists: list[dict[str, Any]] = fake_playlists()
         self.genres: list[dict[str, Any]] = fake_genres()
         self.playlist_tracks: dict[str, list[str]] = fake_playlist_tracks()
+
+    def add_player_state_listener(
+        self,
+        callback: Callable[[str, dict[str, Any]], None],
+    ) -> None:
+        """Register a callback for player connect/disconnect/state changes."""
+        self._player_state_listeners.append(callback)
+
+    def _notify_player_state(self, player_id: str) -> None:
+        """Emit the latest state update to registered listeners."""
+        if player_id not in self.players:
+            player = self.slimproto_players.get(player_id)
+            if player is None:
+                return
+            state = dict(player)
+        else:
+            state = dict(self.players[player_id])
+        for listener in self._player_state_listeners:
+            listener(player_id, state)
 
     async def connect_player(self, player_id: str, name: str, model: str) -> dict[str, Any]:
         """Register a connected fake player and return its player metadata."""
@@ -71,16 +96,194 @@ class FakeLmsServer:
             "sync_master": "",
         }
         self.players[player_id] = player
+        self.slimproto_players[player_id] = {
+            "playerid": player_id,
+            "name": name,
+            "model": model,
+            "connected": True,
+            "power": True,
+            "mode": "stop",
+            "volume": 50,
+        }
+        self._notify_player_state(player_id)
         return player
 
     async def disconnect_player(self, player_id: str) -> dict[str, Any]:
         """Disconnect a registered fake player."""
         player = self.players.pop(player_id, {})
+        if player:
+            player["connected"] = 0
+            player["power"] = 0
+            player["mode"] = "stop"
+        slimproto = self.slimproto_players.get(player_id)
+        if slimproto is not None:
+            slimproto["connected"] = False
+            slimproto["power"] = False
+            slimproto["mode"] = "stop"
+        self._notify_player_state(player_id)
         if not player:
             return {"playerid": player_id, "connected": 0, "power": 0}
-        player["connected"] = 0
-        player["power"] = 0
         return player
+
+    def set_player_mode(self, player_id: str, mode: str) -> dict[str, Any]:
+        """Update the fake player's runtime play state and notify listeners."""
+        player = self.players.setdefault(
+            player_id,
+            {
+                "playerid": player_id,
+                "name": player_id,
+                "model": "test",
+                "connected": 1,
+                "power": 1,
+                "mode": "stop",
+                "volume": 50,
+                "playlist index": 0,
+                "playlist tracks": 0,
+                "player_name": player_id,
+                "isplaying": 0,
+                "sync_master": "",
+            },
+        )
+        player["mode"] = mode
+        player["isplaying"] = 1 if mode == "play" else 0
+        slimproto = self.slimproto_players.setdefault(
+            player_id,
+            {
+                "playerid": player_id,
+                "name": player_id,
+                "model": "test",
+                "connected": True,
+                "power": True,
+                "mode": "stop",
+                "volume": 50,
+            },
+        )
+        slimproto["mode"] = mode
+        slimproto["connected"] = True
+        slimproto["power"] = True
+        self._notify_player_state(player_id)
+        return self._status_for_player(player_id)
+
+    async def handle_jsonrpc_command(self, player_id: str, command: list[Any]) -> dict[str, Any]:
+        """Apply a command list to a fake player, matching LMS JSON-RPC behavior."""
+        if not command:
+            raise ValueError("command cannot be empty")
+
+        action = str(command[0])
+        if action == "status":
+            return self._status_for_player(player_id)
+        if action == "play":
+            return self.set_player_mode(player_id, "play")
+        if action == "pause":
+            return self.set_player_mode(player_id, "pause")
+        if action == "stop":
+            return self.set_player_mode(player_id, "stop")
+        if action == "player":
+            sub_action = command[1] if len(command) > 1 else ""
+            if sub_action == "register":
+                name = str(command[2]) if len(command) > 2 else player_id
+                model = str(command[3]) if len(command) > 3 else "test"
+                await self.connect_player(player_id, name, model)
+                return self._status_for_player(player_id)
+            if sub_action == "disconnect":
+                await self.disconnect_player(player_id)
+                return {"playerid": player_id, "connected": 0}
+        if action == "players":
+            return self._build_serverstatus_result()
+        if action == "serverstatus":
+            return self._build_serverstatus_result()
+        return self._status_for_player(player_id)
+
+    async def start_slimproto_server(self, host: str, port: int) -> None:
+        """Start a tiny slimproto TCP server that tracks connect/disconnect and play/pause state."""
+        self._slimproto_server = await asyncio.start_server(
+            self._handle_slimproto_client,
+            host,
+            port,
+        )
+
+    async def stop_slimproto_server(self) -> None:
+        """Stop the fake slimproto TCP server."""
+        if self._slimproto_server is not None:
+            self._slimproto_server.close()
+            await self._slimproto_server.wait_closed()
+            self._slimproto_server = None
+        for writer in self._slimproto_connections.values():
+            if not writer.is_closing():
+                writer.close()
+        self._slimproto_connections.clear()
+
+    async def _handle_slimproto_client(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        """Handle a slimproto connection and reflect the connected player state in LMS."""
+        peername = writer.get_extra_info("peername")
+        peer = peername[0] if peername else "unknown"
+        data = await reader.read()
+        payload = data.decode("utf-8", errors="ignore").strip()
+        player_id = payload.split()[1] if payload.split() and len(payload.split()) > 1 else None
+        if not player_id:
+            writer.close()
+            return
+        self.slimproto_players[player_id] = {
+            "playerid": player_id,
+            "name": player_id,
+            "model": "test",
+            "connected": True,
+            "power": True,
+            "mode": self.players.get(player_id, {}).get("mode", "stop"),
+            "volume": self.players.get(player_id, {}).get("volume", 50),
+        }
+        self.players.setdefault(
+            player_id,
+            {
+                "playerid": player_id,
+                "name": player_id,
+                "model": "test",
+                "connected": 1,
+                "power": 1,
+                "mode": "stop",
+                "volume": 50,
+                "playlist index": 0,
+                "playlist tracks": 0,
+                "player_name": player_id,
+                "isplaying": 0,
+                "sync_master": "",
+            },
+        )
+        self.players[player_id]["connected"] = 1
+        self.players[player_id]["power"] = 1
+        self._slimproto_connections[player_id] = writer
+        self._notify_player_state(player_id)
+        try:
+            while not reader.at_eof():
+                command = await reader.readuntil(b"\n")
+                text = command.decode("utf-8", errors="ignore").strip().lower()
+                if not text:
+                    continue
+                if text == "pause":
+                    self.set_player_mode(player_id, "pause")
+                elif text == "play":
+                    self.set_player_mode(player_id, "play")
+                elif text == "stop":
+                    self.set_player_mode(player_id, "stop")
+                elif text == "disconnect":
+                    await self.disconnect_player(player_id)
+                    break
+        except asyncio.IncompleteReadError:
+            pass
+        finally:
+            self._slimproto_connections.pop(player_id, None)
+            self.players.get(player_id, {})["connected"] = 0
+            self.players.get(player_id, {})["power"] = 0
+            if player_id in self.slimproto_players:
+                self.slimproto_players[player_id]["connected"] = False
+                self.slimproto_players[player_id]["power"] = False
+            self._notify_player_state(player_id)
+            if not writer.is_closing():
+                writer.close()
 
     def _status_for_player(self, player_id: str) -> dict[str, Any]:
         """Return a status payload for a known fake player."""

@@ -70,8 +70,10 @@ class FakeLmsServerHarness:
         runner = web.AppRunner(fake_server.app)
         await runner.setup()
         port = self._unused_tcp_port_factory()
+        slimproto_port = self._unused_tcp_port_factory()
         site = web.TCPSite(runner, host="127.0.0.1", port=port)
         await site.start()
+        await fake_server.start_slimproto_server("127.0.0.1", slimproto_port)
 
         self._runner = runner
         self.fake_server = fake_server
@@ -81,10 +83,13 @@ class FakeLmsServerHarness:
             base_url=f"http://127.0.0.1:{port}",
             source=self.source,
             fake_server=fake_server,
+            slimproto_port=slimproto_port,
         )
 
     async def stop(self) -> None:
         """Stop fake LMS server if it is running."""
+        if self.fake_server is not None:
+            await self.fake_server.stop_slimproto_server()
         if self._runner is not None:
             await self._runner.cleanup()
         self._runner = None
