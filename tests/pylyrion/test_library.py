@@ -111,4 +111,3 @@ async def test_library_client_playlist_tracks_and_entity_data() -> None:
     assert playlist_page.has_more is False
     assert playlist_tracks == [{"id": "p1"}]
     assert artist_row == {"id": "a1", "artist": "Artist 1"}
-

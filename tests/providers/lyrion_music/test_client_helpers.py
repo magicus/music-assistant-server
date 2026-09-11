@@ -94,7 +94,9 @@ async def test_rpc_request_uses_shared_throttler(monkeypatch: pytest.MonkeyPatch
 async def test_get_entity_pages_skip_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
     """Page decoders should skip rows that raise MediaNotFoundError."""
     library = Mock()
-    library.get_entity_page = AsyncMock(return_value=SimpleNamespace(items=[{"id": "1"}, {"id": "2"}], has_more=False))
+    library.get_entity_page = AsyncMock(
+        return_value=SimpleNamespace(items=[{"id": "1"}, {"id": "2"}], has_more=False)
+    )
     monkeypatch.setattr(client, "_build_library_client", lambda _provider: library)
 
     def _parse_artist(_provider: Any, row: dict[str, Any]) -> str:
@@ -179,7 +181,9 @@ async def test_get_all_playlists_and_genres_paging(monkeypatch: pytest.MonkeyPat
     assert await client.get_all_genres(provider) == [{"id": "g1", "name": "G1"}]
 
 
-async def test_get_playlist_tracks_page_delegates_to_pylyrion(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_get_playlist_tracks_page_delegates_to_pylyrion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Playlist track paging should use the pylyrion page helper."""
     library = Mock()
     library.get_playlist_tracks_page = AsyncMock(

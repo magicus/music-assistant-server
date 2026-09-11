@@ -16,18 +16,10 @@ from music_assistant.controllers.tasks import (
     update_current_task_progress_text,
 )
 from music_assistant.providers.lyrion.client import normalize_lms_text_value, rpc_request
-from pylyrion.library import (
-    ALBUM_SPEC as PY_ALBUM_SPEC,
-)
-from pylyrion.library import (
-    ARTIST_SPEC as PY_ARTIST_SPEC,
-)
-from pylyrion.library import (
-    TRACK_SPEC as PY_TRACK_SPEC,
-)
-from pylyrion.library import (
-    LyrionLibraryClient,
-)
+from pylyrion.library import ALBUM_SPEC as PY_ALBUM_SPEC
+from pylyrion.library import ARTIST_SPEC as PY_ARTIST_SPEC
+from pylyrion.library import TRACK_SPEC as PY_TRACK_SPEC
+from pylyrion.library import LyrionLibraryClient
 from pylyrion.library import normalize_row as _normalize_lms_row
 from pylyrion.models import LyrionEndpoint
 from pylyrion.session import LyrionSession
@@ -228,6 +220,7 @@ async def get_genres_page(
         genre_name = normalized_genre.get("genre") or normalized_genre.get("name") or genre_id
         genres.append({"id": genre_id, "name": genre_name})
     return genres, page.has_more
+
 
 async def iter_library_artists(
     provider: LyrionMusicProvider,

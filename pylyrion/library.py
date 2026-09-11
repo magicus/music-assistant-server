@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import asyncio
-from collections.abc import Mapping
+from collections.abc import AsyncGenerator, Mapping
 from dataclasses import dataclass
 from time import monotonic
-from typing import Any, AsyncGenerator, Literal, cast
+from typing import Any, Literal, cast
 
-from pylyrion.session import LyrionSession, normalize_lms_text_value
 from pylyrion.errors import LyrionRequestError
+from pylyrion.session import LyrionSession, normalize_lms_text_value
 
 EntityKey = Literal["artist", "album", "track", "playlist", "genre"]
 
@@ -329,8 +328,7 @@ def _split_lookup_reply(
 def _chunked(item_ids: list[str], chunk_size: int) -> list[list[str]]:
     """Yield stable chunks from a list of ids."""
     return [
-        item_ids[offset : offset + chunk_size]
-        for offset in range(0, len(item_ids), chunk_size)
+        item_ids[offset : offset + chunk_size] for offset in range(0, len(item_ids), chunk_size)
     ]
 
 
@@ -490,15 +488,21 @@ class LyrionLibraryClient:
 
     async def get_artist_ids(self, filter_value: str | None = None) -> list[str]:
         """Return all artist ids from Lyrion."""
-        return await get_entity_ids(self._session, ARTIST_SPEC, DEFAULT_BROWSE_PAGE_SIZE, filter_value)
+        return await get_entity_ids(
+            self._session, ARTIST_SPEC, DEFAULT_BROWSE_PAGE_SIZE, filter_value
+        )
 
     async def get_album_ids(self, filter_value: str | None = None) -> list[str]:
         """Return all album ids from Lyrion."""
-        return await get_entity_ids(self._session, ALBUM_SPEC, DEFAULT_BROWSE_PAGE_SIZE, filter_value)
+        return await get_entity_ids(
+            self._session, ALBUM_SPEC, DEFAULT_BROWSE_PAGE_SIZE, filter_value
+        )
 
     async def get_track_ids(self, filter_value: str | None = None) -> list[str]:
         """Return all track ids from Lyrion."""
-        return await get_entity_ids(self._session, TRACK_SPEC, DEFAULT_BROWSE_PAGE_SIZE, filter_value)
+        return await get_entity_ids(
+            self._session, TRACK_SPEC, DEFAULT_BROWSE_PAGE_SIZE, filter_value
+        )
 
     async def get_playlist_tracks_page(
         self,
@@ -526,7 +530,9 @@ class LyrionLibraryClient:
             offset += DEFAULT_BROWSE_PAGE_SIZE
         return tracks
 
-    async def iter_raw_entities(self, spec: LyrionEntitySpec, item_ids: list[str]) -> AsyncGenerator[Mapping[str, str]]:
+    async def iter_raw_entities(
+        self, spec: LyrionEntitySpec, item_ids: list[str]
+    ) -> AsyncGenerator[Mapping[str, str]]:
         """Yield raw LMS entities in request order."""
         async for raw_item in iter_raw_entities(self._session, spec, item_ids):
             yield raw_item
@@ -535,15 +541,17 @@ class LyrionLibraryClient:
         """Fetch one raw entity payload by id."""
         return await get_entity_data(self._session, spec, item_id)
 
-    async def search_entities(self, spec: LyrionEntitySpec, query: str, limit: int) -> list[Mapping[str, object]]:
+    async def search_entities(
+        self, spec: LyrionEntitySpec, query: str, limit: int
+    ) -> list[Mapping[str, object]]:
         """Search one LMS entity type and return raw rows."""
         return await search_entities(self._session, spec, query, limit)
 
 
 __all__ = [
     "ALBUM_SPEC",
-    "ARTWORK_WORKER_COUNT",
     "ARTIST_SPEC",
+    "ARTWORK_WORKER_COUNT",
     "BATCH_LOOKUP_SIZE",
     "DEFAULT_BROWSE_PAGE_SIZE",
     "TRACK_SPEC",
@@ -552,10 +560,10 @@ __all__ = [
     "LyrionPage",
     "get_entity_data",
     "get_entity_ids",
-    "get_playlist_tracks_page",
-    "iter_raw_entities",
-    "search_entities",
     "get_entity_page",
+    "get_playlist_tracks_page",
     "get_simple_browse_page",
+    "iter_raw_entities",
     "normalize_row",
+    "search_entities",
 ]
