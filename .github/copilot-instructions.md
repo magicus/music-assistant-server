@@ -1,5 +1,10 @@
 # PR Review Standards
 
+## Runtime Baseline
+
+This repository targets Python 3.14+ (`.python-version` is authoritative for the exact pinned runtime).
+When evaluating syntax or typing, treat 3.14 behavior as the source of truth.
+
 ## Philosophy
 
 Comment only where you're confident there's a real issue — if you're uncertain whether something is a problem, don't raise it. Actionable feedback, not observations. One sentence where one sentence does the job. On documentation or user-facing text, flag wording only when it's genuinely confusing or could mislead someone into an error.

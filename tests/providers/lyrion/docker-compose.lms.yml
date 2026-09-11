@@ -1,0 +1,17 @@
+services:
+  lms:
+    image: ${LMS_IMAGE:-lmscommunity/lyrionmusicserver:stable}
+    container_name: ma-test-lms
+    restart: "no"
+    ports:
+      - "${LMS_HTTP_PORT:-9000}:9000"
+      - "9090:9090"
+      - "3483:3483"
+      - "3483:3483/udp"
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-UTC}
+    volumes:
+      - ${LMS_CONFIG_DIR:-./build/test/lyrion/config}:/config
+      - ${LMS_MUSIC_DIR:-./build/test/lyrion/music}:/music

@@ -1,0 +1,57 @@
+{
+  "config_entries": {
+    "lms_host": {
+      "label": "Lyrion host",
+      "description": "IP address or hostname of your Lyrion/LMS server"
+    },
+    "port": {
+      "label": "Lyrion JSON-RPC port",
+      "description": "Port to reach Lyrion control interface, typically 9000"
+    },
+    "rescan_artwork": {
+      "label": "Rescan artwork now",
+      "description": "Refresh artwork for your Lyrion library artists and albums right away."
+    }
+  },
+  "config_actions": {
+    "rescan_artwork": {
+      "result": "Album and artist artwork rescan started."
+    }
+  },
+  "errors": {
+    "host_required": "Please enter a Lyrion hostname or IP address.",
+    "host_unresolvable": "Unable to resolve {0}, make sure the address is resolvable.",
+    "invalid_port": "Port must be a number between 1 and 65535.",
+    "endpoint_unreachable": "Could not connect to this endpoint. Check host, port, and that Lyrion is running.",
+    "endpoint_not_lyrion": "Connected, but this is not a valid Lyrion JSON-RPC endpoint.",
+    "serverstatus_invalid": "Connected, but the response is not a valid Lyrion serverstatus result."
+  },
+  "media": {
+    "folder": {
+      "artists": {
+        "name": "Artist"
+      },
+      "albums": {
+        "name": "Album"
+      },
+      "tracks": {
+        "name": "Track"
+      },
+      "playlists": {
+        "name": "Playlist"
+      },
+      "genres": {
+        "name": "Genre"
+      },
+      "next_page": {
+        "name": "Next Page"
+      },
+      "previous_page": {
+        "name": "Previous Page"
+      }
+    }
+  },
+  "manifest": {
+    "description": "Play music from a Lyrion Media Server (LMS) library"
+  }
+}

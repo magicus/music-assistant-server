@@ -1,0 +1,11 @@
+{
+  "type": "music",
+  "domain": "lyrion_music",
+  "name": "Lyrion Music Library",
+  "stage": "experimental",
+  "description": "Play music from a Lyrion Media Server (LMS) library",
+  "codeowners": ["@magicus"],
+  "requirements": [],
+  "documentation": "",
+  "multi_instance": true
+}

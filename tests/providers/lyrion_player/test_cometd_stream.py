@@ -1,0 +1,372 @@
+"""Tests for Lyrion CometD serverstatus-driven rediscovery."""
+
+from __future__ import annotations
+
+import asyncio
+from types import SimpleNamespace
+from typing import Any, cast
+from unittest.mock import AsyncMock, MagicMock
+
+from music_assistant.providers.lyrion.lyrion_cometd import LyrionCometDEventStream
+from music_assistant.providers.lyrion_player.cometd_events import LmsPlayerPlaylistChangedEvent
+from music_assistant.providers.lyrion_player.provider import LyrionPlayerProvider
+
+
+async def _noop_event_callback(_event: object) -> None:
+    """Ignore emitted CometD events."""
+
+
+class _StubProvider:
+    """Tiny provider stub for CometD stream unit tests."""
+
+    def __init__(self, player_ids: list[str]) -> None:
+        """Initialize a provider stub with known players."""
+        self.instance_id = "lyrion_player.test"
+        self.players = [SimpleNamespace(player_id=player_id) for player_id in player_ids]
+        self.unloading = False
+        self.mass = SimpleNamespace(
+            create_task=asyncio.create_task,
+            players=SimpleNamespace(get_player=lambda _player_id: None),
+        )
+        self.logger = MagicMock()
+        self.get_player_status = AsyncMock(return_value={})
+        self.discovery_calls = 0
+
+    def schedule_players_discovery(self) -> None:
+        """Record rediscovery scheduling calls."""
+        self.discovery_calls += 1
+
+
+async def test_serverstatus_players_loop_triggers_on_roster_change() -> None:
+    """Serverstatus player-id set changes should schedule rediscovery exactly once per change."""
+    provider = _StubProvider(["player_a"])
+    stream = LyrionCometDEventStream(provider, _noop_event_callback)  # type: ignore[arg-type]
+
+    await stream._handle_message(
+        {
+            "channel": "/abc/slim/serverstatus",
+            "data": {"players_loop": [{"playerid": "player_a"}]},
+        }
+    )
+    assert provider.discovery_calls == 0
+
+    await stream._handle_message(
+        {
+            "channel": "/abc/slim/serverstatus",
+            "data": {
+                "players_loop": [
+                    {"playerid": "player_a"},
+                    {"playerid": "player_b"},
+                ]
+            },
+        }
+    )
+    assert provider.discovery_calls == 1
+
+    await stream._handle_message(
+        {
+            "channel": "/abc/slim/serverstatus",
+            "data": {
+                "players_loop": [
+                    {"playerid": "player_b"},
+                    {"playerid": "player_a"},
+                ]
+            },
+        }
+    )
+    assert provider.discovery_calls == 1
+
+
+async def test_serverstatus_player_count_fallback_triggers_when_changed() -> None:
+    """Fallback to player-count diffing when serverstatus omits players_loop."""
+    provider = _StubProvider(["player_a"])
+    stream = LyrionCometDEventStream(provider, _noop_event_callback)  # type: ignore[arg-type]
+
+    await stream._handle_message(
+        {
+            "channel": "/abc/slim/serverstatus",
+            "data": {"player count": 1},
+        }
+    )
+    assert provider.discovery_calls == 0
+
+    await stream._handle_message(
+        {
+            "channel": "/abc/slim/serverstatus",
+            "data": {"player count": 2},
+        }
+    )
+    assert provider.discovery_calls == 1
+
+
+async def test_schedule_players_discovery_coalesces_overlapping_triggers() -> None:
+    """Overlapping discovery triggers should coalesce into one task with one replay pass."""
+    provider = LyrionPlayerProvider.__new__(LyrionPlayerProvider)
+    provider.logger = MagicMock()
+    provider.mass = cast("Any", SimpleNamespace(create_task=asyncio.create_task))
+    provider.unloading = False
+    provider._discover_players_task = None
+    provider._discover_players_again = False
+
+    gate = asyncio.Event()
+    calls = 0
+
+    async def _discover_players() -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            await gate.wait()
+
+    cast("Any", provider).discover_players = _discover_players
+
+    provider.schedule_players_discovery()
+    await asyncio.sleep(0)
+    provider.schedule_players_discovery()
+    gate.set()
+
+    task = cast("Any", provider._discover_players_task)
+    assert task is not None
+    await task
+    assert calls == 2
+
+
+async def test_serverstatus_connected_updates_player_availability() -> None:
+    """Serverstatus connected flag should update MA availability for known players."""
+    provider = _StubProvider(["player_a"])
+    stream = LyrionCometDEventStream(cast("Any", provider), _noop_event_callback)
+
+    updates = 0
+
+    def _update_state() -> None:
+        nonlocal updates
+        updates += 1
+
+    ma_player = SimpleNamespace(
+        provider=SimpleNamespace(instance_id=provider.instance_id),
+        _attr_available=True,
+        update_state=_update_state,
+    )
+    provider.mass.players = SimpleNamespace(
+        get_player=lambda player_id: ma_player if player_id == "player_a" else None,
+    )
+
+    await stream._handle_message(
+        {
+            "channel": "/abc/slim/serverstatus",
+            "data": {
+                "players_loop": [{"playerid": "player_a", "connected": 0}],
+            },
+        }
+    )
+    assert ma_player._attr_available is False
+    assert updates == 1
+
+
+async def test_invalid_player_status_triggers_rediscovery() -> None:
+    """An invalid-player status payload should schedule rediscovery."""
+    provider = _StubProvider(["player_a"])
+    stream = LyrionCometDEventStream(cast("Any", provider), _noop_event_callback)
+
+    await stream._handle_message(
+        {
+            "channel": "/abc/slim/playerstatus/player_a",
+            "data": {"error": "invalid player"},
+        }
+    )
+
+    assert provider.discovery_calls == 1
+
+
+async def test_playerstatus_playlist_change_detects_canonical_playlist_tracks_key() -> None:
+    """Playlist-change detection should work for LMS payloads using `playlist_tracks`."""
+    provider = _StubProvider(["player_a"])
+    emitted_events: list[object] = []
+
+    async def _capture_event(event: object) -> None:
+        emitted_events.append(event)
+
+    stream = LyrionCometDEventStream(cast("Any", provider), _capture_event)
+
+    await stream._handle_player_status(
+        "player_a",
+        {
+            "mode": "play",
+            "playlist_tracks": 2,
+            "playlist_cur_index": 0,
+        },
+    )
+    await stream._handle_player_status(
+        "player_a",
+        {
+            "mode": "play",
+            "playlist_tracks": 3,
+            "playlist_cur_index": 0,
+        },
+    )
+
+    assert any(isinstance(event, LmsPlayerPlaylistChangedEvent) for event in emitted_events)
+
+
+async def test_wait_for_player_status_update_observes_new_status() -> None:
+    """Status waiters should resolve once a fresher CometD status arrives."""
+    provider = _StubProvider(["player_a"])
+    stream = LyrionCometDEventStream(cast("Any", provider), _noop_event_callback)
+
+    baseline = stream.get_last_player_status_seen_at("player_a")
+    wait_task = asyncio.create_task(
+        stream.wait_for_player_status_update("player_a", baseline, timeout=1)
+    )
+    await asyncio.sleep(0)
+
+    await stream._handle_message(
+        {
+            "channel": "/abc/slim/playerstatus/player_a",
+            "data": {"mode": "play"},
+        }
+    )
+
+    assert await wait_task
+
+
+async def test_stale_playerstatus_is_resubscribed_and_cache_cleared() -> None:
+    """Stale CometD playerstatus should be dropped and marked for refresh."""
+    provider = _StubProvider(["player_a"])
+    stream = LyrionCometDEventStream(cast("Any", provider), _noop_event_callback)
+
+    await stream._handle_message(
+        {
+            "channel": "/abc/slim/playerstatus/player_a",
+            "data": {"mode": "play", "playlist_tracks": 1},
+        }
+    )
+    stream._status_seen_at["player_a"] = 0.0
+    stream._subscribed_player_ids.add("player_a")
+
+    await stream._refresh_stale_player_subscriptions()
+
+    assert "player_a" not in stream._subscribed_player_ids
+    assert "player_a" in stream._pending_player_ids
+    assert "player_a" not in stream._status_by_player
+
+
+async def test_session_reset_clears_status_cache() -> None:
+    """Reconnect resets should clear volatile playerstatus cache state."""
+    provider = _StubProvider(["player_a"])
+    stream = LyrionCometDEventStream(cast("Any", provider), _noop_event_callback)
+
+    await stream._handle_message(
+        {
+            "channel": "/abc/slim/playerstatus/player_a",
+            "data": {"mode": "play"},
+        }
+    )
+    stream._pending_player_ids.add("player_a")
+    stream._subscribed_player_ids.add("player_a")
+
+    stream._reset_session_state()
+
+    assert stream._client_id is None
+    assert not stream._pending_player_ids
+    assert not stream._subscribed_player_ids
+    assert not stream._status_by_player
+    assert not stream._status_seen_at
+
+
+async def test_watchdog_restarts_when_all_subscriptions_go_stale() -> None:
+    """The watchdog should restart the session if the whole stream goes stale."""
+    provider = _StubProvider(["player_a"])
+    stream = LyrionCometDEventStream(cast("Any", provider), _noop_event_callback)
+
+    stream._client_id = "client-1"
+    stream._subscribed_player_ids.add("player_a")
+    stream._status_seen_at["player_a"] = 0.0
+
+    restart_calls: list[list[str]] = []
+
+    async def _restart_stale_session(stale_player_ids: list[str]) -> None:
+        restart_calls.append(stale_player_ids)
+
+    cast("Any", stream)._restart_stale_session = _restart_stale_session
+
+    await stream._run_watchdog_tick()
+
+    assert restart_calls == [["player_a"]]
+
+
+async def test_playback_status_arms_track_end_expectation() -> None:
+    """Play status with time+duration should arm a track-end expectation."""
+    provider = _StubProvider(["player_a"])
+    stream = LyrionCometDEventStream(cast("Any", provider), _noop_event_callback)
+
+    await stream._handle_message(
+        {
+            "channel": "/abc/slim/playerstatus/player_a",
+            "data": {
+                "mode": "play",
+                "time": 95,
+                "duration": 100,
+                "playlist_cur_index": 3,
+            },
+        }
+    )
+
+    assert "player_a" in stream._track_end_expectations
+
+
+async def test_track_end_due_triggers_implicit_recovery() -> None:
+    """A due track-end expectation should trigger implicit status recovery."""
+    provider = _StubProvider(["player_a"])
+    stream = LyrionCometDEventStream(cast("Any", provider), _noop_event_callback)
+
+    await stream._handle_message(
+        {
+            "channel": "/abc/slim/playerstatus/player_a",
+            "data": {
+                "mode": "play",
+                "time": 1,
+                "duration": 1,
+                "playlist_cur_index": 0,
+            },
+        }
+    )
+    expectation = stream._track_end_expectations["player_a"]
+    expectation.expected_transition_at = 0.0
+
+    calls: list[tuple[str, str]] = []
+
+    async def _recover_expected_status(player_id: str, reason: str) -> None:
+        calls.append((player_id, reason))
+
+    cast("Any", stream)._recover_expected_status = _recover_expected_status
+
+    await stream._run_expectation_tick()
+
+    assert calls == [("player_a", "track-end transition")]
+
+
+async def test_active_state_timeout_triggers_implicit_recovery() -> None:
+    """Active runtime state without fresh updates should trigger implicit recovery."""
+    provider = _StubProvider(["player_a"])
+    stream = LyrionCometDEventStream(cast("Any", provider), _noop_event_callback)
+
+    await stream._handle_message(
+        {
+            "channel": "/abc/slim/playerstatus/player_a",
+            "data": {
+                "mode": "pause",
+                "playlist_tracks": 4,
+            },
+        }
+    )
+    stream._status_seen_at["player_a"] = 0.0
+
+    calls: list[tuple[str, str]] = []
+
+    async def _recover_expected_status(player_id: str, reason: str) -> None:
+        calls.append((player_id, reason))
+
+    cast("Any", stream)._recover_expected_status = _recover_expected_status
+
+    await stream._run_expectation_tick()
+
+    assert calls == [("player_a", "active-state timeout")]
