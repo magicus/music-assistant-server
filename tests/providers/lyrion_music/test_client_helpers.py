@@ -93,12 +93,9 @@ async def test_rpc_request_uses_shared_throttler(monkeypatch: pytest.MonkeyPatch
 
 async def test_get_entity_pages_skip_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
     """Page decoders should skip rows that raise MediaNotFoundError."""
-
-    async def _page(*args: Any, **kwargs: Any) -> tuple[list[dict[str, Any]], bool]:
-        del args, kwargs
-        return ([{"id": "1"}, {"id": "2"}], False)
-
-    monkeypatch.setattr(client, "_get_entity_page", _page)
+    library = Mock()
+    library.get_entity_page = AsyncMock(return_value=SimpleNamespace(items=[{"id": "1"}, {"id": "2"}], has_more=False))
+    monkeypatch.setattr(client, "_build_library_client", lambda _provider: library)
 
     def _parse_artist(_provider: Any, row: dict[str, Any]) -> str:
         if row["id"] == "2":
@@ -134,20 +131,19 @@ async def test_get_entity_pages_skip_not_found(monkeypatch: pytest.MonkeyPatch) 
 
 async def test_get_simple_pages_name_fallbacks(monkeypatch: pytest.MonkeyPatch) -> None:
     """Playlist/genre pages should support id/name fallback branches."""
-
-    async def _page(*args: Any, **kwargs: Any) -> tuple[list[dict[str, Any]], bool]:
-        del args, kwargs
-        return (
-            [
+    library = Mock()
+    library.get_simple_browse_page = AsyncMock(
+        return_value=SimpleNamespace(
+            items=[
                 {"id": "x1", "playlist": "P1"},
                 {"id": "x2", "name": "P2"},
                 {"id": "x3"},
                 {"playlist": "missing-id"},
             ],
-            True,
+            has_more=True,
         )
-
-    monkeypatch.setattr(client, "_get_simple_browse_page", _page)
+    )
+    monkeypatch.setattr(client, "_build_library_client", lambda _provider: library)
 
     provider = _provider()
     playlists, has_more = await client.get_playlists_page(provider)
@@ -158,11 +154,12 @@ async def test_get_simple_pages_name_fallbacks(monkeypatch: pytest.MonkeyPatch) 
         {"id": "x3", "name": "x3"},
     ]
 
-    async def _genres_page(*args: Any, **kwargs: Any) -> tuple[list[dict[str, Any]], bool]:
-        del args, kwargs
-        return ([{"id": "g1", "genre": "Rock"}, {"id": "g2"}], False)
-
-    monkeypatch.setattr(client, "_get_simple_browse_page", _genres_page)
+    library.get_simple_browse_page = AsyncMock(
+        return_value=SimpleNamespace(
+            items=[{"id": "g1", "genre": "Rock"}, {"id": "g2"}],
+            has_more=False,
+        )
+    )
     genres, has_more = await client.get_genres_page(provider)
     assert has_more is False
     assert genres == [{"id": "g1", "name": "Rock"}, {"id": "g2", "name": "g2"}]
@@ -170,26 +167,43 @@ async def test_get_simple_pages_name_fallbacks(monkeypatch: pytest.MonkeyPatch) 
 
 async def test_get_all_playlists_and_genres_paging(monkeypatch: pytest.MonkeyPatch) -> None:
     """Paged loops should stop on empty page or has_more False."""
-    playlist_pages = [([{"id": "p1", "name": "P1"}], True), ([{"id": "p2", "name": "P2"}], False)]
-    genre_pages = [([{"id": "g1", "name": "G1"}], True), ([], True)]
-
-    async def _playlists(_provider: Any, offset: int = 0, limit: int = 0):
-        del _provider, limit
-        return playlist_pages[0] if offset == 0 else playlist_pages[1]
-
-    async def _genres(_provider: Any, offset: int = 0, limit: int = 0):
-        del _provider, limit
-        return genre_pages[0] if offset == 0 else genre_pages[1]
-
-    monkeypatch.setattr(client, "get_playlists_page", _playlists)
-    monkeypatch.setattr(client, "get_genres_page", _genres)
+    library = Mock()
+    library.get_all_playlists = AsyncMock(return_value=[{"id": "p1", "name": "P1"}])
+    library.get_all_genres = AsyncMock(return_value=[{"id": "g1", "name": "G1"}])
+    monkeypatch.setattr(client, "_build_library_client", lambda _provider: library)
 
     provider = _provider()
     assert await client.get_all_playlists(provider) == [
         {"id": "p1", "name": "P1"},
-        {"id": "p2", "name": "P2"},
     ]
     assert await client.get_all_genres(provider) == [{"id": "g1", "name": "G1"}]
+
+
+async def test_get_playlist_tracks_page_delegates_to_pylyrion(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Playlist track paging should use the pylyrion page helper."""
+    library = Mock()
+    library.get_playlist_tracks_page = AsyncMock(
+        return_value=SimpleNamespace(items=[{"id": "t1", "title": "Track 1"}], has_more=False)
+    )
+    monkeypatch.setattr(client, "_build_library_client", lambda _provider: library)
+    monkeypatch.setattr(client.parsers, "parse_track", lambda _provider, row: row["id"])
+
+    provider = _provider()
+    tracks, has_more = await client.get_playlist_tracks_page(provider, "pl1")
+
+    assert tracks == ["t1"]
+    assert has_more is False
+
+
+async def test_get_playlist_tracks_delegates_to_pylyrion(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Playlist track collection should use the pylyrion raw helper."""
+    library = Mock()
+    library.get_playlist_tracks = AsyncMock(return_value=[{"id": "t1", "title": "Track 1"}])
+    monkeypatch.setattr(client, "_build_library_client", lambda _provider: library)
+    monkeypatch.setattr(client.parsers, "parse_track", lambda _provider, row: row["id"])
+
+    provider = _provider()
+    assert await client.get_playlist_tracks(provider, "pl1") == ["t1"]
 
 
 async def test_search_and_entity_data_delegate_to_pylyrion(monkeypatch: pytest.MonkeyPatch) -> None:

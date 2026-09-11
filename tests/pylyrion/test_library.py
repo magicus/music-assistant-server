@@ -91,16 +91,24 @@ async def test_library_client_playlist_tracks_and_entity_data() -> None:
         {
             "result": {
                 "playlisttracks_loop": [{"id": "p1"}],
+                "playlists_loop": [{"id": "pl1", "playlist": "Mix"}],
+                "genres_loop": [{"id": "g1", "genre": "Rock"}],
                 "artists_loop": [{"id": "a1", "artist": "Artist 1"}],
                 "count": "1",
             }
         }
     )
 
+    playlists = await client.get_all_playlists()
+    genres = await client.get_all_genres()
     playlist_page = await client.get_playlist_tracks_page("pl1")
+    playlist_tracks = await client.get_playlist_tracks("pl1")
     artist_row = await client.get_entity_data(ARTIST_SPEC, "a1")
 
+    assert playlists == [{"id": "pl1", "name": "Mix"}]
+    assert genres == [{"id": "g1", "name": "Rock"}]
     assert playlist_page.items == [{"id": "p1"}]
     assert playlist_page.has_more is False
+    assert playlist_tracks == [{"id": "p1"}]
     assert artist_row == {"id": "a1", "artist": "Artist 1"}
 

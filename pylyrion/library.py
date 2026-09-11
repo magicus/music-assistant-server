@@ -406,6 +406,88 @@ class LyrionLibraryClient:
             limit,
         )
 
+    async def get_entity_page(
+        self,
+        spec: LyrionEntitySpec,
+        offset: int,
+        limit: int,
+        filter_value: str | None = None,
+    ) -> LyrionPage:
+        """Return one paged entity response rowset with has-more metadata."""
+        return await get_entity_page(
+            self._session,
+            spec,
+            offset,
+            limit,
+            filter_value=filter_value,
+        )
+
+    async def get_simple_browse_page(
+        self,
+        command: str,
+        loop_key: str,
+        offset: int,
+        limit: int,
+    ) -> LyrionPage:
+        """Return one paged simple browse response (playlists/genres)."""
+        return await get_simple_browse_page(
+            self._session,
+            command,
+            loop_key,
+            offset,
+            limit,
+        )
+
+    async def get_all_playlists(self) -> list[dict[str, str]]:
+        """Return all playlists from Lyrion as id/name pairs."""
+        playlists: list[dict[str, str]] = []
+        offset = 0
+        while True:
+            page = await self.get_playlists_page(offset=offset)
+            if not page.items:
+                break
+            for raw_playlist in page.items:
+                normalized_playlist = normalize_row(raw_playlist)
+                playlist_id = _extract_item_id(
+                    normalized_playlist,
+                    ("id", "playlist_id"),
+                )
+                if playlist_id is None:
+                    continue
+                playlist_name = (
+                    normalized_playlist.get("playlist")
+                    or normalized_playlist.get("name")
+                    or playlist_id
+                )
+                playlists.append({"id": playlist_id, "name": playlist_name})
+            if not page.has_more:
+                break
+            offset += DEFAULT_BROWSE_PAGE_SIZE
+        return playlists
+
+    async def get_all_genres(self) -> list[dict[str, str]]:
+        """Return all genres from Lyrion as id/name pairs."""
+        genres: list[dict[str, str]] = []
+        offset = 0
+        while True:
+            page = await self.get_genres_page(offset=offset)
+            if not page.items:
+                break
+            for raw_genre in page.items:
+                normalized_genre = normalize_row(raw_genre)
+                genre_id = _extract_item_id(
+                    normalized_genre,
+                    ("id", "genre_id"),
+                )
+                if genre_id is None:
+                    continue
+                genre_name = normalized_genre.get("genre") or normalized_genre.get("name")
+                genres.append({"id": genre_id, "name": genre_name or genre_id})
+            if not page.has_more:
+                break
+            offset += DEFAULT_BROWSE_PAGE_SIZE
+        return genres
+
     async def get_artist_ids(self, filter_value: str | None = None) -> list[str]:
         """Return all artist ids from Lyrion."""
         return await get_entity_ids(self._session, ARTIST_SPEC, DEFAULT_BROWSE_PAGE_SIZE, filter_value)
@@ -426,6 +508,23 @@ class LyrionLibraryClient:
     ) -> LyrionPage:
         """Return one paged playlist track response using LMS playlists/tracks."""
         return await get_playlist_tracks_page(self._session, playlist_id, offset, limit)
+
+    async def get_playlist_tracks(self, playlist_id: str) -> list[Mapping[str, object]]:
+        """Return all raw playlist track rows for one playlist id."""
+        tracks: list[Mapping[str, object]] = []
+        offset = 0
+        while True:
+            page = await self.get_playlist_tracks_page(
+                playlist_id,
+                offset=offset,
+            )
+            if not page.items:
+                break
+            tracks.extend(page.items)
+            if not page.has_more:
+                break
+            offset += DEFAULT_BROWSE_PAGE_SIZE
+        return tracks
 
     async def iter_raw_entities(self, spec: LyrionEntitySpec, item_ids: list[str]) -> AsyncGenerator[Mapping[str, str]]:
         """Yield raw LMS entities in request order."""
