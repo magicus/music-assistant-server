@@ -294,11 +294,6 @@ def extract_values_for_keys(
     return pylyrion_parsers.extract_values_for_keys(row, keys, split_mode)
 
 
-def split_lms_values(value: str, split_mode: Literal["id", "name"]) -> list[str]:
-    """Split LMS value into scalar or multi-value list."""
-    return pylyrion_parsers.split_lms_values(value, split_mode)
-
-
 def album_metadata_needs_update(library_album: Album, provider_album: Album) -> bool:
     """Return True when synced album artist or artwork differs."""
     library_artist_refs = {(artist.item_id, artist.name) for artist in library_album.artists}
