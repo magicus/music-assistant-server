@@ -34,5 +34,12 @@
 	- Alternative B: introduce a dedicated pylyrion QueueClient abstraction before exposing these methods on PlayerClient.
 
 - Whether URL-entry metadata fallback (`playlistcontrol` -> `playlist add`) should move into pylyrion now.
-	- Chosen now: keep fallback in MA queue adapter for this stage because fallback policy is tightly coupled to MA queue-sync behavior and error handling.
-	- Alternative A: move fallback into pylyrion once API shape for URL metadata add is finalized.
+	- Previous choice: keep fallback in MA queue adapter while queue mutation APIs were still being extracted.
+	- Current choice: moved fallback into pylyrion via `add_url_to_queue`; MA now delegates.
+	- Alternative A: later move URL operations into a dedicated pylyrion queue facade if that API shape becomes clearer.
+
+## Subsequent slices
+
+- URL queue add fallback moved from MA adapter into pylyrion as a named player operation (`add_url_to_queue`) to keep MA queue sync transport-thin.
+	- Current split: pylyrion owns LMS metadata-command fallback behavior; MA adapter passes through queue metadata fields.
+	- Future option: introduce a dedicated pylyrion queue facade once larger queue domain pieces leave MA.

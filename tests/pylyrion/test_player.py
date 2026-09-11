@@ -81,6 +81,13 @@ async def test_player_client_transport_methods_dispatch_expected_commands() -> N
     await client.add_track_id("player1", "t-42", command="load")
     await client.move_queue_item("player1", 6, 1)
     await client.delete_queue_item("player1", 3)
+    await client.add_url_to_queue(
+        "player1",
+        "http://example/stream",
+        title="Title",
+        artist="Artist",
+        album="Album",
+    )
 
     calls = [call.kwargs["json"]["params"] for call in transport.post.call_args_list]
     assert calls[0] == ["player1", ["play"]]
@@ -97,3 +104,49 @@ async def test_player_client_transport_methods_dispatch_expected_commands() -> N
     assert calls[11] == ["player1", ["playlistcontrol", "cmd:load", "track_id:t-42"]]
     assert calls[12] == ["player1", ["playlist", "move", 6, 1]]
     assert calls[13] == ["player1", ["playlist", "delete", 3]]
+    assert calls[14] == [
+        "player1",
+        [
+            "playlistcontrol",
+            "cmd:add",
+            "url:http://example/stream",
+            "title:Title",
+            "artist:Artist",
+            "album:Album",
+        ],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_player_client_add_url_to_queue_falls_back_to_playlist_add() -> None:
+    """URL adds should fall back to playlist add when LMS rejects metadata payload."""
+    transport = SimpleNamespace(
+        post=MagicMock(
+            side_effect=[
+                FakeResponse(
+                    {
+                        "error": {
+                            "code": -32603,
+                            "message": "unsupported metadata args",
+                        },
+                        "result": {},
+                    }
+                ),
+                FakeResponse({"result": {"ok": True}}),
+            ]
+        )
+    )
+    session = LyrionSession(
+        http_session=transport,
+        endpoint=LyrionEndpoint(host="127.0.0.1", port=9000),
+    )
+    client = LyrionPlayerClient(session)
+
+    await client.add_url_to_queue("player1", "http://example/stream")
+
+    calls = [call.kwargs["json"]["params"] for call in transport.post.call_args_list]
+    assert calls[0] == [
+        "player1",
+        ["playlistcontrol", "cmd:add", "url:http://example/stream"],
+    ]
+    assert calls[1] == ["player1", ["playlist", "add", "http://example/stream"]]

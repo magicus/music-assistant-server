@@ -30,6 +30,7 @@ def _build_queue_sync() -> tuple[LyrionQueueSync, Any]:
         set_player_shuffle_mode=AsyncMock(),
         clear_player_queue=AsyncMock(),
         add_player_track_id_to_queue=AsyncMock(),
+        add_player_url_to_queue=AsyncMock(),
         move_player_queue_item=AsyncMock(),
         delete_player_queue_item=AsyncMock(),
         play_player=AsyncMock(),
@@ -367,9 +368,8 @@ async def test_append_lms_entry_uses_track_id_or_url_path() -> None:
 
 @pytest.mark.asyncio
 async def test_add_url_entry_to_lms_falls_back_when_metadata_command_fails() -> None:
-    """URL add should fall back to plain playlist add when metadata command fails."""
+    """URL adds should delegate metadata payload to provider adapter."""
     queue_sync, player = _build_queue_sync()
-    player.provider.send_player_command = AsyncMock(side_effect=[MusicAssistantError("x"), {}])
 
     await queue_sync._add_url_entry_to_lms(
         _LmsMirrorEntry(
@@ -381,14 +381,12 @@ async def test_add_url_entry_to_lms_falls_back_when_metadata_command_fails() -> 
         )
     )
 
-    assert player.provider.send_player_command.await_args_list[0].args[1][:3] == [
-        "playlistcontrol",
-        "cmd:add",
-        "url:http://x",
-    ]
-    assert player.provider.send_player_command.await_args_list[1].args == (
+    player.provider.add_player_url_to_queue.assert_awaited_once_with(
         "player-1",
-        ["playlist", "add", "http://x"],
+        "http://x",
+        title="title",
+        artist="artist",
+        album="album",
     )
 
 
@@ -993,7 +991,9 @@ async def test_resolve_ma_uri_to_lms_entry_delegates_to_media_mapper() -> None:
 async def test_add_url_entry_to_lms_reraises_provider_unavailable() -> None:
     """URL add should propagate provider-unavailable errors without fallback."""
     queue_sync, player = _build_queue_sync()
-    player.provider.send_player_command = AsyncMock(side_effect=ProviderUnavailableError("offline"))
+    player.provider.add_player_url_to_queue = AsyncMock(
+        side_effect=ProviderUnavailableError("offline")
+    )
 
     with pytest.raises(ProviderUnavailableError):
         await queue_sync._add_url_entry_to_lms(_LmsMirrorEntry(kind="url", value="http://x"))

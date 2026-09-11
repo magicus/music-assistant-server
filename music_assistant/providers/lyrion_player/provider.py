@@ -343,6 +343,26 @@ class LyrionPlayerProvider(PlayerProvider):
         except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
             raise ProviderUnavailableError(str(err)) from err
 
+    async def add_player_url_to_queue(
+        self,
+        player_id: str,
+        url: str,
+        title: str | None = None,
+        artist: str | None = None,
+        album: str | None = None,
+    ) -> dict[str, Any]:
+        """Add one URL to LMS queue via pylyrion."""
+        try:
+            return await self._build_pylyrion_client().players.add_url_to_queue(
+                player_id,
+                url,
+                title=title,
+                artist=artist,
+                album=album,
+            )
+        except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
+            raise ProviderUnavailableError(str(err)) from err
+
     async def move_player_queue_item(
         self,
         player_id: str,

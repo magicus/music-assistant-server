@@ -496,6 +496,7 @@ async def test_transport_adapter_methods_use_pylyrion_client() -> None:
     player_client.players.set_shuffle_mode = AsyncMock(return_value={})
     player_client.players.clear_queue = AsyncMock(return_value={})
     player_client.players.add_track_id = AsyncMock(return_value={})
+    player_client.players.add_url_to_queue = AsyncMock(return_value={})
     player_client.players.move_queue_item = AsyncMock(return_value={})
     player_client.players.delete_queue_item = AsyncMock(return_value={})
 
@@ -515,6 +516,13 @@ async def test_transport_adapter_methods_use_pylyrion_client() -> None:
         await provider.set_player_shuffle_mode("p1", 1)
         await provider.clear_player_queue("p1")
         await provider.add_player_track_id_to_queue("p1", "42", command="load")
+        await provider.add_player_url_to_queue(
+            "p1",
+            "http://example/stream",
+            title="Title",
+            artist="Artist",
+            album="Album",
+        )
         await provider.move_player_queue_item("p1", 5, 2)
         await provider.delete_player_queue_item("p1", 4)
 
@@ -537,6 +545,13 @@ async def test_transport_adapter_methods_use_pylyrion_client() -> None:
         "p1",
         "42",
         command="load",
+    )
+    player_client.players.add_url_to_queue.assert_awaited_once_with(
+        "p1",
+        "http://example/stream",
+        title="Title",
+        artist="Artist",
+        album="Album",
     )
     player_client.players.move_queue_item.assert_awaited_once_with("p1", 5, 2)
     player_client.players.delete_queue_item.assert_awaited_once_with("p1", 4)

@@ -662,29 +662,13 @@ class LyrionQueueSync:
 
     async def _add_url_entry_to_lms(self, entry: _LmsMirrorEntry) -> None:
         """Add one URL entry to LMS with optional display metadata."""
-        command = [
-            "playlistcontrol",
-            "cmd:add",
-            f"url:{entry.value}",
-        ]
-        if entry.title:
-            command.append(f"title:{entry.title}")
-        if entry.artist:
-            command.append(f"artist:{entry.artist}")
-        if entry.album:
-            command.append(f"album:{entry.album}")
-        try:
-            await self.player.provider.send_player_command(
-                self.player.player_id,
-                command,
-            )
-        except ProviderUnavailableError:
-            raise
-        except MusicAssistantError:
-            await self.player.provider.send_player_command(
-                self.player.player_id,
-                ["playlist", "add", entry.value],
-            )
+        await self.player.provider.add_player_url_to_queue(
+            self.player.player_id,
+            entry.value,
+            title=entry.title,
+            artist=entry.artist,
+            album=entry.album,
+        )
 
     @staticmethod
     def _extract_queue_item_metadata(

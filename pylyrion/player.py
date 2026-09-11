@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
+from pylyrion.errors import LyrionRequestError
 from pylyrion.session import LyrionSession
 
 
@@ -104,3 +105,28 @@ class LyrionPlayerClient:
     async def delete_queue_item(self, player_id: str, index: int) -> dict[str, object]:
         """Delete one LMS queue item by index."""
         return await self.send_command(player_id, ["playlist", "delete", index])
+
+    async def add_url_to_queue(
+        self,
+        player_id: str,
+        url: str,
+        title: str | None = None,
+        artist: str | None = None,
+        album: str | None = None,
+    ) -> dict[str, object]:
+        """Add one URL to the queue, with fallback for older LMS payload support."""
+        command: list[Any] = [
+            "playlistcontrol",
+            "cmd:add",
+            f"url:{url}",
+        ]
+        if title:
+            command.append(f"title:{title}")
+        if artist:
+            command.append(f"artist:{artist}")
+        if album:
+            command.append(f"album:{album}")
+        try:
+            return await self.send_command(player_id, command)
+        except LyrionRequestError:
+            return await self.send_command(player_id, ["playlist", "add", url])
