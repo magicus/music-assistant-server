@@ -13,12 +13,33 @@ from .helpers import (
     _is_invalid_player_payload,
     _same_active_track,
 )
+from .player_status_events import (
+    NormalizedPlayerStatusEvent,
+    PlayerPlaybackChanged,
+    PlayerPlaylistChanged,
+    PlayerPowerChanged,
+    PlayerRepeatChanged,
+    PlayerSeeked,
+    PlayerShuffleChanged,
+    PlayerStatusUpdated,
+    PlayerVolumeChanged,
+    merge_player_status,
+)
 from .recovery import _CometDRecoveryMixin
 from .status import _CometDStatusMixin
 
 __all__ = [
     "BayeuxClient",
     "LmsPlayerEventCallback",
+    "NormalizedPlayerStatusEvent",
+    "PlayerPlaybackChanged",
+    "PlayerPlaylistChanged",
+    "PlayerPowerChanged",
+    "PlayerRepeatChanged",
+    "PlayerSeeked",
+    "PlayerShuffleChanged",
+    "PlayerStatusUpdated",
+    "PlayerVolumeChanged",
     "StatusPayload",
     "_CometDRecoveryMixin",
     "_CometDStatusMixin",
@@ -30,4 +51,5 @@ __all__ = [
     "_get_power",
     "_is_invalid_player_payload",
     "_same_active_track",
+    "merge_player_status",
 ]
