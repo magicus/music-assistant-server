@@ -7,6 +7,8 @@ applyTo: "**/*.py"
 
 Project standards distilled from this repository's own past pull-request review discussions; each links the PR where the standard was set. They augment the standards in `AGENTS.md`. Grade against the existing `[CRITICAL]`/`[PROBLEM]`/`[SUGGESTION]` taxonomy in `copilot-instructions.md` — do not restate the output format here. Treat a **MUST** or "won't support" deviation as at least `[PROBLEM]` (a `[CRITICAL]` when it breaks functionality or security); treat a *Prefer* deviation as `[SUGGESTION]`. When you raise one of these, cite its linked PR so the author can see the precedent.
 
+Python runtime baseline: this codebase targets Python 3.14+; use `.python-version` as the authoritative pinned runtime when judging syntax/typing compatibility.
+
 ## General standards
 
 Cross-project engineering standards that apply regardless of which repo is in play.
