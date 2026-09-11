@@ -767,11 +767,13 @@ class LyrionCometDEventStream:
                     )
                 )
 
+        old_index = _get_int(previous, "playlist_cur_index")
+        new_index = _get_int(merged, "playlist_cur_index")
         old_timestamp = _get_float(previous, "playlist_timestamp")
         new_timestamp = _get_float(merged, "playlist_timestamp")
         old_tracks = _get_int(previous, "playlist_tracks")
         new_tracks = _get_int(merged, "playlist_tracks")
-        if old_timestamp != new_timestamp or old_tracks != new_tracks:
+        if old_index != new_index or old_timestamp != new_timestamp or old_tracks != new_tracks:
             await self._emit_event(
                 LmsPlayerPlaylistChangedEvent(
                     player_id=player_id,

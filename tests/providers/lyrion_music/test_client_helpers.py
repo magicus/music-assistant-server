@@ -480,6 +480,10 @@ async def test_rpc_request_success_and_error_paths() -> None:
     with pytest.raises(ProviderUnavailableError, match="failed with code"):
         await shared_client.rpc_request(provider, "", ["albums"])
 
+    provider.mass.http_session.post = Mock(return_value=FakeResponse({"error": "oops"}))
+    with pytest.raises(ProviderUnavailableError, match="invalid error object"):
+        await shared_client.rpc_request(provider, "", ["albums"])
+
     provider.mass.http_session.post = Mock(return_value=FakeResponse({"result": None}))
     with pytest.raises(ProviderUnavailableError, match="must contain a result object"):
         await shared_client.rpc_request(provider, "", ["albums"])

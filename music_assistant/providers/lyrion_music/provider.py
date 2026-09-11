@@ -591,8 +591,13 @@ class LyrionMusicProvider(MusicProvider):
         page: int = 0,
     ) -> list[Track]:
         """Get tracks for a playlist id."""
-        del page
-        return await client.get_playlist_tracks(self, prov_playlist_id)
+        tracks, _ = await client.get_playlist_tracks_page(
+            self,
+            prov_playlist_id,
+            offset=page * BROWSE_PAGE_SIZE,
+            limit=BROWSE_PAGE_SIZE,
+        )
+        return tracks
 
     async def get_album_tracks(self, prov_album_id: str) -> list[Track]:
         """

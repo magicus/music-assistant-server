@@ -109,7 +109,12 @@ async def rpc_request(
         ) from err
 
     command_name = command[0] if command else "<unknown>"
-    if error_payload := cast("dict[str, Any] | None", data.get("error")):
+    error_payload = data.get("error")
+    if error_payload is not None:
+        if not isinstance(error_payload, Mapping):
+            raise ProviderUnavailableError(
+                f"Lyrion JSON-RPC command {command_name} returned an invalid error object"
+            )
         error_code = error_payload.get("code", "unknown")
         error_message = error_payload.get("message", "unknown JSON-RPC error")
         raise ProviderUnavailableError(

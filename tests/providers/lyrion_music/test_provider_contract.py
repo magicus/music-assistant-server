@@ -120,6 +120,37 @@ async def test_browse_root_and_nested_sections(
     assert [item.name for item in album_tracks] == ["Await Me Maybe", "Future Is Pending"]
 
 
+async def test_get_playlist_tracks_respects_page_offset(
+    lyrion_provider: LyrionMusicProvider,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Paged playlist requests should use the LMS page offset instead of ignoring it."""
+    captured: dict[str, Any] = {}
+
+    async def fake_get_playlist_tracks_page(
+        provider: LyrionMusicProvider,
+        playlist_id: str,
+        offset: int = 0,
+        limit: int = 25,
+    ) -> tuple[list[Any], bool]:
+        captured["playlist_id"] = playlist_id
+        captured["offset"] = offset
+        captured["limit"] = limit
+        return [], False
+
+    monkeypatch.setattr(
+        lyrion_provider_mod.client, "get_playlist_tracks_page", fake_get_playlist_tracks_page
+    )
+
+    await lyrion_provider.get_playlist_tracks("playlist-123", page=2)
+
+    assert captured == {
+        "playlist_id": "playlist-123",
+        "offset": 2 * lyrion_provider_mod.BROWSE_PAGE_SIZE,
+        "limit": lyrion_provider_mod.BROWSE_PAGE_SIZE,
+    }
+
+
 async def test_get_stream_details_prefers_absolute_url_and_builds_fallback(
     lyrion_provider: LyrionMusicProvider,
     lyrion_test_endpoint: LyrionTestEndpoint,

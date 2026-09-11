@@ -226,6 +226,38 @@ async def test_playerstatus_playlist_change_detects_canonical_playlist_tracks_ke
     assert any(isinstance(event, LmsPlayerPlaylistChangedEvent) for event in emitted_events)
 
 
+async def test_playerstatus_playlist_change_detects_index_only_navigation() -> None:
+    """Index-only navigation should still emit a playlist-change event."""
+    provider = _StubProvider(["player_a"])
+    emitted_events: list[object] = []
+
+    async def _capture_event(event: object) -> None:
+        emitted_events.append(event)
+
+    stream = LyrionCometDEventStream(cast("Any", provider), _capture_event)
+
+    await stream._handle_player_status(
+        "player_a",
+        {
+            "mode": "play",
+            "playlist_tracks": 3,
+            "playlist_cur_index": 0,
+            "playlist_timestamp": 10.0,
+        },
+    )
+    await stream._handle_player_status(
+        "player_a",
+        {
+            "mode": "play",
+            "playlist_tracks": 3,
+            "playlist_cur_index": 1,
+            "playlist_timestamp": 10.0,
+        },
+    )
+
+    assert any(isinstance(event, LmsPlayerPlaylistChangedEvent) for event in emitted_events)
+
+
 async def test_wait_for_player_status_update_observes_new_status() -> None:
     """Status waiters should resolve once a fresher CometD status arrives."""
     provider = _StubProvider(["player_a"])
