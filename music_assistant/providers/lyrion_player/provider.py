@@ -22,6 +22,9 @@ from music_assistant.providers.lyrion.client import rpc_request
 from music_assistant.providers.lyrion.cometd.stream import LyrionCometDEventStream
 from music_assistant.providers.lyrion.constants import COMETD_COMMAND_STATUS_VERIFY_TIMEOUT
 from music_assistant.providers.lyrion.setup_flow import validate_lms_endpoint
+from pylyrion.client import LyrionClient
+from pylyrion.models import LyrionEndpoint
+from pylyrion.session import LyrionSession
 
 from .cometd_event_adapter import LyrionCometDEventAdapter
 from .constants import (
@@ -213,10 +216,14 @@ class LyrionPlayerProvider(PlayerProvider):
 
         :param player_id: LMS player id.
         """
-        return await self._rpc_request(
-            player_id=player_id,
-            command=["status", "-", 1],
+        session = LyrionSession(
+            http_session=self.mass.http_session,
+            endpoint=LyrionEndpoint(
+                host=self.get_configured_host() or "",
+                port=self.get_configured_port(),
+            ),
         )
+        return await LyrionClient(session).players.get_status(player_id)
 
     def apply_status_update(
         self,

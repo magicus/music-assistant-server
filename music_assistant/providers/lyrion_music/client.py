@@ -16,6 +16,20 @@ from music_assistant.controllers.tasks import (
     update_current_task_progress_text,
 )
 from music_assistant.providers.lyrion.client import normalize_lms_text_value, rpc_request
+from pylyrion.library import (
+    ALBUM_SPEC as PY_ALBUM_SPEC,
+)
+from pylyrion.library import (
+    ARTIST_SPEC as PY_ARTIST_SPEC,
+)
+from pylyrion.library import (
+    TRACK_SPEC as PY_TRACK_SPEC,
+)
+from pylyrion.library import (
+    LyrionLibraryClient,
+)
+from pylyrion.models import LyrionEndpoint
+from pylyrion.session import LyrionSession
 
 from . import parsers
 from .constants import (
@@ -104,10 +118,7 @@ async def get_artists_page(
 ) -> tuple[list[Artist], bool]:
     """Return one paginated artist page from LMS plus a has-more flag."""
     raw_artists, has_more = await _get_entity_page(
-        provider,
-        spec=ARTIST_SPEC,
-        offset=offset,
-        limit=limit,
+        provider, spec=PY_ARTIST_SPEC, offset=offset, limit=limit
     )
     artists: list[Artist] = []
     for raw_artist in raw_artists:
@@ -127,7 +138,7 @@ async def get_albums_page(
     """Return one paginated album page from LMS plus a has-more flag."""
     raw_albums, has_more = await _get_entity_page(
         provider,
-        spec=ALBUM_SPEC,
+        spec=PY_ALBUM_SPEC,
         offset=offset,
         limit=limit,
         filter_value=filter_value,
@@ -150,7 +161,7 @@ async def get_tracks_page(
     """Return one paginated track page from LMS plus a has-more flag."""
     raw_tracks, has_more = await _get_entity_page(
         provider,
-        spec=TRACK_SPEC,
+        spec=PY_TRACK_SPEC,
         offset=offset,
         limit=limit,
         filter_value=filter_value,
@@ -501,21 +512,23 @@ async def _get_entity_page(
     filter_value: str | None = None,
 ) -> tuple[list[Mapping[str, object]], bool]:
     """Return one paged entity response rowset with has-more metadata."""
-    command: list[Any] = [spec.command, offset, limit, spec.tags]
-    if filter_value:
-        command.append(filter_value)
-    result = await rpc_request(
-        provider,
-        player_id="",
-        command=command,
-    )
-    raw_items = cast("list[Mapping[str, object]]", result.get(spec.loop_key, []))
-    expected_total = _extract_browse_total_count(result)
-    if expected_total is not None:
-        has_more = offset + len(raw_items) < expected_total
+    session = _build_library_session(provider)
+    library = LyrionLibraryClient(session)
+    if spec is PY_ARTIST_SPEC:
+        page = await library.get_artists_page(offset=offset, limit=limit)
+    elif spec is PY_ALBUM_SPEC:
+        page = await library.get_albums_page(
+            offset=offset,
+            limit=limit,
+            filter_value=filter_value,
+        )
     else:
-        has_more = len(raw_items) >= limit
-    return raw_items, has_more
+        page = await library.get_tracks_page(
+            offset=offset,
+            limit=limit,
+            filter_value=filter_value,
+        )
+    return list(page.items), page.has_more
 
 
 async def _get_simple_browse_page(
@@ -526,18 +539,24 @@ async def _get_simple_browse_page(
     limit: int,
 ) -> tuple[list[Mapping[str, object]], bool]:
     """Return one paged simple browse response (playlists/genres)."""
-    result = await rpc_request(
-        provider,
-        player_id="",
-        command=[command, offset, limit],
-    )
-    raw_items = cast("list[Mapping[str, object]]", result.get(loop_key, []))
-    expected_total = _extract_browse_total_count(result)
-    if expected_total is not None:
-        has_more = offset + len(raw_items) < expected_total
+    session = _build_library_session(provider)
+    library = LyrionLibraryClient(session)
+    if command == "playlists":
+        page = await library.get_playlists_page(offset=offset, limit=limit)
     else:
-        has_more = len(raw_items) >= limit
-    return raw_items, has_more
+        page = await library.get_genres_page(offset=offset, limit=limit)
+    return list(page.items), page.has_more
+
+
+def _build_library_session(provider: LyrionMusicProvider) -> LyrionSession:
+    """Create a neutral pylyrion session from MA provider config."""
+    return LyrionSession(
+        http_session=provider.mass.http_session,
+        endpoint=LyrionEndpoint(
+            host=provider.get_configured_host() or "",
+            port=provider.get_configured_port(),
+        ),
+    )
 
 
 async def search_artists(provider: LyrionMusicProvider, query: str, limit: int) -> list[Artist]:

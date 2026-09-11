@@ -132,9 +132,10 @@ def test_schedule_players_discovery_noops_when_unloading() -> None:
 async def test_discover_players_registers_new_and_unloads_missing() -> None:
     """Discovery should register unknown players and unregister stale known players."""
     provider = _build_provider_stub()
+    players = cast("Any", provider.mass.players)
 
     known_gone_player = SimpleNamespace(player_id="gone")
-    provider.mass.players.iter_players = MagicMock(return_value=[known_gone_player])
+    players.iter_players = MagicMock(return_value=[known_gone_player])
 
     provider._rpc_request = AsyncMock(
         side_effect=[
@@ -150,29 +151,29 @@ async def test_discover_players_registers_new_and_unloads_missing() -> None:
 
     await provider.discover_players()
 
-    assert provider.mass.players.register.await_count == 2
+    assert players.register.await_count == 2
     provider._cometd_stream.mark_player_seen.assert_any_call("new-1")
     provider._cometd_stream.mark_player_seen.assert_any_call("new-2")
     provider._cometd_stream.mark_player_removed.assert_called_once_with("gone")
-    provider.mass.players.unregister.assert_awaited_once_with("gone")
+    cast("Any", players.unregister).assert_awaited_once_with("gone")
 
 
 @pytest.mark.asyncio
 async def test_handle_get_stream_url_happy_path_redirects() -> None:
     """Route handler should resolve queue item to fresh stream URL and redirect."""
     provider = _build_provider_stub()
+    players = cast("Any", provider.mass.players)
+    queues = cast("Any", provider.mass.player_queues)
 
     request = MagicMock()
     request.query = {"player_id": "p1", "queue_id": "p1", "queue_item_id": "qi1"}
 
     player = MagicMock(spec=LyrionPlayer)
     player.provider = provider
-    provider.mass.players.get_player.return_value = player
+    players.get_player.return_value = player
     queue_item = SimpleNamespace(queue_id="p1", queue_item_id="qi1", uri="x")
-    provider.mass.player_queues.get_item.return_value = queue_item
-    provider.mass.player_queues.player_media_from_queue_item = AsyncMock(
-        return_value=SimpleNamespace()
-    )
+    queues.get_item.return_value = queue_item
+    queues.player_media_from_queue_item = AsyncMock(return_value=SimpleNamespace())
     provider.mass.streams.resolve_stream_url = AsyncMock(
         return_value="http://stream.local/fresh.mp3"
     )
@@ -187,6 +188,8 @@ async def test_handle_get_stream_url_happy_path_redirects() -> None:
 async def test_handle_get_stream_url_rejects_invalid_input_and_resolution_failures() -> None:
     """Route handler should reject bad query/player/item and map resolution errors to 404."""
     provider = _build_provider_stub()
+    players = cast("Any", provider.mass.players)
+    queues = cast("Any", provider.mass.player_queues)
 
     bad_request = MagicMock()
     bad_request.query = {"player_id": "", "queue_id": "", "queue_item_id": ""}
@@ -196,23 +199,19 @@ async def test_handle_get_stream_url_rejects_invalid_input_and_resolution_failur
     request = MagicMock()
     request.query = {"player_id": "p1", "queue_id": "p1", "queue_item_id": "qi1"}
 
-    provider.mass.players.get_player.return_value = None
+    players.get_player.return_value = None
     with pytest.raises(web.HTTPNotFound, match="Unknown Lyrion player"):
         await provider._handle_get_stream_url(request)
 
     request_player = MagicMock(spec=LyrionPlayer)
     request_player.provider = provider
-    provider.mass.players.get_player.return_value = request_player
-    provider.mass.player_queues.get_item.return_value = None
+    players.get_player.return_value = request_player
+    queues.get_item.return_value = None
     with pytest.raises(web.HTTPNotFound, match="Unknown queue item"):
         await provider._handle_get_stream_url(request)
 
-    provider.mass.player_queues.get_item.return_value = SimpleNamespace(
-        queue_id="p1", queue_item_id="qi1", uri="x"
-    )
-    provider.mass.player_queues.player_media_from_queue_item = AsyncMock(
-        side_effect=MusicAssistantError("boom")
-    )
+    queues.get_item.return_value = SimpleNamespace(queue_id="p1", queue_item_id="qi1", uri="x")
+    queues.player_media_from_queue_item = AsyncMock(side_effect=MusicAssistantError("boom"))
     with pytest.raises(web.HTTPNotFound, match="Unable to resolve stream URL"):
         await provider._handle_get_stream_url(request)
 
@@ -296,6 +295,7 @@ async def test_provider_cometd_wrapper_methods_delegate_to_stream() -> None:
 async def test_provider_command_and_remove_delegate() -> None:
     """remove_player and send_player_command should use provider internals directly."""
     provider = _build_provider_stub()
+    players = cast("Any", provider.mass.players)
     provider._rpc_request = AsyncMock(return_value={"ok": True})
 
     result = await provider.send_player_command("p1", ["stop"])
@@ -303,7 +303,7 @@ async def test_provider_command_and_remove_delegate() -> None:
     provider._rpc_request.assert_awaited_once_with(player_id="p1", command=["stop"])
 
     await provider.remove_player("p1")
-    provider.mass.players.unregister.assert_awaited_once_with("p1", True)
+    players.unregister.assert_awaited_once_with("p1", True)
 
 
 def test_apply_status_update_delegates_to_adapter() -> None:
@@ -450,15 +450,21 @@ async def test_discover_players_handles_missing_ids_existing_players_and_paging(
 
 
 @pytest.mark.asyncio
-async def test_get_player_status_delegates_to_rpc_wrapper() -> None:
-    """get_player_status should call provider RPC wrapper with status command."""
+async def test_get_player_status_uses_pylyrion_client() -> None:
+    """get_player_status should use the pylyrion player client facade."""
     provider = _build_provider_stub()
-    provider._rpc_request = AsyncMock(return_value={"mode": "play"})
+    player_client = AsyncMock()
+    player_client.players.get_status = AsyncMock(return_value={"mode": "play"})
 
-    status = await provider.get_player_status("p1")
+    with patch(
+        "music_assistant.providers.lyrion_player.provider.LyrionClient",
+        return_value=player_client,
+    ) as client_cls:
+        status = await provider.get_player_status("p1")
 
     assert status == {"mode": "play"}
-    provider._rpc_request.assert_awaited_once_with(player_id="p1", command=["status", "-", 1])
+    client_cls.assert_called_once()
+    player_client.players.get_status.assert_awaited_once_with("p1")
 
 
 def test_get_configured_helpers_handle_invalid_types_and_none_port() -> None:

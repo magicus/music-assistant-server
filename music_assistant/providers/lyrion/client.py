@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol, cast
 
-from aiohttp import ClientError, ClientTimeout
 from music_assistant_models.errors import ProviderUnavailableError
 
 from music_assistant.helpers.throttle_retry import ThrottlerManager
@@ -15,6 +14,24 @@ from music_assistant.providers.lyrion.constants import (
     DEFAULT_LMS_PORT,
     RPC_TIMEOUT,
 )
+from pylyrion.errors import (
+    LyrionProtocolError,
+    LyrionRequestError,
+    LyrionTimeoutError,
+)
+from pylyrion.models import LyrionEndpoint
+from pylyrion.session import (
+    LyrionSession,
+)
+from pylyrion.session import (
+    build_lms_url as _build_lms_url,
+)
+from pylyrion.session import (
+    normalize_lms_text_value as _normalize_lms_text_value,
+)
+
+build_lms_url = _build_lms_url
+normalize_lms_text_value = _normalize_lms_text_value
 
 _RPC_THROTTLER = ThrottlerManager(rate_limit=1, period=1)
 
@@ -50,25 +67,6 @@ def get_configured_port(
         return default
 
 
-def build_lms_url(host: str, port: int | None, path: str) -> str:
-    """Build an HTTP URL for an LMS endpoint with IPv6-safe host formatting."""
-    normalized_host = host
-    if ":" in host and not host.startswith("[") and not host.endswith("]"):
-        normalized_host = f"[{host}]"
-    normalized_path = path if path.startswith("/") else f"/{path}"
-    if port is None:
-        return f"http://{normalized_host}{normalized_path}"
-    return f"http://{normalized_host}:{port}{normalized_path}"
-
-
-def normalize_lms_text_value(value: object) -> str | None:
-    """Normalize a raw LMS scalar into a stripped text value."""
-    if value is None:
-        return None
-    normalized = str(value).strip()
-    return normalized or None
-
-
 async def rpc_request(
     provider: _ConfigProvider,
     player_id: str,
@@ -82,54 +80,17 @@ async def rpc_request(
         raise ProviderUnavailableError("Lyrion host is not configured")
 
     port = get_configured_port(provider)
-    payload = {
-        "id": 1,
-        "method": "slim.request",
-        "params": [player_id, list(command)],
-    }
-    url = build_lms_url(host, port, "/jsonrpc.js")
-
+    session = LyrionSession(
+        http_session=provider.mass.http_session,
+        endpoint=LyrionEndpoint(host=host, port=port),
+        timeout=timeout,
+        request_guard=_RPC_THROTTLER.acquire,
+    )
     try:
-        async with (
-            _RPC_THROTTLER.acquire(),
-            provider.mass.http_session.post(
-                url,
-                json=payload,
-                timeout=ClientTimeout(total=timeout),
-            ) as response,
-        ):
-            response.raise_for_status()
-            data = cast("Mapping[str, object]", await response.json())
-    except TimeoutError as err:
-        raise ProviderUnavailableError(
-            f"Lyrion server at {host}:{port} did not respond in time "
-            f"({timeout}s). Verify that Lyrion is running and reachable."
-        ) from err
-    except ValueError as err:
-        raise ProviderUnavailableError(
-            f"Lyrion JSON-RPC connection request to {host}:{port} returned invalid JSON: {err}"
-        ) from err
-    except ClientError as err:
-        raise ProviderUnavailableError(
-            f"Lyrion JSON-RPC connection request to {host}:{port} failed: {err}"
-        ) from err
-
-    command_name = command[0] if command else "<unknown>"
-    error_payload = data.get("error")
-    if error_payload is not None:
-        if not isinstance(error_payload, Mapping):
-            raise ProviderUnavailableError(
-                f"Lyrion JSON-RPC command {command_name} returned an invalid error object"
-            )
-        error_code = error_payload.get("code", "unknown")
-        error_message = error_payload.get("message", "unknown JSON-RPC error")
-        raise ProviderUnavailableError(
-            f"Lyrion JSON-RPC command {command_name} failed with code {error_code}: {error_message}"
-        )
-
-    result = data.get("result")
-    if not isinstance(result, dict):
-        raise ProviderUnavailableError(
-            f"Lyrion JSON-RPC response for command {command_name} must contain a result object"
-        )
-    return cast("dict[str, object]", result)
+        return await session.request(player_id, command)
+    except (
+        LyrionProtocolError,
+        LyrionRequestError,
+        LyrionTimeoutError,
+    ) as err:
+        raise ProviderUnavailableError(str(err)) from err

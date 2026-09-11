@@ -99,7 +99,7 @@ NOTICE,\
 
 [tool.setuptools]
 include-package-data = true
-packages = ["music_assistant"]
+packages = ["music_assistant", "pylyrion"]
 platforms = ["any"]
 zip-safe = false
 
