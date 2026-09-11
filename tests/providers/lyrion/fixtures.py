@@ -61,9 +61,3 @@ def fake_lms_server(
     if lyrion_test_lms_server.fake_server is None:
         pytest.skip("Test requires fake LMS server; real LMS endpoint configured")
     return lyrion_test_lms_server.fake_server
-
-
-@pytest.fixture
-def lyrion_fake_server(fake_lms_server: FakeLmsServer) -> FakeLmsServer:
-    """Backward-compatible alias for fake LMS fixture name."""
-    return fake_lms_server

@@ -11,7 +11,7 @@ from tests.providers.lyrion_player.harness_test_support import EndpointRpcClient
 
 pytestmark = [
     pytest.mark.asyncio,
-    pytest.mark.usefixtures("lyrion_fake_server"),
+    pytest.mark.usefixtures("fake_lms_server"),
 ]
 
 
@@ -47,7 +47,7 @@ async def test_player_seek_updates_scriptable_elapsed_time(
 
 async def test_player_local_playback_state_across_multiple_sources(
     lyrion_test_endpoint: LyrionTestEndpoint,
-    lyrion_fake_server: FakeLmsServer,
+    fake_lms_server: FakeLmsServer,
 ) -> None:
     """Fake harness should keep scriptable local mode/is_playing state coherent."""
     player = ScriptableSlimProtoPlayer(
@@ -56,7 +56,7 @@ async def test_player_local_playback_state_across_multiple_sources(
         name="Fake Local State",
         model="test",
     )
-    provider = FakeMAProvider(lyrion_fake_server, player.player_id)
+    provider = FakeMAProvider(fake_lms_server, player.player_id)
     rpc_client: EndpointRpcClient | None = None
 
     await player.connect()
@@ -88,7 +88,7 @@ async def test_player_local_playback_state_across_multiple_sources(
 
 async def test_two_players_local_state_remains_coherent_under_mixed_pause_sources(
     lyrion_test_endpoint: LyrionTestEndpoint,
-    lyrion_fake_server: FakeLmsServer,
+    fake_lms_server: FakeLmsServer,
 ) -> None:
     """Fake harness local player states should stay coherent with mixed pause inputs."""
     player_a = ScriptableSlimProtoPlayer(
@@ -103,8 +103,8 @@ async def test_two_players_local_state_remains_coherent_under_mixed_pause_source
         name="Fake B",
         model="test",
     )
-    provider_a = FakeMAProvider(lyrion_fake_server, "fake-player-a")
-    provider_b = FakeMAProvider(lyrion_fake_server, "fake-player-b")
+    provider_a = FakeMAProvider(fake_lms_server, "fake-player-a")
+    provider_b = FakeMAProvider(fake_lms_server, "fake-player-b")
     rpc_a: EndpointRpcClient | None = None
 
     await player_a.connect()
