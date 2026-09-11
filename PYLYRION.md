@@ -47,5 +47,6 @@
 - CometD extraction focus moved to a larger chunk: Bayeux client plus CometD helper/recovery/status layers moved into `pylyrion/cometd`.
 	- Chosen now: keep `music_assistant/providers/lyrion/cometd/stream.py` in MA temporarily because it emits MA event classes directly, while importing its protocol internals from `pylyrion`.
 	- Follow-up (this slice): moved playerstatus merge/diff transition detection out of MA stream into neutral `pylyrion/cometd/player_status_events.py`; MA stream now maps normalized pylyrion events to MA event classes.
+	- Follow-up (this slice): moved session/watchdog/expectation/subscription/message-loop runtime to `pylyrion/cometd/stream_core.py`; `music_assistant/providers/lyrion/cometd/stream.py` is now only a compatibility re-export shell to `stream_adapter.py`.
 	- Alternative A: move the stream class as-is and let pylyrion depend on MA event models (rejected due MA leakage).
 	- Alternative B: fully move stream to pylyrion with a neutral event callback contract and a thin MA event-adapter wrapper (target for next bigger chunk).

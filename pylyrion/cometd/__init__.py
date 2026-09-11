@@ -27,9 +27,11 @@ from .player_status_events import (
 )
 from .recovery import _CometDRecoveryMixin
 from .status import _CometDStatusMixin
+from .stream_core import CometDEventStreamCore
 
 __all__ = [
     "BayeuxClient",
+    "CometDEventStreamCore",
     "LmsPlayerEventCallback",
     "NormalizedPlayerStatusEvent",
     "PlayerPlaybackChanged",
