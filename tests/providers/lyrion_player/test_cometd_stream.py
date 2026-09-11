@@ -13,16 +13,16 @@ from music_assistant_models.errors import MusicAssistantError, ProviderUnavailab
 
 from music_assistant.providers.lyrion.cometd.helpers import _TrackEndExpectation
 from music_assistant.providers.lyrion.cometd.stream import LyrionCometDEventStream
-from music_assistant.providers.lyrion_player.cometd_events import (
-    LmsPlayerPlaybackChangedEvent,
-    LmsPlayerPlaylistChangedEvent,
-    LmsPlayerPowerChangedEvent,
-    LmsPlayerRepeatChangedEvent,
-    LmsPlayerSeekedEvent,
-    LmsPlayerShuffleChangedEvent,
-    LmsPlayerVolumeChangedEvent,
-)
 from music_assistant.providers.lyrion_player.provider import LyrionPlayerProvider
+from pylyrion.cometd.player_status_events import (
+    PlayerPlaybackChanged,
+    PlayerPlaylistChanged,
+    PlayerPowerChanged,
+    PlayerRepeatChanged,
+    PlayerSeeked,
+    PlayerShuffleChanged,
+    PlayerVolumeChanged,
+)
 from tests.providers.lyrion.fake_lms_server import FakeLmsServer
 from tests.providers.lyrion.rpc_test_doubles import FakeResponse
 
@@ -233,7 +233,7 @@ async def test_playerstatus_playlist_change_detects_canonical_playlist_tracks_ke
         },
     )
 
-    assert any(isinstance(event, LmsPlayerPlaylistChangedEvent) for event in emitted_events)
+    assert any(isinstance(event, PlayerPlaylistChanged) for event in emitted_events)
 
 
 async def test_playerstatus_playlist_change_detects_index_only_navigation() -> None:
@@ -265,7 +265,7 @@ async def test_playerstatus_playlist_change_detects_index_only_navigation() -> N
         },
     )
 
-    assert any(isinstance(event, LmsPlayerPlaylistChangedEvent) for event in emitted_events)
+    assert any(isinstance(event, PlayerPlaylistChanged) for event in emitted_events)
 
 
 async def test_wait_for_player_status_update_observes_new_status() -> None:
@@ -845,13 +845,13 @@ async def test_handle_player_status_emits_all_runtime_diff_events() -> None:
         },
     )
 
-    assert any(isinstance(event, LmsPlayerPlaybackChangedEvent) for event in emitted_events)
-    assert any(isinstance(event, LmsPlayerPowerChangedEvent) for event in emitted_events)
-    assert any(isinstance(event, LmsPlayerVolumeChangedEvent) for event in emitted_events)
-    assert any(isinstance(event, LmsPlayerRepeatChangedEvent) for event in emitted_events)
-    assert any(isinstance(event, LmsPlayerShuffleChangedEvent) for event in emitted_events)
-    assert any(isinstance(event, LmsPlayerSeekedEvent) for event in emitted_events)
-    assert any(isinstance(event, LmsPlayerPlaylistChangedEvent) for event in emitted_events)
+    assert any(isinstance(event, PlayerPlaybackChanged) for event in emitted_events)
+    assert any(isinstance(event, PlayerPowerChanged) for event in emitted_events)
+    assert any(isinstance(event, PlayerVolumeChanged) for event in emitted_events)
+    assert any(isinstance(event, PlayerRepeatChanged) for event in emitted_events)
+    assert any(isinstance(event, PlayerShuffleChanged) for event in emitted_events)
+    assert any(isinstance(event, PlayerSeeked) for event in emitted_events)
+    assert any(isinstance(event, PlayerPlaylistChanged) for event in emitted_events)
 
 
 def test_next_expectation_delay_backoff_branch() -> None:

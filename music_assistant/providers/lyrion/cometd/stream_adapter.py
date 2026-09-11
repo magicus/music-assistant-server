@@ -9,17 +9,7 @@ from music_assistant_models.errors import MusicAssistantError, ProviderUnavailab
 
 from music_assistant.providers.lyrion.client import build_lms_url
 from pylyrion.cometd.helpers import LmsPlayerEventCallback
-from pylyrion.cometd.player_status_events import (
-    NormalizedPlayerStatusEvent,
-    PlayerPlaybackChanged,
-    PlayerPlaylistChanged,
-    PlayerPowerChanged,
-    PlayerRepeatChanged,
-    PlayerSeeked,
-    PlayerShuffleChanged,
-    PlayerStatusUpdated,
-    PlayerVolumeChanged,
-)
+from pylyrion.cometd.player_status_events import NormalizedPlayerStatusEvent
 from pylyrion.cometd.stream_core import CometDEventStreamCore
 from pylyrion.errors import LyrionRequestError
 
@@ -53,85 +43,9 @@ class LyrionCometDEventStream(CometDEventStreamCore):
         self,
         events: list[NormalizedPlayerStatusEvent],
     ) -> None:
-        """Map normalized pylyrion events to MA event classes and emit them."""
-        from music_assistant.providers.lyrion_player.cometd_events import (
-            LmsPlayerPlaybackChangedEvent,
-            LmsPlayerPlaylistChangedEvent,
-            LmsPlayerPowerChangedEvent,
-            LmsPlayerRepeatChangedEvent,
-            LmsPlayerSeekedEvent,
-            LmsPlayerShuffleChangedEvent,
-            LmsPlayerStatusUpdatedEvent,
-            LmsPlayerVolumeChangedEvent,
-        )
-
+        """Forward normalized pylyrion events to callback consumers."""
         for event in events:
-            if isinstance(event, PlayerStatusUpdated):
-                await self._emit_event(
-                    LmsPlayerStatusUpdatedEvent(
-                        player_id=event.player_id,
-                        status=dict(event.status),
-                        is_initial=event.is_initial,
-                    )
-                )
-            elif isinstance(event, PlayerPlaybackChanged):
-                await self._emit_event(
-                    LmsPlayerPlaybackChangedEvent(
-                        player_id=event.player_id,
-                        old_mode=event.old_mode,
-                        new_mode=event.new_mode,
-                    )
-                )
-            elif isinstance(event, PlayerPowerChanged):
-                await self._emit_event(
-                    LmsPlayerPowerChangedEvent(
-                        player_id=event.player_id,
-                        old_powered=event.old_powered,
-                        new_powered=event.new_powered,
-                    )
-                )
-            elif isinstance(event, PlayerVolumeChanged):
-                await self._emit_event(
-                    LmsPlayerVolumeChangedEvent(
-                        player_id=event.player_id,
-                        old_volume=event.old_volume,
-                        new_volume=event.new_volume,
-                    )
-                )
-            elif isinstance(event, PlayerRepeatChanged):
-                await self._emit_event(
-                    LmsPlayerRepeatChangedEvent(
-                        player_id=event.player_id,
-                        old_repeat=event.old_repeat,
-                        new_repeat=event.new_repeat,
-                    )
-                )
-            elif isinstance(event, PlayerShuffleChanged):
-                await self._emit_event(
-                    LmsPlayerShuffleChangedEvent(
-                        player_id=event.player_id,
-                        old_shuffle=event.old_shuffle,
-                        new_shuffle=event.new_shuffle,
-                    )
-                )
-            elif isinstance(event, PlayerSeeked):
-                await self._emit_event(
-                    LmsPlayerSeekedEvent(
-                        player_id=event.player_id,
-                        old_time=event.old_time,
-                        new_time=event.new_time,
-                    )
-                )
-            elif isinstance(event, PlayerPlaylistChanged):
-                await self._emit_event(
-                    LmsPlayerPlaylistChangedEvent(
-                        player_id=event.player_id,
-                        old_playlist_timestamp=event.old_playlist_timestamp,
-                        new_playlist_timestamp=event.new_playlist_timestamp,
-                        old_playlist_tracks=event.old_playlist_tracks,
-                        new_playlist_tracks=event.new_playlist_tracks,
-                    )
-                )
+            await self._emit_event(event)
 
     async def _emit_event(self, event: object) -> None:
         """Emit one event without terminating connect loop on MA errors."""

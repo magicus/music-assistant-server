@@ -12,13 +12,13 @@ from music_assistant.providers.lyrion_player.cometd_event_adapter import (
     _extract_sync_master,
     _extract_sync_slaves,
 )
-from music_assistant.providers.lyrion_player.cometd_events import (
-    LmsPlayerPlaylistChangedEvent,
-    LmsPlayerRepeatChangedEvent,
-    LmsPlayerShuffleChangedEvent,
-    LmsPlayerStatusUpdatedEvent,
-)
 from music_assistant.providers.lyrion_player.player import LyrionPlayer
+from pylyrion.cometd.player_status_events import (
+    PlayerPlaylistChanged,
+    PlayerRepeatChanged,
+    PlayerShuffleChanged,
+    PlayerStatusUpdated,
+)
 
 
 def _build_provider_and_players() -> tuple[MagicMock, LyrionPlayer, LyrionPlayer]:
@@ -167,14 +167,14 @@ async def test_handle_event_sync_triggers_for_status_playlist_repeat_shuffle() -
     leader.sync_queue_from_lms = AsyncMock(return_value=None)
 
     await adapter.handle_event(
-        LmsPlayerStatusUpdatedEvent(
+        PlayerStatusUpdated(
             player_id="leader",
             status={"mode": "play"},
             is_initial=True,
         )
     )
     await adapter.handle_event(
-        LmsPlayerPlaylistChangedEvent(
+        PlayerPlaylistChanged(
             player_id="leader",
             old_playlist_timestamp=1.0,
             new_playlist_timestamp=2.0,
@@ -183,14 +183,14 @@ async def test_handle_event_sync_triggers_for_status_playlist_repeat_shuffle() -
         )
     )
     await adapter.handle_event(
-        LmsPlayerRepeatChangedEvent(
+        PlayerRepeatChanged(
             player_id="leader",
             old_repeat=0,
             new_repeat=1,
         )
     )
     await adapter.handle_event(
-        LmsPlayerShuffleChangedEvent(
+        PlayerShuffleChanged(
             player_id="leader",
             old_shuffle=0,
             new_shuffle=1,
@@ -207,7 +207,7 @@ async def test_handle_event_ignores_non_lyrion_player() -> None:
     provider.mass.players.get_player = MagicMock(return_value=object())
 
     await adapter.handle_event(
-        LmsPlayerStatusUpdatedEvent(
+        PlayerStatusUpdated(
             player_id="ghost",
             status={"mode": "play"},
             is_initial=True,
