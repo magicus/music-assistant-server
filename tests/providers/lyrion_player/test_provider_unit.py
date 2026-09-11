@@ -241,21 +241,24 @@ async def test_provider_init_wires_status_adapter_and_stream() -> None:
         patch(
             "music_assistant.providers.lyrion_player.provider.PlayerStatusStream"
         ) as mock_stream_cls,
+        patch(
+            "music_assistant.providers.lyrion_player.provider.build_cometd_post_messages_callback"
+        ) as mock_build_post_callback,
     ):
         adapter = MagicMock()
         adapter.handle_event = AsyncMock()
         stream = MagicMock()
+        post_callback = AsyncMock()
         mock_adapter_cls.return_value = adapter
         mock_stream_cls.return_value = stream
+        mock_build_post_callback.return_value = post_callback
 
         provider = LyrionPlayerProvider()
 
     assert provider._status_event_adapter is adapter
     assert provider._status_stream is stream
     mock_stream_cls.assert_called_once()
-    assert (
-        mock_stream_cls.call_args.kwargs["post_messages"] == provider._post_status_stream_messages
-    )
+    assert mock_stream_cls.call_args.kwargs["post_messages"] is post_callback
     assert provider._unsubscribe_status_events is not None
 
 

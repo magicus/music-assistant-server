@@ -8,7 +8,7 @@ from contextlib import suppress
 from typing import Any, cast
 from urllib.parse import urlencode
 
-from aiohttp import ClientError, ClientTimeout, web
+from aiohttp import web
 from music_assistant_models.config_entries import ConfigEntry
 from music_assistant_models.enums import ConfigEntryType
 from music_assistant_models.errors import (
@@ -18,10 +18,10 @@ from music_assistant_models.errors import (
 )
 
 from music_assistant.models.player_provider import PlayerProvider
-from music_assistant.providers.lyrion.client import build_lms_url
 from music_assistant.providers.lyrion.constants import STATUS_COMMAND_VERIFY_TIMEOUT
 from music_assistant.providers.lyrion.setup_flow import validate_lms_endpoint
 from pylyrion.client import LyrionClient
+from pylyrion.cometd.transport import build_cometd_post_messages_callback
 from pylyrion.errors import LyrionRequestError
 from pylyrion.models import LyrionEndpoint
 from pylyrion.player import LyrionPlayerClient
@@ -58,7 +58,10 @@ class LyrionPlayerProvider(PlayerProvider):
         self._status_event_adapter = LyrionStatusEventAdapter(self)
         self._status_stream = PlayerStatusStream(
             self,
-            post_messages=self._post_status_stream_messages,
+            post_messages=build_cometd_post_messages_callback(
+                get_session=self._build_pylyrion_session,
+                unavailable_error_factory=lambda err: ProviderUnavailableError(str(err)),
+            ),
             recoverable_errors=(ProviderUnavailableError, LyrionRequestError),
         )
         self.lyrion_server = LyrionServerControl(
@@ -485,39 +488,6 @@ class LyrionPlayerProvider(PlayerProvider):
         except TypeError, ValueError:
             return default
 
-    async def _post_status_stream_messages(
-        self,
-        messages: list[dict[str, object]],
-        timeout: int,
-    ) -> list[dict[str, object]]:
-        """POST stream messages and normalize response payload for pylyrion runtime."""
-        host = self.get_configured_host()
-        if not host:
-            raise ProviderUnavailableError("Lyrion host is not configured")
-        port = self.get_configured_port()
-        if port is None:
-            raise ProviderUnavailableError("Lyrion port is not configured")
-
-        url = build_lms_url(host, port, "/cometd")
-        try:
-            async with self.mass.http_session.post(
-                url,
-                json=messages,
-                timeout=ClientTimeout(total=timeout),
-            ) as response:
-                response.raise_for_status()
-                payload = await response.json()
-        except (ClientError, TimeoutError, ValueError) as err:
-            raise ProviderUnavailableError(
-                f"Status stream request to {host}:{port} failed: {err}"
-            ) from err
-
-        if isinstance(payload, dict):
-            return [payload]
-        if not isinstance(payload, list):
-            raise ProviderUnavailableError("Status stream response must be a JSON object or list")
-        return [message for message in payload if isinstance(message, dict)]
-
     async def _handle_get_stream_url(
         self,
         request: web.Request,
@@ -573,19 +543,22 @@ class LyrionPlayerProvider(PlayerProvider):
 
         raise web.HTTPFound(location=stream_url)
 
-    def _build_pylyrion_client(self) -> LyrionClient:
-        """Build a pylyrion client from current MA provider config."""
+    def _build_pylyrion_session(self) -> LyrionSession:
+        """Build a pylyrion session from current MA provider config."""
         host = self.get_configured_host()
         if not host:
             raise ProviderUnavailableError("Lyrion host is not configured")
-        session = LyrionSession(
+        return LyrionSession(
             http_session=self.mass.http_session,
             endpoint=LyrionEndpoint(
                 host=host,
                 port=self.get_configured_port(),
             ),
         )
-        return LyrionClient(session)
+
+    def _build_pylyrion_client(self) -> LyrionClient:
+        """Build a pylyrion client from current MA provider config."""
+        return LyrionClient(self._build_pylyrion_session())
 
     def _build_pylyrion_player_client(self) -> LyrionPlayerClient:
         """Build pylyrion player client from current MA provider config."""
