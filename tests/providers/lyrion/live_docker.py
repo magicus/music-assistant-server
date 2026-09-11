@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import shutil
@@ -31,6 +32,8 @@ class LiveLmsEndpoint:
     host: str
     port: int
     base_url: str
+    username: str | None = None
+    password: str | None = None
 
 
 class LiveLmsError(RuntimeError):
@@ -179,10 +182,39 @@ def _resolve_compose_cmd() -> list[str]:
     raise LiveLmsError(msg)
 
 
+def _lms_basic_auth_headers(
+    *,
+    username: str | None = None,
+    password: str | None = None,
+) -> dict[str, str]:
+    """Return HTTP Basic Auth headers for protected LMS instances."""
+    if username is None and password is None:
+        return {}
+    username = username or ""
+    password = password or ""
+    token = base64.b64encode(f"{username}:{password}".encode()).decode("ascii")
+    return {"Authorization": f"Basic {token}"}
+
+
+def _lms_auth_credentials(
+    *,
+    auth_enabled: bool = False,
+    username: str = "lyrion-user",
+    password: str = "lyrion-password",
+) -> tuple[str | None, str | None]:
+    """Return the configured credentials for a protected LMS Docker instance."""
+    if not auth_enabled:
+        return None, None
+    return username, password
+
+
 def _json_rpc(
     base_url: str,
     command: list[Any],
     timeout: float = 5.0,
+    *,
+    username: str | None = None,
+    password: str | None = None,
 ) -> dict[str, Any]:
     """Send one LMS JSON-RPC command and return decoded JSON."""
     payload = {
@@ -191,11 +223,13 @@ def _json_rpc(
         "params": ["", command],
     }
     body = json.dumps(payload).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    headers.update(_lms_basic_auth_headers(username=username, password=password))
     req = Request(
         f"{base_url}/jsonrpc.js",
         data=body,
         method="POST",
-        headers={"Content-Type": "application/json"},
+        headers=headers,
     )
     with urlopen(req, timeout=timeout) as response:
         result = json.loads(response.read().decode("utf-8"))
@@ -226,18 +260,38 @@ def _wait_for_port(host: str, port: int, timeout_s: float = 120.0) -> None:
     raise TimeoutError(msg)
 
 
-def _wait_for_catalog_ready(base_url: str, timeout_s: float = 240.0) -> None:
+def _wait_for_catalog_ready(
+    base_url: str,
+    *,
+    auth_enabled: bool = False,
+    username: str = "lyrion-user",
+    password: str = "lyrion-password",
+    timeout_s: float = 240.0,
+) -> None:
     """Wait until expected catalog rows are visible in LMS listings."""
+    username, password = _lms_auth_credentials(
+        auth_enabled=auth_enabled,
+        username=username,
+        password=password,
+    )
     end = time.time() + timeout_s
     last_counts = "artists=0 albums=0 tracks=0 playlists=0"
     last_reported = ""
     start = time.time()
     while time.time() < end:
         try:
-            artists_rsp = _json_rpc(base_url, ["artists", 0, 1000])
-            albums_rsp = _json_rpc(base_url, ["albums", 0, 1000])
-            tracks_rsp = _json_rpc(base_url, ["titles", 0, 1000])
-            playlists_rsp = _json_rpc(base_url, ["playlists", 0, 200])
+            artists_rsp = _json_rpc(
+                base_url, ["artists", 0, 1000], username=username, password=password
+            )
+            albums_rsp = _json_rpc(
+                base_url, ["albums", 0, 1000], username=username, password=password
+            )
+            tracks_rsp = _json_rpc(
+                base_url, ["titles", 0, 1000], username=username, password=password
+            )
+            playlists_rsp = _json_rpc(
+                base_url, ["playlists", 0, 200], username=username, password=password
+            )
         except URLError, TimeoutError, OSError, ValueError:
             time.sleep(2.0)
             continue
@@ -356,21 +410,35 @@ def _write_catalog(music_dir: Path) -> None:
     )
 
 
-def _write_server_prefs(config_dir: Path) -> None:
+def _write_server_prefs(
+    config_dir: Path,
+    *,
+    auth_enabled: bool = False,
+    username: str = "lyrion-user",
+    password_hash: str = "68warDCjSmInKKk078r/Ii4ehe8",
+) -> None:
     """Write minimum server prefs to skip first-run wizard in tests."""
     prefs_dir = config_dir / "prefs"
     prefs_dir.mkdir(parents=True, exist_ok=True)
     server_prefs = prefs_dir / "server.prefs"
-    server_prefs.write_text(
-        (
-            "wizardDone: 1\n"
-            "protectSettings: 0\n"
-            "audiodir: /music\n"
-            "playlistdir: /music/Playlists\n"
-            "rescaninterval: 0\n"
-        ),
-        encoding="utf-8",
-    )
+    lines = [
+        "wizardDone: 1",
+        "protectSettings: 0",
+        "audiodir: /music",
+        "playlistdir: /music/Playlists",
+        "rescaninterval: 0",
+    ]
+    if auth_enabled:
+        lines.extend(
+            [
+                "authorize: '1'",
+                f"username: {username}",
+                f"password: {password_hash}",
+            ]
+        )
+    else:
+        lines.extend(["authorize: 0", "username: ''", "password: ''"])
+    server_prefs.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _docker_env(*, lms_http_port: int = 9000) -> dict[str, str]:
@@ -423,7 +491,13 @@ def _container_unhealthy_state(compose_ps_output: str) -> bool:
     return "restarting" in lowered or "exited" in lowered or "dead" in lowered
 
 
-def _bring_up_lms(base_url: str) -> None:
+def _bring_up_lms(
+    base_url: str,
+    *,
+    auth_enabled: bool = False,
+    username: str = "lyrion-user",
+    password: str = "lyrion-password",
+) -> None:
     """Start LMS container and wait until serverstatus works."""
     compose_cmd = _resolve_compose_cmd()
     parsed = urlparse(base_url)
@@ -468,6 +542,11 @@ def _bring_up_lms(base_url: str) -> None:
     end = time.time() + 180.0
     start = time.time()
     next_status_report = time.time() + 5.0
+    username, password = _lms_auth_credentials(
+        auth_enabled=auth_enabled,
+        username=username,
+        password=password,
+    )
     _progress("waiting for LMS JSON-RPC serverstatus")
     while time.time() < end:
         ps_output = _compose_ps(compose_cmd)
@@ -486,7 +565,7 @@ def _bring_up_lms(base_url: str) -> None:
             raise LiveLmsError(msg)
 
         try:
-            rsp = _json_rpc(base_url, ["serverstatus", 0, 1])
+            rsp = _json_rpc(base_url, ["serverstatus", 0, 1], username=username, password=password)
             if isinstance(rsp.get("result"), dict):
                 _progress("LMS JSON-RPC is ready")
                 _progress(f"waiting for LMS SlimProto endpoint {host}:3483")
@@ -521,12 +600,23 @@ def _bring_up_lms(base_url: str) -> None:
     raise TimeoutError(msg)
 
 
-def _trigger_rescan(base_url: str) -> None:
+def _trigger_rescan(
+    base_url: str,
+    *,
+    auth_enabled: bool = False,
+    username: str = "lyrion-user",
+    password: str = "lyrion-password",
+) -> None:
     """Trigger a library rescan, ignoring unsupported command variants."""
+    username, password = _lms_auth_credentials(
+        auth_enabled=auth_enabled,
+        username=username,
+        password=password,
+    )
     _progress("triggering LMS rescan")
     for command in (["rescan"], ["rescan", "full"]):
         try:
-            _json_rpc(base_url, command)
+            _json_rpc(base_url, command, username=username, password=password)
             _progress(f"rescan command accepted: {command}")
             return
         except URLError, TimeoutError, OSError, ValueError:
@@ -559,36 +649,31 @@ def lyrion_live_lms_endpoint(pytestconfig: pytest.Config) -> Generator[LiveLmsEn
     Enable with ``--live-lyrion-docker``. Tests are skipped by default.
     """
     enabled = bool(pytestconfig.getoption("--live-lyrion-docker"))
-    if not enabled and os.getenv("LYRION_TEST_DOCKER") != "1":
+    if not enabled:
         pytest.skip("Set --live-lyrion-docker to run Docker-managed live LMS tests")
 
-    verbose_enabled = (
-        bool(pytestconfig.getoption("verbose"))
-        or bool(pytestconfig.getoption("--live-lyrion-verbose"))
-        or os.getenv("LYRION_TEST_DOCKER_VERBOSE") == "1"
+    verbose_enabled = bool(pytestconfig.getoption("verbose")) or bool(
+        pytestconfig.getoption("--live-lyrion-verbose")
     )
     _set_progress_verbosity(verbose_enabled)
     _progress(
         "verbose progress enabled",
         force=verbose_enabled,
     )
-    if platform := os.getenv("LMS_PLATFORM"):
-        _progress(
-            f"docker platform override: {platform}",
-            force=verbose_enabled,
-        )
-
-    keep_running = (
-        bool(pytestconfig.getoption("--live-lyrion-keep-running"))
-        or os.getenv("LYRION_TEST_DOCKER_KEEP_RUNNING") == "1"
-    )
+    keep_running = bool(pytestconfig.getoption("--live-lyrion-keep-running"))
+    auth_enabled = bool(pytestconfig.getoption("--live-lyrion-auth"))
 
     if keep_running:
         _progress("keep-running enabled: preserving existing LMS state")
         if not LMS_CONFIG_DIR.exists():
             _progress("no existing config found; creating initial server prefs")
             LMS_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-            _write_server_prefs(LMS_CONFIG_DIR)
+            _write_server_prefs(
+                LMS_CONFIG_DIR,
+                auth_enabled=auth_enabled,
+                username="lyrion-user",
+                password_hash="68warDCjSmInKKk078r/Ii4ehe8",
+            )
         if not LMS_MUSIC_DIR.exists():
             _progress("no existing music catalog found; generating test catalog")
             _write_catalog(LMS_MUSIC_DIR)
@@ -604,11 +689,19 @@ def lyrion_live_lms_endpoint(pytestconfig: pytest.Config) -> Generator[LiveLmsEn
             shutil.rmtree(LMS_CONFIG_DIR)
         LMS_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         LMS_MUSIC_DIR.mkdir(parents=True, exist_ok=True)
-        _write_server_prefs(LMS_CONFIG_DIR)
+        _write_server_prefs(
+            LMS_CONFIG_DIR,
+            auth_enabled=auth_enabled,
+            username="lyrion-user",
+            password_hash="68warDCjSmInKKk078r/Ii4ehe8",
+        )
         _write_catalog(LMS_MUSIC_DIR)
         _progress(f"catalog written under {LMS_MUSIC_DIR}")
 
-    base_url = os.getenv("LYRION_TEST_DOCKER_LMS_URL", "http://127.0.0.1:9000")
+    base_url = os.environ.get(
+        "LYRION_TEST_DOCKER_LMS_URL",
+        "http://127.0.0.1:9000",
+    )
     parsed = urlparse(base_url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname or not parsed.port:
         msg = "LYRION_TEST_DOCKER_LMS_URL must include scheme, host and port"
@@ -622,13 +715,30 @@ def lyrion_live_lms_endpoint(pytestconfig: pytest.Config) -> Generator[LiveLmsEn
             if ":" in parsed.hostname
             else f"{parsed.scheme}://{parsed.hostname}:{parsed.port}"
         ),
+        username="lyrion-user" if auth_enabled else None,
+        password="lyrion-password" if auth_enabled else None,
     )
 
     try:
-        _bring_up_lms(endpoint.base_url)
-        _trigger_rescan(endpoint.base_url)
+        _bring_up_lms(
+            endpoint.base_url,
+            auth_enabled=auth_enabled,
+            username=endpoint.username or "lyrion-user",
+            password=endpoint.password or "lyrion-password",
+        )
+        _trigger_rescan(
+            endpoint.base_url,
+            auth_enabled=auth_enabled,
+            username=endpoint.username or "lyrion-user",
+            password=endpoint.password or "lyrion-password",
+        )
         _progress("waiting for catalog to become visible in LMS")
-        _wait_for_catalog_ready(endpoint.base_url)
+        _wait_for_catalog_ready(
+            endpoint.base_url,
+            auth_enabled=auth_enabled,
+            username=endpoint.username or "lyrion-user",
+            password=endpoint.password or "lyrion-password",
+        )
         _progress("catalog is ready; running tests")
         yield endpoint
     finally:

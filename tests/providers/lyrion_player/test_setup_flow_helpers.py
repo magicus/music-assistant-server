@@ -43,6 +43,7 @@ def _session(*, setup_data: dict[str, Any] | None = None) -> Any:
 
 
 def _provider_cfg(instance_id: str) -> Any:
+    """Return a minimal provider-config stub for the given instance id."""
     return SimpleNamespace(instance_id=instance_id)
 
 
@@ -294,18 +295,25 @@ async def test_prefill_uses_instance_values_when_available() -> None:
 
 
 async def test_prefill_uses_sibling_provider_when_setting_up() -> None:
-    """Setup flow should borrow host/port from sibling Lyrion provider instances."""
+    """Setup flow should borrow host/port from a sibling provider."""
     session = _session(setup_data={})
     session.context.kind = "setup"
     session.context.instance_id = "lyrion_player--new"
-    session.mass.config.get_provider_configs = AsyncMock(
-        side_effect=[[_provider_cfg("lyrion_player--old")], []]
-    )
+    sibling_instance_id = "lyrion_music--existing"
+    # --existing denotes an already configured sibling instance.
+    # The new instance under setup is lyrion_player--new.
+
+    async def _provider_configs(*, provider_domain: str) -> list[Any]:
+        if provider_domain == "lyrion_music":
+            return [_provider_cfg(sibling_instance_id)]
+        return []
+
+    session.mass.config.get_provider_configs = AsyncMock(side_effect=_provider_configs)
 
     def _setup_value(instance_id: str, key: str) -> Any:
-        if instance_id == "lyrion_player--old" and key == "lms_host":
+        if instance_id == sibling_instance_id and key == "lms_host":
             return "old.local"
-        if instance_id == "lyrion_player--old" and key == "port":
+        if instance_id == sibling_instance_id and key == "port":
             return "9003"
         return None
 

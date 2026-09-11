@@ -28,7 +28,9 @@ from .constants import (
     CONF_FALLBACK_POLLING,
     CONF_FALLBACK_POLLING_INTERVAL,
     CONF_LMS_HOST,
+    CONF_LMS_PASSWORD,
     CONF_LMS_PORT,
+    CONF_LMS_USERNAME,
     DEFAULT_FALLBACK_POLLING_INTERVAL,
     DEFAULT_LMS_PORT,
     PLAYERS_BATCH_SIZE,
@@ -85,6 +87,8 @@ class LyrionPlayerProvider(PlayerProvider):
         await validate_lms_endpoint(
             host=host,
             port=port,
+            username=self.get_setup_value(CONF_LMS_USERNAME),
+            password=self.get_setup_value(CONF_LMS_PASSWORD),
             http_session=self.mass.http_session,
             translation_owner=self.translation_owner,
         )

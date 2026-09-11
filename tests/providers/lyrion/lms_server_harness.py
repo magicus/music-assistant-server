@@ -21,6 +21,8 @@ class LyrionTestEndpoint:
     source: str
     fake_server: FakeLmsServer | None = None
     slimproto_port: int = 3483
+    username: str | None = None
+    password: str | None = None
 
 
 class LyrionTestLmsServer(Protocol):
@@ -84,6 +86,8 @@ class FakeLmsServerHarness:
             source=self.source,
             fake_server=fake_server,
             slimproto_port=slimproto_port,
+            username=None,
+            password=None,
         )
 
     async def stop(self) -> None:

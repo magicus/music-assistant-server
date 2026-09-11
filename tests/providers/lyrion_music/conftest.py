@@ -24,6 +24,13 @@ async def lyrion_provider(
         "lms_host": lyrion_test_endpoint.host,
         "port": lyrion_test_endpoint.port,
     }
+    if (
+        lyrion_test_endpoint.source == "docker"
+        and lyrion_test_endpoint.username is not None
+        and lyrion_test_endpoint.password is not None
+    ):
+        setup_data["lms_username"] = lyrion_test_endpoint.username
+        setup_data["lms_password"] = lyrion_test_endpoint.password
 
     session = ClientSession()
     mass = Mock()

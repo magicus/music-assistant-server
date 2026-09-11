@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -22,6 +22,26 @@ from tests.providers.lyrion_player.harness_test_support import (
     wait_for_mode,
     wait_for_playlist_repeat,
 )
+
+
+class _FakeWriter:
+    def __init__(self) -> None:
+        self.writes: list[bytes] = []
+
+    def write(self, data: bytes) -> None:
+        self.writes.append(data)
+
+    async def drain(self) -> None:
+        return None
+
+    def is_closing(self) -> bool:
+        return False
+
+    def close(self) -> None:
+        return None
+
+    async def wait_closed(self) -> None:
+        return None
 
 
 async def _resolve_first_track_id(client: EndpointRpcClient) -> str:
@@ -71,6 +91,37 @@ async def test_fake_player_registers_on_fake_lms(
         if rpc_client is not None:
             await rpc_client.close()
         await player.close()
+
+
+@pytest.mark.asyncio
+async def test_player_connect_uses_rpc_player_id_for_live_endpoint() -> None:
+    """Live-style connect should advertise the RPC player id in the HELO payload."""
+    endpoint = LyrionTestEndpoint(
+        host="127.0.0.1",
+        port=9000,
+        base_url="http://127.0.0.1:9000",
+        source="docker",
+    )
+    player = ScriptableSlimProtoPlayer(
+        endpoint=endpoint,
+        player_id="test-alias",
+        name="Live Player",
+        model="test",
+    )
+    fake_writer = _FakeWriter()
+
+    with patch(
+        "tests.providers.lyrion.scriptable_slimproto_player.asyncio.open_connection",
+        new=AsyncMock(return_value=(object(), fake_writer)),
+    ):
+        result = await player.connect()
+
+    payload = fake_writer.writes[0]
+    assert f"PlayerID={player.rpc_player_id}".encode() in payload
+    assert f"PlayerID={player.player_id}".encode() not in payload
+    assert result["playerid"] == player.rpc_player_id
+
+    await player.close()
 
 
 @pytest.mark.asyncio
@@ -310,6 +361,84 @@ async def test_seek_path_uses_jsonrpc_time(
         if rpc_client is not None:
             await rpc_client.close()
         await player.close()
+
+
+@pytest.mark.asyncio
+async def test_two_players_mixed_pause_sources_keep_modes_isolated(
+    lyrion_test_endpoint: LyrionTestEndpoint,
+) -> None:
+    """Pause commands on one player should not regress the other player's mode."""
+    player_a = ScriptableSlimProtoPlayer(
+        endpoint=lyrion_test_endpoint,
+        player_id="mixed-pause-a",
+        name="Mixed Pause A",
+        model="test",
+    )
+    player_b = ScriptableSlimProtoPlayer(
+        endpoint=lyrion_test_endpoint,
+        player_id="mixed-pause-b",
+        name="Mixed Pause B",
+        model="test",
+    )
+
+    rpc_a: EndpointRpcClient | None = None
+    rpc_b: EndpointRpcClient | None = None
+    provider_a: ProviderStyleRpcClient | None = None
+    provider_b: ProviderStyleRpcClient | None = None
+
+    try:
+        await player_a.connect()
+        await player_b.connect()
+
+        rpc_a = EndpointRpcClient(lyrion_test_endpoint, player_a.rpc_player_id)
+        rpc_b = EndpointRpcClient(lyrion_test_endpoint, player_b.rpc_player_id)
+        provider_a = ProviderStyleRpcClient(lyrion_test_endpoint, player_a.rpc_player_id)
+        provider_b = ProviderStyleRpcClient(lyrion_test_endpoint, player_b.rpc_player_id)
+
+        first_track_id = await _resolve_first_track_id(rpc_a)
+
+        await provider_a.send_player_command(
+            ["playlistcontrol", "cmd:load", f"track_id:{first_track_id}"]
+        )
+        await provider_a.send_player_command(["play"])
+        status_a = await wait_for_mode(rpc_a, "play")
+        assert status_a["mode"] == "play"
+
+        await provider_b.send_player_command(["pause"])
+        status_a = await rpc_a.send(["status", 0, 100])
+        status_b = await rpc_b.send(["status", 0, 100])
+        assert status_a["mode"] == "play"
+        assert status_b["mode"] in {"stop", "play"}
+
+        await provider_b.send_player_command(
+            ["playlistcontrol", "cmd:load", f"track_id:{first_track_id}"]
+        )
+        await provider_b.send_player_command(["play"])
+        status_b = await wait_for_mode(rpc_b, "play")
+        assert status_b["mode"] == "play"
+
+        await rpc_a.send(["pause"])
+        status_a = await rpc_a.send(["status", 0, 100])
+        status_b = await rpc_b.send(["status", 0, 100])
+        assert status_a["mode"] == "play"
+        assert status_b["mode"] == "play"
+
+        await player_b.pause()
+        status_a = await rpc_a.send(["status", 0, 100])
+        status_b = await rpc_b.send(["status", 0, 100])
+        assert status_a["mode"] == "play"
+        assert status_b["mode"] == "play"
+    finally:
+        if provider_a is not None:
+            await provider_a.close()
+        if provider_b is not None:
+            await provider_b.close()
+        if rpc_a is not None:
+            await rpc_a.close()
+        if rpc_b is not None:
+            await rpc_b.close()
+        await player_a.close()
+        await player_b.close()
 
 
 @pytest.mark.asyncio

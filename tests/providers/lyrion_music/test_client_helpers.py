@@ -323,6 +323,55 @@ async def test_batch_lookup_falls_back_from_remaining_suffix_after_transient_fai
     assert client.ALBUM_SPEC.key not in provider._disabled_batch_lookup_keys
 
 
+async def test_batch_lookup_incomplete_batch_does_not_replay_prior_items(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Incomplete batch responses should only fall back from the first missing item onward."""
+    provider = _provider()
+    item_ids = [f"id{i}" for i in range(client.BATCH_LOOKUP_SIZE + 2)]
+    call_log: list[list[str]] = []
+    batch_calls = 0
+
+    async def _rpc_request(
+        _provider: Any,
+        player_id: str,
+        command: list[Any],
+        *,
+        timeout: int = 0,
+    ) -> dict[str, Any]:
+        del _provider, player_id, timeout
+        nonlocal batch_calls
+        requested_ids = str(command[-1]).split(":", 1)[1].split(",")
+        call_log.append(requested_ids)
+        if len(requested_ids) > 1:
+            batch_calls += 1
+            if batch_calls == 2:
+                return {
+                    client.ALBUM_SPEC.loop_key: [
+                        {"id": requested_ids[0], "album": requested_ids[0]}
+                    ]
+                }
+        return {
+            client.ALBUM_SPEC.loop_key: [
+                {"id": item_id, "album": item_id} for item_id in requested_ids
+            ]
+        }
+
+    monkeypatch.setattr(client, "rpc_request", _rpc_request)
+
+    yielded = [
+        raw_item
+        async for raw_item in client._iter_raw_entities(provider, client.ALBUM_SPEC, item_ids)
+    ]
+
+    assert [item["id"] for item in yielded] == item_ids
+    assert call_log[:2] == [
+        item_ids[: client.BATCH_LOOKUP_SIZE],
+        item_ids[client.BATCH_LOOKUP_SIZE :],
+    ]
+    assert call_log[2:] == [[item_id] for item_id in item_ids[client.BATCH_LOOKUP_SIZE :]]
+
+
 async def test_get_entity_data_and_iter_entities_fast_paths(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

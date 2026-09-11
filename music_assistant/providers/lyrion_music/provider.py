@@ -45,6 +45,8 @@ from .constants import (
     ACTION_RESCAN_ARTWORK,
     BROWSE_PAGE_SIZE,
     CONF_ARTWORK_CACHE_BUSTER,
+    CONF_LMS_PASSWORD,
+    CONF_LMS_USERNAME,
     ITEM_CACHE_TTL,
     SEARCH_CACHE_TTL,
 )
@@ -480,6 +482,8 @@ class LyrionMusicProvider(MusicProvider):
         await validate_lms_endpoint(
             host=host,
             port=port,
+            username=self.get_setup_value(CONF_LMS_USERNAME),
+            password=self.get_setup_value(CONF_LMS_PASSWORD),
             http_session=self.mass.http_session,
             translation_owner=self.translation_owner,
         )

@@ -33,6 +33,8 @@ async def lyrion_test_lms_server(
             source="docker",
             fake_server=None,
             slimproto_port=3483,
+            username=lms_endpoint.username,
+            password=lms_endpoint.password,
         )
         yield DockerLmsServerHarness(endpoint)
         return

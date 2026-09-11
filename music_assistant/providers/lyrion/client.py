@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from base64 import b64encode
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol, cast
 
@@ -11,12 +12,14 @@ from music_assistant_models.errors import ProviderUnavailableError
 from music_assistant.helpers.throttle_retry import ThrottlerManager
 from music_assistant.providers.lyrion.constants import (
     CONF_LMS_HOST,
+    CONF_LMS_PASSWORD,
     CONF_LMS_PORT,
+    CONF_LMS_USERNAME,
     DEFAULT_LMS_PORT,
     RPC_TIMEOUT,
 )
 
-_RPC_THROTTLER = ThrottlerManager(rate_limit=1, period=1)
+_RPC_THROTTLER = ThrottlerManager(rate_limit=10, period=1)
 
 
 class _ConfigProvider(Protocol):
@@ -69,6 +72,21 @@ def normalize_lms_text_value(value: object) -> str | None:
     return normalized or None
 
 
+def get_configured_basic_auth(provider: _ConfigProvider) -> dict[str, str] | None:
+    """Return optional HTTP Basic Auth headers for LMS HTTP requests."""
+    username = normalize_lms_text_value(provider.get_setup_value(CONF_LMS_USERNAME))
+    password = normalize_lms_text_value(provider.get_setup_value(CONF_LMS_PASSWORD))
+    if username is None and password is None:
+        return None
+    token = b64encode(f"{username or ''}:{password or ''}".encode()).decode("ascii")
+    return {"Authorization": f"Basic {token}"}
+
+
+def acquire_lms_request_slot() -> object:
+    """Return shared request limiter context for LMS HTTP calls."""
+    return _RPC_THROTTLER.acquire()
+
+
 async def rpc_request(
     provider: _ConfigProvider,
     player_id: str,
@@ -89,17 +107,24 @@ async def rpc_request(
     }
     url = build_lms_url(host, port, "/jsonrpc.js")
 
+    headers = get_configured_basic_auth(provider)
     try:
         async with (
             _RPC_THROTTLER.acquire(),
             provider.mass.http_session.post(
                 url,
                 json=payload,
+                headers=headers,
                 timeout=ClientTimeout(total=timeout),
             ) as response,
         ):
             response.raise_for_status()
-            data = cast("Mapping[str, object]", await response.json())
+            data = await response.json()
+            if not isinstance(data, Mapping):
+                raise ProviderUnavailableError(
+                    f"Lyrion JSON-RPC connection request to {host}:{port} "
+                    "returned a non-object JSON payload"
+                )
     except TimeoutError as err:
         raise ProviderUnavailableError(
             f"Lyrion server at {host}:{port} did not respond in time "

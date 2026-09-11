@@ -50,6 +50,36 @@ def test_extract_values_and_ids_normalize_non_string_payloads() -> None:
     assert parsers.split_lms_values("1,2,3", split_mode="id") == ["1", "2", "3"]
 
 
+def test_parser_artwork_images_are_marked_non_remote(lyrion_provider: Any) -> None:
+    """LMS artwork URLs should be proxied instead of marked directly reachable."""
+    artist = parsers.parse_artist(
+        lyrion_provider,
+        {"id": "a1", "artist": "Artist", "artwork_url": "/contributor/a1/image_600x600_f"},
+    )
+    album = parsers.parse_album(
+        lyrion_provider,
+        {"id": "al1", "album": "Album", "coverid": "al1", "artist": "Artist"},
+    )
+    track = parsers.parse_track(
+        lyrion_provider,
+        {
+            "id": "t1",
+            "title": "Track",
+            "artist": "Artist",
+            "album": "Album",
+            "album_id": "al1",
+            "coverid": "al1",
+        },
+    )
+
+    assert artist.metadata.images
+    assert artist.metadata.images[0].remotely_accessible is False
+    assert album.metadata.images
+    assert album.metadata.images[0].remotely_accessible is False
+    assert track.metadata.images
+    assert track.metadata.images[0].remotely_accessible is False
+
+
 def _album(*, album_id: str, provider: str, artist_id: str, artist_name: str) -> Album:
     album = Album(
         item_id=album_id, provider=provider, name=f"Album {album_id}", provider_mappings=set()

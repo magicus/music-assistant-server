@@ -172,6 +172,17 @@ async def test_probe_remote_image_and_set_thumb_path(lyrion_provider: Any) -> No
     artwork.set_thumb_path(album, "http://alb")
     assert artwork.get_thumb_path(album) == "http://alb"
 
+    library_artist = Artist(item_id="3", provider="library", name="C", provider_mappings=set())
+    artwork.set_thumb_path(
+        library_artist,
+        "http://owned-by-provider",
+        provider_instance=lyrion_provider.instance_id,
+    )
+    assert library_artist.metadata.images
+    thumb = library_artist.metadata.images[0]
+    assert thumb.provider == lyrion_provider.instance_id
+    assert thumb.remotely_accessible is False
+
     # keep fixture in use to ensure compatibility with real provider model instances
     assert lyrion_provider.instance_id == "lyrion_music--test"
 

@@ -7,7 +7,13 @@ from typing import TYPE_CHECKING
 
 from music_assistant.providers.lyrion.setup_flow import run_lms_setup_flow
 
-from .constants import CONF_LMS_HOST, CONF_LMS_PORT, DEFAULT_LMS_PORT
+from .constants import (
+    CONF_LMS_HOST,
+    CONF_LMS_PASSWORD,
+    CONF_LMS_PORT,
+    CONF_LMS_USERNAME,
+    DEFAULT_LMS_PORT,
+)
 
 if TYPE_CHECKING:
     from music_assistant.models.setup_flow import SetupSession
@@ -25,4 +31,6 @@ async def run_setup(session: SetupSession) -> None:
         default_port=DEFAULT_LMS_PORT,
         logger=LOGGER,
         log_prefix="Lyrion player",
+        username_key=CONF_LMS_USERNAME,
+        password_key=CONF_LMS_PASSWORD,
     )

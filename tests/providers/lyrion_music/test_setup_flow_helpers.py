@@ -111,6 +111,35 @@ async def test_validate_lms_endpoint_happy_path() -> None:
         )
 
 
+async def test_validate_lms_endpoint_uses_basic_auth_when_configured() -> None:
+    """Endpoint validation should send BasicAuth when a username/password are configured."""
+    http_session = Mock()
+    http_session.post = Mock(return_value=FakeResponse({"result": {"count": 1}}))
+
+    with (
+        patch.object(
+            asyncio.get_running_loop(),
+            "getaddrinfo",
+            new=AsyncMock(return_value=[object()]),
+        ),
+        patch(
+            "music_assistant.providers.lyrion.setup_flow.asyncio.open_connection",
+            new=AsyncMock(return_value=(object(), _FakeWriter())),
+        ),
+    ):
+        await shared_setup_flow.validate_lms_endpoint(
+            host="localhost",
+            port=9000,
+            username="lyrion-user",
+            password="lyrion-password",
+            http_session=http_session,
+        )
+
+    assert http_session.post.call_args.kwargs["headers"]["Authorization"] == (
+        "Basic bHlyaW9uLXVzZXI6bHlyaW9uLXBhc3N3b3Jk"
+    )
+
+
 async def test_validate_lms_endpoint_errors() -> None:
     """Endpoint validator should raise typed setup errors for bad input/state."""
     http_session = Mock()
@@ -224,6 +253,16 @@ def test_normalize_and_port_helpers() -> None:
     assert shared_setup_flow._coerce_port(65536) is None
     assert shared_setup_flow._coerce_port("9000") == 9000
 
+    normalized_auth = shared_setup_flow._normalize_submitted_values(
+        {"h": "example.local", "p": "9000", "u": " user ", "pw": " pass "},
+        host_key="h",
+        port_key="p",
+        default_port=9000,
+        username_key="u",
+        password_key="pw",
+    )
+    assert normalized_auth == {"h": "example.local", "p": 9000, "u": "user", "pw": "pass"}
+
     assert shared_setup_flow._is_ip_address("127.0.0.1") is True
     assert shared_setup_flow._is_ip_address("localhost") is False
 
@@ -257,15 +296,15 @@ async def test_prefill_ignores_existing_sibling_when_setting_up() -> None:
 
     async def _provider_configs(*, provider_domain: str | None = None) -> list[Any]:
         if provider_domain == "lyrion_music":
-            return [_provider_cfg("lyrion_music--old")]
+            return [_provider_cfg("lyrion_music--existing")]
         return []
 
     session.mass.config.get_provider_configs = AsyncMock(side_effect=_provider_configs)
 
     def _setup_value(instance_id: str, key: str) -> Any:
-        if instance_id == "lyrion_music--old" and key == "lms_host":
+        if instance_id == "lyrion_music--existing" and key == "lms_host":
             return "old.local"
-        if instance_id == "lyrion_music--old" and key == "port":
+        if instance_id == "lyrion_music--existing" and key == "port":
             return "9003"
         return None
 
@@ -371,7 +410,7 @@ async def test_prefill_skips_already_configured_discovered_hosts() -> None:
 
     async def _provider_configs(*, provider_domain: str | None = None) -> list[Any]:
         if provider_domain == "lyrion_music":
-            return [_provider_cfg("lyrion_music--old")]
+            return [_provider_cfg("lyrion_music--existing")]
         if provider_domain == "lyrion_player":
             return []
         return []
@@ -379,9 +418,9 @@ async def test_prefill_skips_already_configured_discovered_hosts() -> None:
     session.mass.config.get_provider_configs = AsyncMock(side_effect=_provider_configs)
 
     def _setup_value(instance_id: str, key: str) -> Any:
-        if instance_id == "lyrion_music--old" and key == "lms_host":
+        if instance_id == "lyrion_music--existing" and key == "lms_host":
             return "192.168.1.20"
-        if instance_id == "lyrion_music--old" and key == "port":
+        if instance_id == "lyrion_music--existing" and key == "port":
             return "9000"
         return None
 
@@ -426,7 +465,7 @@ async def test_prefill_ignores_only_already_configured_discovery() -> None:
 
     async def _provider_configs(*, provider_domain: str | None = None) -> list[Any]:
         if provider_domain == "lyrion_music":
-            return [_provider_cfg("lyrion_music--old")]
+            return [_provider_cfg("lyrion_music--existing")]
         if provider_domain == "lyrion_player":
             return []
         return []
@@ -434,9 +473,9 @@ async def test_prefill_ignores_only_already_configured_discovery() -> None:
     session.mass.config.get_provider_configs = AsyncMock(side_effect=_provider_configs)
 
     def _setup_value(instance_id: str, key: str) -> Any:
-        if instance_id == "lyrion_music--old" and key == "lms_host":
+        if instance_id == "lyrion_music--existing" and key == "lms_host":
             return "192.168.1.20"
-        if instance_id == "lyrion_music--old" and key == "port":
+        if instance_id == "lyrion_music--existing" and key == "port":
             return "9000"
         return None
 
@@ -475,16 +514,16 @@ async def test_prefill_syncs_missing_player_with_existing_music_host() -> None:
     session.mass.config.get_provider_configs = AsyncMock(
         side_effect=[
             [],
-            [_provider_cfg("lyrion_music--old")],
+            [_provider_cfg("lyrion_music--existing")],
             [],
-            [_provider_cfg("lyrion_music--old")],
+            [_provider_cfg("lyrion_music--existing")],
         ]
     )
 
     def _setup_value(instance_id: str, key: str) -> Any:
-        if instance_id == "lyrion_music--old" and key == "lms_host":
+        if instance_id == "lyrion_music--existing" and key == "lms_host":
             return "old.local"
-        if instance_id == "lyrion_music--old" and key == "port":
+        if instance_id == "lyrion_music--existing" and key == "port":
             return "9003"
         return None
 

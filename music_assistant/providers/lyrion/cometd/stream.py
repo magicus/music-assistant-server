@@ -11,7 +11,7 @@ from aiohttp import ClientError, ClientTimeout
 from music_assistant_models.errors import MusicAssistantError, ProviderUnavailableError
 
 from ..bayeux_client import BayeuxClient
-from ..client import build_lms_url
+from ..client import build_lms_url, get_configured_basic_auth
 from ..constants import (
     COMETD_COMMAND_STATUS_BACKOFF,
     COMETD_CONNECT_TIMEOUT,
@@ -506,11 +506,13 @@ class LyrionCometDEventStream(_CometDStatusMixin, _CometDRecoveryMixin):
             raise ProviderUnavailableError("Lyrion port is not configured")
 
         url = build_lms_url(host, port, "/cometd")
+        auth = get_configured_basic_auth(self.provider)
         try:
             async with self.provider.mass.http_session.post(
                 url,
                 json=messages,
                 timeout=ClientTimeout(total=timeout),
+                headers=auth,
             ) as response:
                 response.raise_for_status()
                 payload = await response.json()

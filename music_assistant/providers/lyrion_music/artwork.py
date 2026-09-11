@@ -13,7 +13,9 @@ from music_assistant_models.errors import ProviderUnavailableError
 from music_assistant_models.media_items import MediaItemImage, UniqueList
 
 from music_assistant.providers.lyrion.client import (
+    acquire_lms_request_slot,
     build_lms_url,
+    get_configured_basic_auth,
     get_configured_host,
     get_configured_port,
 )
@@ -189,10 +191,14 @@ def to_lms_absolute_url(provider: LyrionMusicProvider, path: str) -> str:
 async def fetch_remote_image_if_ok(provider: LyrionMusicProvider, url: str) -> bytes | None:
     """Fetch image bytes and return None for invalid LMS image responses."""
     try:
-        async with provider.mass.http_session.get(
-            url,
-            timeout=ClientTimeout(total=RPC_TIMEOUT),
-        ) as response:
+        async with (
+            acquire_lms_request_slot(),
+            provider.mass.http_session.get(
+                url,
+                timeout=ClientTimeout(total=RPC_TIMEOUT),
+                headers=get_configured_basic_auth(provider),
+            ) as response,
+        ):
             if response.status != 200:
                 return None
             content_type = response.headers.get("Content-Type", "")
@@ -217,10 +223,14 @@ async def probe_remote_image(provider: LyrionMusicProvider, url: str) -> bool:
         return bool(cached)
 
     try:
-        async with provider.mass.http_session.get(
-            url,
-            timeout=ClientTimeout(total=ARTWORK_VALIDATION_TIMEOUT),
-        ) as response:
+        async with (
+            acquire_lms_request_slot(),
+            provider.mass.http_session.get(
+                url,
+                timeout=ClientTimeout(total=ARTWORK_VALIDATION_TIMEOUT),
+                headers=get_configured_basic_auth(provider),
+            ) as response,
+        ):
             if response.status != 200:
                 result = False
             else:
@@ -249,8 +259,13 @@ def get_thumb_path(item: Artist | Album) -> str | None:
     return None
 
 
-def set_thumb_path(item: Artist | Album, path: str | None) -> None:
+def set_thumb_path(
+    item: Artist | Album,
+    path: str | None,
+    provider_instance: str | None = None,
+) -> None:
     """Set or clear thumbnail image path on an artist or album."""
+    owner_provider = provider_instance or item.provider
     images = list(item.metadata.images or [])
     thumb_image = next((img for img in images if img.type == ImageType.THUMB), None)
     if path is None:
@@ -259,7 +274,12 @@ def set_thumb_path(item: Artist | Album, path: str | None) -> None:
         item.metadata.images = UniqueList(img for img in images if img is not thumb_image)
         return
     if thumb_image is not None:
-        new_image = dataclasses.replace(thumb_image, path=path)
+        new_image = dataclasses.replace(
+            thumb_image,
+            path=path,
+            provider=owner_provider,
+            remotely_accessible=False,
+        )
         item.metadata.images = UniqueList(
             new_image if img is thumb_image else img for img in images
         )
@@ -270,8 +290,8 @@ def set_thumb_path(item: Artist | Album, path: str | None) -> None:
             MediaItemImage(
                 type=ImageType.THUMB,
                 path=path,
-                provider=item.provider,
-                remotely_accessible=True,
+                provider=owner_provider,
+                remotely_accessible=False,
             ),
         ]
     )

@@ -881,7 +881,7 @@ async def _iter_raw_entities(
             return
     except ValueError as err:
         _disable_batch_lookup(provider, spec, err)
-        fallback_start = 0
+        fallback_start = processed_items if use_batch else 0
     except ProviderUnavailableError:
         fallback_start = processed_items if use_batch else 0
     else:

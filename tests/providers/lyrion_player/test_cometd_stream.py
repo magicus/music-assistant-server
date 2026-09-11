@@ -65,6 +65,14 @@ class _StubCometDProvider(_StubProvider):
     def get_configured_port(self) -> int | None:
         return 9000
 
+    def get_setup_value(self, key: str, default: Any = None) -> Any:
+        """Return setup values used by shared LMS auth helper."""
+        if key == "lms_host":
+            return "127.0.0.1"
+        if key == "port":
+            return 9000
+        return default
+
 
 async def test_serverstatus_players_loop_triggers_on_roster_change() -> None:
     """Serverstatus player-id set changes should schedule rediscovery exactly once per change."""

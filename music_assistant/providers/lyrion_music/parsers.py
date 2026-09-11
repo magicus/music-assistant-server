@@ -61,7 +61,7 @@ def parse_artist(provider: LyrionMusicProvider, row: Mapping[str, str]) -> Artis
                 type=ImageType.THUMB,
                 path=artwork_url,
                 provider=provider.instance_id,
-                remotely_accessible=True,
+                remotely_accessible=False,
             )
         )
     return artist
@@ -128,7 +128,7 @@ def parse_album(provider: LyrionMusicProvider, row: Mapping[str, str]) -> Album:
                 type=ImageType.THUMB,
                 path=artwork_url,
                 provider=provider.instance_id,
-                remotely_accessible=True,
+                remotely_accessible=False,
             )
         )
     return album
@@ -191,7 +191,7 @@ def parse_track(provider: LyrionMusicProvider, row: Mapping[str, str]) -> Track:
                 type=ImageType.THUMB,
                 path=artwork_url,
                 provider=provider.instance_id,
-                remotely_accessible=True,
+                remotely_accessible=False,
             )
         )
     return track

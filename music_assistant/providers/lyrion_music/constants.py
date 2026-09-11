@@ -3,9 +3,13 @@
 from music_assistant_models.enums import ProviderFeature
 
 from music_assistant.constants import CONF_PORT
+from music_assistant.providers.lyrion.constants import CONF_LMS_PASSWORD as LMS_PASSWORD
+from music_assistant.providers.lyrion.constants import CONF_LMS_USERNAME as LMS_USERNAME
 
 CONF_LMS_HOST = "lms_host"
 CONF_LMS_PORT = CONF_PORT
+CONF_LMS_USERNAME = LMS_USERNAME
+CONF_LMS_PASSWORD = LMS_PASSWORD
 DEFAULT_LMS_HOST = "127.0.0.1"
 DEFAULT_LMS_PORT = 9000
 RPC_TIMEOUT = 10

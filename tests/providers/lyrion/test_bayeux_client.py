@@ -53,7 +53,15 @@ async def test_subscribe_meta_and_publish_validate_successful_responses() -> Non
     with pytest.raises(ProviderUnavailableError):
         await client.subscribe_meta("cid", "/cid/**", timeout=5)
 
+    client = BayeuxClient(AsyncMock(return_value=[{}]))
+    with pytest.raises(ProviderUnavailableError):
+        await client.subscribe_meta("cid", "/cid/**", timeout=5)
+
     client = BayeuxClient(AsyncMock(return_value=[{"successful": False}]))
+    with pytest.raises(ProviderUnavailableError):
+        await client.publish("/slim/subscribe", "cid", {"k": "v"}, timeout=5)
+
+    client = BayeuxClient(AsyncMock(return_value=[{}]))
     with pytest.raises(ProviderUnavailableError):
         await client.publish("/slim/subscribe", "cid", {"k": "v"}, timeout=5)
 
