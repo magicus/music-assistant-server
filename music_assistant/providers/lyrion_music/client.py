@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator, Iterable, Mapping
+from collections.abc import AsyncGenerator, Mapping
 from dataclasses import dataclass
-from time import monotonic
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from music_assistant_models.errors import MediaNotFoundError, ProviderUnavailableError
@@ -652,113 +651,13 @@ async def _iter_raw_entities(
     spec: LmsEntitySpec,
     item_ids: list[str],
 ) -> AsyncGenerator[Mapping[str, str]]:
-    """Yield raw LMS entities in request order, with optional batch fallback."""
-    total_items = len(item_ids)
-    if len(item_ids) == 1:
-        item_id = item_ids[0]
-        _log_lookup_request(provider, spec, item_id, item_index=1, total_items=total_items)
-        request_started = monotonic()
-        result = await rpc_request(
-            provider,
-            player_id="",
-            command=_create_lookup_command(spec, item_ids),
-        )
-        request_elapsed_ms = (monotonic() - request_started) * 1000
-        for raw_item in _split_lookup_reply(spec, result, item_ids):
-            if _should_report_lookup_progress():
-                fetch_text = f"Fetching {spec.key}s from Lyrion: 1/{total_items}"
-                _update_weighted_sync_progress(
-                    phase="entity_fetch",
-                    current=1,
-                    total=total_items,
-                    text=fetch_text,
-                )
-            _log_lookup_response(
-                provider,
-                spec,
-                raw_item,
-                requested_id=item_id,
-                request_elapsed_ms=request_elapsed_ms,
-            )
-            yield raw_item
+    """Yield raw LMS entities in request order via the pylyrion lookup flow."""
+    ordered_ids = _normalize_lookup_ids(provider, spec, item_ids)
+    total_items = len(ordered_ids)
+    if total_items == 0:
         return
 
-    use_batch = _is_batch_lookup_enabled(provider, spec)
-    if use_batch:
-        provider.logger.debug(
-            "Lyrion %s lookup: %s ids in batches of %s",
-            spec.key,
-            len(item_ids),
-            BATCH_LOOKUP_SIZE,
-        )
-    else:
-        provider.logger.debug(
-            "Lyrion %s lookup: %s ids using single-item requests",
-            spec.key,
-            len(item_ids),
-        )
-
-    try:
-        if use_batch:
-            processed_items = 0
-            for chunk in _chunked(item_ids, BATCH_LOOKUP_SIZE):
-                chunk_start = processed_items + 1
-                chunk_end = processed_items + len(chunk)
-                provider.logger.debug(
-                    "Lyrion %s lookup request -> batch %s-%s/%s (%s ids)",
-                    spec.key,
-                    chunk_start,
-                    chunk_end,
-                    total_items,
-                    len(chunk),
-                )
-                for index_offset, item_id in enumerate(chunk, start=chunk_start):
-                    _log_lookup_request(
-                        provider,
-                        spec,
-                        item_id,
-                        item_index=index_offset,
-                        total_items=total_items,
-                    )
-                request_started = monotonic()
-                result = await rpc_request(
-                    provider,
-                    player_id="",
-                    command=_create_lookup_command(spec, chunk),
-                )
-                request_elapsed_ms = (monotonic() - request_started) * 1000
-                for index_offset, raw_item in enumerate(
-                    _split_lookup_reply(spec, result, chunk),
-                    start=chunk_start,
-                ):
-                    if _should_report_lookup_progress():
-                        fetch_text = (
-                            f"Fetching {spec.key}s from Lyrion: {index_offset}/{total_items}"
-                        )
-                        _update_weighted_sync_progress(
-                            phase="entity_fetch",
-                            current=index_offset,
-                            total=total_items,
-                            text=fetch_text,
-                        )
-                    _log_lookup_response(
-                        provider,
-                        spec,
-                        raw_item,
-                        request_elapsed_ms=request_elapsed_ms,
-                    )
-                    yield raw_item
-                processed_items += len(chunk)
-            return
-    except ValueError as err:
-        _disable_batch_lookup(provider, spec, err)
-        fallback_start = 0
-    except ProviderUnavailableError:
-        fallback_start = processed_items if use_batch else 0
-    else:
-        fallback_start = 0
-
-    for item_index, item_id in enumerate(item_ids[fallback_start:], start=fallback_start + 1):
+    for item_index, item_id in enumerate(ordered_ids, start=1):
         _log_lookup_request(
             provider,
             spec,
@@ -766,30 +665,33 @@ async def _iter_raw_entities(
             item_index=item_index,
             total_items=total_items,
         )
-        request_started = monotonic()
-        result = await rpc_request(
-            provider,
-            player_id="",
-            command=_create_lookup_command(spec, [item_id]),
-        )
-        request_elapsed_ms = (monotonic() - request_started) * 1000
-        for raw_item in _split_lookup_reply(spec, result, [item_id]):
+
+    try:
+        index = 0
+        async for raw_item in _build_library_client(provider).iter_raw_entities(
+            _to_py_entity_spec(spec),
+            ordered_ids,
+        ):
+            index += 1
+            normalized_item = _normalize_lms_row(raw_item)
             if _should_report_lookup_progress():
-                fetch_text = f"Fetching {spec.key}s from Lyrion: {item_index}/{total_items}"
+                fetch_text = f"Fetching {spec.key}s from Lyrion: {index}/{total_items}"
                 _update_weighted_sync_progress(
                     phase="entity_fetch",
-                    current=item_index,
+                    current=index,
                     total=total_items,
                     text=fetch_text,
                 )
+            requested_id = ordered_ids[index - 1] if index <= total_items else None
             _log_lookup_response(
                 provider,
                 spec,
-                raw_item,
-                requested_id=item_id,
-                request_elapsed_ms=request_elapsed_ms,
+                normalized_item,
+                requested_id=requested_id,
             )
-            yield raw_item
+            yield normalized_item
+    except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
+        raise ProviderUnavailableError(str(err)) from err
 
 
 def _should_report_lookup_progress() -> bool:
@@ -872,43 +774,6 @@ def _format_lookup_progress(item_index: int, total_items: int) -> str:
     return f"item {item_index}/{total_items}, progress: {progress_pct:.1f}%"
 
 
-def _create_lookup_command(spec: LmsEntitySpec, item_ids: list[str]) -> list[Any]:
-    """Create one LMS command that looks up one or many ids."""
-    if not item_ids:
-        raise ValueError(f"{spec.key} lookup requires at least one id")
-    return [
-        spec.command,
-        0,
-        len(item_ids),
-        spec.tags,
-        f"{spec.id_filter_key}:{','.join(item_ids)}",
-    ]
-
-
-def _split_lookup_reply(
-    spec: LmsEntitySpec,
-    result: Mapping[str, object],
-    expected_ids: list[str],
-) -> list[Mapping[str, str]]:
-    """Map LMS lookup replies back to request order and validate misses."""
-    raw_items = cast("list[Mapping[str, object]]", result.get(spec.loop_key, []))
-    items_by_id: dict[str, Mapping[str, str]] = {}
-    for raw_item in raw_items:
-        normalized_item = _normalize_lms_row(raw_item)
-        item_id = parsers.extract_item_id(normalized_item, id_keys=spec.id_keys)
-        if item_id is None or item_id in items_by_id:
-            continue
-        items_by_id[item_id] = normalized_item
-
-    missing_ids = [item_id for item_id in expected_ids if item_id not in items_by_id]
-    if missing_ids:
-        raise ValueError(
-            f"Lyrion {spec.key} lookup returned incomplete data (missing {len(missing_ids)} ids)"
-        )
-
-    return [items_by_id[item_id] for item_id in expected_ids]
-
-
 def _normalize_lookup_ids(
     provider: LyrionMusicProvider,
     spec: LmsEntitySpec,
@@ -926,38 +791,3 @@ def _normalize_lookup_ids(
     return ordered_ids
 
 
-def _get_disabled_batch_lookup_keys(
-    provider: LyrionMusicProvider,
-) -> set[EntityKey]:
-    """Return entity keys whose batch lookup has been disabled at runtime."""
-    return cast("set[EntityKey]", provider._disabled_batch_lookup_keys)
-
-
-def _is_batch_lookup_enabled(provider: LyrionMusicProvider, spec: LmsEntitySpec) -> bool:
-    """Return True when this entity type may use batch id lookup."""
-    if not spec.supports_batch_lookup:
-        return False
-    return spec.key not in _get_disabled_batch_lookup_keys(provider)
-
-
-def _disable_batch_lookup(
-    provider: LyrionMusicProvider,
-    spec: LmsEntitySpec,
-    err: Exception,
-) -> None:
-    """Disable batch lookup for one entity type after an incompatible response."""
-    disabled = _get_disabled_batch_lookup_keys(provider)
-    if spec.key in disabled:
-        return
-    disabled.add(spec.key)
-    provider.logger.warning(
-        "Disabled Lyrion %s batch lookup after failure: %s. Falling back to single-item requests.",
-        spec.key,
-        err,
-    )
-
-
-def _chunked(item_ids: list[str], chunk_size: int) -> Iterable[list[str]]:
-    """Yield stable chunks from a list of ids."""
-    for offset in range(0, len(item_ids), chunk_size):
-        yield item_ids[offset : offset + chunk_size]

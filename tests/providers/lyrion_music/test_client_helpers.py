@@ -297,85 +297,48 @@ def test_count_and_lookup_helpers() -> None:
     assert client._format_lookup_progress(1, 1) == "single-item lookup"
     assert "item 2/4" in client._format_lookup_progress(2, 4)
 
-    command = client._create_lookup_command(client.ALBUM_SPEC, ["1", "2"])
-    assert command[-1] == "album_id:1,2"
 
-    with pytest.raises(ValueError, match="requires at least one id"):
-        client._create_lookup_command(client.ALBUM_SPEC, [])
-
-
-def test_split_lookup_reply_and_normalize() -> None:
-    """Lookup response splitter should preserve request order and fail on misses."""
-    result = {
-        "albums_loop": [
-            {"id": "a2", "album": "two"},
-            {"id": "a1", "album": "one"},
-            {"id": "a1", "album": "dup"},
-        ]
-    }
-    split = client._split_lookup_reply(client.ALBUM_SPEC, result, ["a1", "a2"])
-    assert [item["id"] for item in split] == ["a1", "a2"]
-
-    with pytest.raises(ValueError, match="returned incomplete data"):
-        client._split_lookup_reply(client.ALBUM_SPEC, result, ["a1", "missing"])
-
+def test_normalize_lookup_ids() -> None:
+    """Lookup ids should be deduplicated while preserving stable order."""
     provider = _provider()
     normalized = client._normalize_lookup_ids(provider, client.ALBUM_SPEC, ["a", "a", "b"])
     assert normalized == ["a", "b"]
 
 
-def test_batch_flags_and_chunking() -> None:
-    """Batch enable/disable state and chunking should behave predictably."""
-    provider = _provider()
-
-    assert client._is_batch_lookup_enabled(provider, client.ALBUM_SPEC) is True
-    assert client._is_batch_lookup_enabled(provider, client.ARTIST_SPEC) is False
-
-    err = ValueError("x")
-    client._disable_batch_lookup(provider, client.ALBUM_SPEC, err)
-    assert client.ALBUM_SPEC.key in provider._disabled_batch_lookup_keys
-    client._disable_batch_lookup(provider, client.ALBUM_SPEC, err)
-
-    chunks = list(client._chunked(["1", "2", "3", "4", "5"], 2))
-    assert chunks == [["1", "2"], ["3", "4"], ["5"]]
-
-
-async def test_batch_lookup_falls_back_from_remaining_suffix_after_transient_failure(
+async def test_iter_raw_entities_delegates_to_pylyrion_and_reports_progress(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Batch lookup should resume with the unprocessed suffix after a transient failure."""
+    """Raw entity iteration should delegate to pylyrion and keep MA progress updates."""
     provider = _provider()
-    item_ids = [f"id{i}" for i in range(client.BATCH_LOOKUP_SIZE + 5)]
-    call_count = 0
+    captured_args: list[tuple[Any, list[str]]] = []
 
-    async def _rpc_request(
-        _provider: Any,
-        player_id: str,
-        command: list[Any],
-        *,
-        timeout: int = 0,
-    ) -> dict[str, Any]:
-        del _provider, player_id, timeout
-        nonlocal call_count
-        call_count += 1
-        requested_ids = str(command[-1]).split(":", 1)[1].split(",")
-        if call_count == 2:
-            raise ProviderUnavailableError("temporary outage")
-        return {
-            client.ALBUM_SPEC.loop_key: [
-                {"id": item_id, "album": item_id} for item_id in requested_ids
-            ]
-        }
+    async def _iter_raw(spec: Any, ids: list[str]):
+        captured_args.append((spec, ids))
+        for item_id in ids:
+            yield {"id": item_id, "album": item_id}
 
-    monkeypatch.setattr(client, "rpc_request", _rpc_request)
+    library = SimpleNamespace(iter_raw_entities=_iter_raw)
+    monkeypatch.setattr(client, "_build_library_client", lambda _provider: library)
+
+    progress_calls: list[tuple[int, int, str | None]] = []
+
+    def _capture_progress(*, phase: str, current: int, total: int, text: str | None = None) -> None:
+        del phase
+        progress_calls.append((current, total, text))
+
+    monkeypatch.setattr(client, "_update_weighted_sync_progress", _capture_progress)
+
+    item_ids = ["id1", "id1", "id2"]
 
     yielded = [
         raw_item
         async for raw_item in client._iter_raw_entities(provider, client.ALBUM_SPEC, item_ids)
     ]
 
-    assert [item["id"] for item in yielded] == item_ids
-    assert client.ALBUM_SPEC.key not in provider._disabled_batch_lookup_keys
+    assert [item["id"] for item in yielded] == ["id1", "id2"]
+    assert captured_args == [(client.PY_ALBUM_SPEC, ["id1", "id2"])]
+    assert progress_calls[-1][0] == 2
+    assert progress_calls[-1][1] == 2
 
 
 async def test_get_entity_data_and_iter_entities_fast_paths(
@@ -453,14 +416,15 @@ async def test_get_browse_ids_delegates_to_pylyrion_client(
     assert any("done (2)" in text for text in progress_texts)
 
 
-async def test_get_entity_page_filter_and_has_more_false() -> None:
+async def test_get_entity_page_filter_and_has_more_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Album page helper should pass filter value into delegated pylyrion calls."""
     library = Mock()
     library.get_entity_page = AsyncMock(
         return_value=SimpleNamespace(items=[{"id": "1", "album": "A"}], has_more=False)
     )
 
-    monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(client, "_build_library_client", lambda _provider: library)
     monkeypatch.setattr(client.parsers, "parse_album", lambda _provider, row: row["id"])
 
@@ -479,7 +443,6 @@ async def test_get_entity_page_filter_and_has_more_false() -> None:
         5,
         filter_value="genre_id:g1",
     )
-    monkeypatch.undo()
 
 
 def test_should_report_lookup_progress_task_domain_gate(monkeypatch: pytest.MonkeyPatch) -> None:
