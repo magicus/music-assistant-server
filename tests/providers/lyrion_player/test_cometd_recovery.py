@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import aiohttp
 import pytest
 
-from music_assistant.providers.lyrion.lyrion_cometd import LyrionCometDEventStream
+from music_assistant.providers.lyrion.cometd.stream import LyrionCometDEventStream
 from tests.providers.lyrion.scriptable_slimproto_player import ScriptableSlimProtoPlayer
 from tests.providers.lyrion_player.harness_test_support import (
     EndpointRpcClient,

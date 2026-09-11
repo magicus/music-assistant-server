@@ -19,8 +19,8 @@ from music_assistant_models.errors import (
 
 from music_assistant.models.player_provider import PlayerProvider
 from music_assistant.providers.lyrion.client import rpc_request
+from music_assistant.providers.lyrion.cometd.stream import LyrionCometDEventStream
 from music_assistant.providers.lyrion.constants import COMETD_COMMAND_STATUS_VERIFY_TIMEOUT
-from music_assistant.providers.lyrion.lyrion_cometd import LyrionCometDEventStream
 from music_assistant.providers.lyrion.setup_flow import validate_lms_endpoint
 
 from .cometd_event_adapter import LyrionCometDEventAdapter

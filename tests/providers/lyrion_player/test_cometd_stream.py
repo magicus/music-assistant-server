@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from music_assistant_models.errors import MusicAssistantError, ProviderUnavailableError
 
-from music_assistant.providers.lyrion.lyrion_cometd import LyrionCometDEventStream
+from music_assistant.providers.lyrion.cometd.stream import LyrionCometDEventStream
 from music_assistant.providers.lyrion_player.cometd_events import LmsPlayerPlaylistChangedEvent
 from music_assistant.providers.lyrion_player.provider import LyrionPlayerProvider
 from tests.providers.lyrion.fake_lms_server import FakeLmsServer
