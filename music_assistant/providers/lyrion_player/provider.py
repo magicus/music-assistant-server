@@ -288,10 +288,52 @@ class LyrionPlayerProvider(PlayerProvider):
         except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
             raise ProviderUnavailableError(str(err)) from err
 
-    async def set_player_queue_index(self, player_id: str, index: int) -> dict[str, Any]:
+    async def set_player_queue_index(self, player_id: str, index: int | str) -> dict[str, Any]:
         """Set active LMS queue index via pylyrion."""
         try:
             return await self._build_pylyrion_client().players.set_queue_index(player_id, index)
+        except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
+            raise ProviderUnavailableError(str(err)) from err
+
+    async def next_player_track(self, player_id: str) -> dict[str, Any]:
+        """Skip to next LMS queue entry via pylyrion."""
+        try:
+            return await self._build_pylyrion_client().players.next_track(player_id)
+        except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
+            raise ProviderUnavailableError(str(err)) from err
+
+    async def previous_player_track(self, player_id: str) -> dict[str, Any]:
+        """Skip to previous LMS queue entry via pylyrion."""
+        try:
+            return await self._build_pylyrion_client().players.previous_track(player_id)
+        except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
+            raise ProviderUnavailableError(str(err)) from err
+
+    async def set_player_volume(self, player_id: str, volume_level: int) -> dict[str, Any]:
+        """Set LMS mixer volume via pylyrion."""
+        try:
+            return await self._build_pylyrion_client().players.set_volume(player_id, volume_level)
+        except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
+            raise ProviderUnavailableError(str(err)) from err
+
+    async def set_player_muted(self, player_id: str, muted: bool) -> dict[str, Any]:
+        """Set LMS mixer mute state via pylyrion."""
+        try:
+            return await self._build_pylyrion_client().players.set_muted(player_id, muted)
+        except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
+            raise ProviderUnavailableError(str(err)) from err
+
+    async def seek_player(self, player_id: str, position: int) -> dict[str, Any]:
+        """Seek LMS playback position via pylyrion."""
+        try:
+            return await self._build_pylyrion_client().players.seek(player_id, position)
+        except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
+            raise ProviderUnavailableError(str(err)) from err
+
+    async def set_player_sync_volume(self, player_id: str, enabled: bool) -> dict[str, Any]:
+        """Set LMS syncVolume preference via pylyrion."""
+        try:
+            return await self._build_pylyrion_client().players.set_sync_volume(player_id, enabled)
         except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
             raise ProviderUnavailableError(str(err)) from err
 

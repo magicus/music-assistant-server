@@ -62,9 +62,17 @@ class LyrionPlayerClient:
         """Return LMS status payload with queue rows for one player."""
         return await self.send_command(player_id, ["status", offset, limit])
 
-    async def set_queue_index(self, player_id: str, index: int) -> dict[str, object]:
+    async def set_queue_index(self, player_id: str, index: int | str) -> dict[str, object]:
         """Set active queue index for one player."""
         return await self.send_command(player_id, ["playlist", "index", index])
+
+    async def next_track(self, player_id: str) -> dict[str, object]:
+        """Skip to the next queue entry for one player."""
+        return await self.set_queue_index(player_id, "+1")
+
+    async def previous_track(self, player_id: str) -> dict[str, object]:
+        """Skip to the previous queue entry for one player."""
+        return await self.set_queue_index(player_id, "-1")
 
     async def set_repeat_mode(self, player_id: str, repeat_mode: int) -> dict[str, object]:
         """Set LMS queue repeat mode for one player."""
@@ -77,6 +85,25 @@ class LyrionPlayerClient:
     async def clear_queue(self, player_id: str) -> dict[str, object]:
         """Clear LMS queue for one player."""
         return await self.send_command(player_id, ["playlist", "clear"])
+
+    async def set_volume(self, player_id: str, volume_level: int) -> dict[str, object]:
+        """Set playback volume for one player."""
+        return await self.send_command(
+            player_id,
+            ["mixer", "volume", max(0, min(100, int(volume_level)))],
+        )
+
+    async def set_muted(self, player_id: str, muted: bool) -> dict[str, object]:
+        """Set playback mute state for one player."""
+        return await self.send_command(player_id, ["mixer", "muting", 1 if muted else 0])
+
+    async def seek(self, player_id: str, position: int) -> dict[str, object]:
+        """Seek playback to one position in whole seconds."""
+        return await self.send_command(player_id, ["time", max(0, int(position))])
+
+    async def set_sync_volume(self, player_id: str, enabled: bool) -> dict[str, object]:
+        """Set LMS syncVolume preference for one player."""
+        return await self.send_command(player_id, ["playerpref", "syncVolume", 1 if enabled else 0])
 
     async def add_track_id(
         self,

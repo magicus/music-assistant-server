@@ -75,9 +75,15 @@ async def test_player_client_transport_methods_dispatch_expected_commands() -> N
     await client.sync_to("player1", "leader1")
     await client.get_queue_status("player1", offset=0, limit=33)
     await client.set_queue_index("player1", 4)
+    await client.next_track("player1")
+    await client.previous_track("player1")
     await client.set_repeat_mode("player1", 2)
     await client.set_shuffle_mode("player1", 1)
     await client.clear_queue("player1")
+    await client.set_volume("player1", 101)
+    await client.set_muted("player1", True)
+    await client.seek("player1", -8)
+    await client.set_sync_volume("player1", False)
     await client.add_track_id("player1", "t-42", command="load")
     await client.move_queue_item("player1", 6, 1)
     await client.delete_queue_item("player1", 3)
@@ -98,13 +104,19 @@ async def test_player_client_transport_methods_dispatch_expected_commands() -> N
     assert calls[5] == ["player1", ["sync", "leader1"]]
     assert calls[6] == ["player1", ["status", 0, 33]]
     assert calls[7] == ["player1", ["playlist", "index", 4]]
-    assert calls[8] == ["player1", ["playlist", "repeat", 2]]
-    assert calls[9] == ["player1", ["playlist", "shuffle", 1]]
-    assert calls[10] == ["player1", ["playlist", "clear"]]
-    assert calls[11] == ["player1", ["playlistcontrol", "cmd:load", "track_id:t-42"]]
-    assert calls[12] == ["player1", ["playlist", "move", 6, 1]]
-    assert calls[13] == ["player1", ["playlist", "delete", 3]]
-    assert calls[14] == [
+    assert calls[8] == ["player1", ["playlist", "index", "+1"]]
+    assert calls[9] == ["player1", ["playlist", "index", "-1"]]
+    assert calls[10] == ["player1", ["playlist", "repeat", 2]]
+    assert calls[11] == ["player1", ["playlist", "shuffle", 1]]
+    assert calls[12] == ["player1", ["playlist", "clear"]]
+    assert calls[13] == ["player1", ["mixer", "volume", 100]]
+    assert calls[14] == ["player1", ["mixer", "muting", 1]]
+    assert calls[15] == ["player1", ["time", 0]]
+    assert calls[16] == ["player1", ["playerpref", "syncVolume", 0]]
+    assert calls[17] == ["player1", ["playlistcontrol", "cmd:load", "track_id:t-42"]]
+    assert calls[18] == ["player1", ["playlist", "move", 6, 1]]
+    assert calls[19] == ["player1", ["playlist", "delete", 3]]
+    assert calls[20] == [
         "player1",
         [
             "playlistcontrol",

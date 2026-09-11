@@ -250,10 +250,7 @@ class LyrionPlayer(Player):
         baseline = self.provider.get_last_cometd_status_seen_at(self.player_id)
         try:
             await self._ensure_sync_volume_disabled()
-            await self.provider.send_player_command(
-                self.player_id,
-                ["mixer", "volume", max(0, min(100, volume_level))],
-            )
+            await self.provider.set_player_volume(self.player_id, volume_level)
         except ProviderUnavailableError as err:
             raise PlayerCommandFailed(f"volume_set failed: {err}") from err
         self._attr_volume_level = max(0, min(100, volume_level))
@@ -270,10 +267,7 @@ class LyrionPlayer(Player):
         baseline = self.provider.get_last_cometd_status_seen_at(self.player_id)
         try:
             await self._ensure_sync_volume_disabled()
-            await self.provider.send_player_command(
-                self.player_id,
-                ["mixer", "muting", 1 if muted else 0],
-            )
+            await self.provider.set_player_muted(self.player_id, muted)
         except ProviderUnavailableError as err:
             raise PlayerCommandFailed(f"volume_mute failed: {err}") from err
         self._attr_volume_muted = muted
@@ -292,10 +286,7 @@ class LyrionPlayer(Player):
         previous_index = _get_status_int(previous or {}, "playlist_cur_index")
         baseline = self.provider.get_last_cometd_status_seen_at(self.player_id)
         try:
-            await self.provider.send_player_command(
-                self.player_id,
-                ["playlist", "index", "+1"],
-            )
+            await self.provider.next_player_track(self.player_id)
         except ProviderUnavailableError as err:
             raise PlayerCommandFailed(f"next_track failed: {err}") from err
         if previous_index is None:
@@ -315,10 +306,7 @@ class LyrionPlayer(Player):
         previous_index = _get_status_int(previous or {}, "playlist_cur_index")
         baseline = self.provider.get_last_cometd_status_seen_at(self.player_id)
         try:
-            await self.provider.send_player_command(
-                self.player_id,
-                ["playlist", "index", "-1"],
-            )
+            await self.provider.previous_player_track(self.player_id)
         except ProviderUnavailableError as err:
             raise PlayerCommandFailed(f"previous_track failed: {err}") from err
         if previous_index is None:
@@ -337,10 +325,7 @@ class LyrionPlayer(Player):
         target = max(0, int(position))
         baseline = self.provider.get_last_cometd_status_seen_at(self.player_id)
         try:
-            await self.provider.send_player_command(
-                self.player_id,
-                ["time", target],
-            )
+            await self.provider.seek_player(self.player_id, target)
         except ProviderUnavailableError as err:
             raise PlayerCommandFailed(f"seek failed: {err}") from err
         self._attr_elapsed_time = float(target)
@@ -457,10 +442,7 @@ class LyrionPlayer(Player):
         # adjusting them individually. Material Skin ships its own custom
         # group-volume flow for the same reason: stock LMS syncVolume is
         # too blunt for the group-volume UX users typically expect.
-        await self.provider.send_player_command(
-            self.player_id,
-            ["playerpref", "syncVolume", 0],
-        )
+        await self.provider.set_player_sync_volume(self.player_id, False)
 
     def _apply_player_metadata(self, player_data: dict[str, Any]) -> None:
         """
