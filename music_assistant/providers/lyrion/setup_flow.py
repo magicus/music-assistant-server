@@ -163,7 +163,7 @@ async def validate_lms_endpoint(
             translation_owner=translation_owner,
         ) from err
 
-    if not isinstance(body, dict) or body.get("result") is None:
+    if not isinstance(body, dict) or not isinstance(body.get("result"), dict):
         msg = f"serverstatus_invalid: {host_str}:{resolved_port}"
         raise SetupFailedError(
             msg,

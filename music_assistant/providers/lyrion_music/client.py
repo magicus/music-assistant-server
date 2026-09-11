@@ -879,10 +879,15 @@ async def _iter_raw_entities(
                     yield raw_item
                 processed_items += len(chunk)
             return
-    except (ProviderUnavailableError, ValueError) as err:
+    except ValueError as err:
         _disable_batch_lookup(provider, spec, err)
+        fallback_start = 0
+    except ProviderUnavailableError:
+        fallback_start = processed_items if use_batch else 0
+    else:
+        fallback_start = 0
 
-    for item_index, item_id in enumerate(item_ids, start=1):
+    for item_index, item_id in enumerate(item_ids[fallback_start:], start=fallback_start + 1):
         _log_lookup_request(
             provider,
             spec,

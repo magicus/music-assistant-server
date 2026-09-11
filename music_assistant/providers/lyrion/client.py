@@ -116,9 +116,9 @@ async def rpc_request(
             f"Lyrion JSON-RPC command {command_name} failed with code {error_code}: {error_message}"
         )
 
-    result = cast("dict[str, object] | None", data.get("result"))
-    if result is None:
+    result = data.get("result")
+    if not isinstance(result, dict):
         raise ProviderUnavailableError(
-            f"Lyrion JSON-RPC response for command {command_name} is missing result payload"
+            f"Lyrion JSON-RPC response for command {command_name} must contain a result object"
         )
-    return result
+    return cast("dict[str, object]", result)

@@ -168,6 +168,26 @@ async def test_validate_lms_endpoint_errors() -> None:
             http_session=http_session,
         )
 
+    bad_result_session = Mock()
+    bad_result_session.post = Mock(return_value=FakeResponse({"result": []}))
+    with (
+        patch.object(
+            asyncio.get_running_loop(),
+            "getaddrinfo",
+            new=AsyncMock(return_value=[object()]),
+        ),
+        patch(
+            "music_assistant.providers.lyrion.setup_flow.asyncio.open_connection",
+            new=AsyncMock(return_value=(object(), _FakeWriter())),
+        ),
+        pytest.raises(SetupFailedError, match="serverstatus_invalid"),
+    ):
+        await shared_setup_flow.validate_lms_endpoint(
+            host="localhost",
+            port=9000,
+            http_session=bad_result_session,
+        )
+
 
 async def test_validate_lms_endpoint_unreachable_and_not_lyrion() -> None:
     """Validator should map network and payload problems to setup errors."""

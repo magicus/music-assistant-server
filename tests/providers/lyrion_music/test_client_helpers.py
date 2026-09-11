@@ -265,6 +265,44 @@ def test_batch_flags_and_chunking() -> None:
     assert chunks == [["1", "2"], ["3", "4"], ["5"]]
 
 
+async def test_batch_lookup_falls_back_from_remaining_suffix_after_transient_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Batch lookup should resume with the unprocessed suffix after a transient failure."""
+    provider = _provider()
+    item_ids = [f"id{i}" for i in range(client.BATCH_LOOKUP_SIZE + 5)]
+    call_count = 0
+
+    async def _rpc_request(
+        _provider: Any,
+        player_id: str,
+        command: list[Any],
+        *,
+        timeout: int = 0,
+    ) -> dict[str, Any]:
+        del _provider, player_id, timeout
+        nonlocal call_count
+        call_count += 1
+        requested_ids = str(command[-1]).split(":", 1)[1].split(",")
+        if call_count == 2:
+            raise ProviderUnavailableError("temporary outage")
+        return {
+            client.ALBUM_SPEC.loop_key: [
+                {"id": item_id, "album": item_id} for item_id in requested_ids
+            ]
+        }
+
+    monkeypatch.setattr(client, "rpc_request", _rpc_request)
+
+    yielded = [
+        raw_item
+        async for raw_item in client._iter_raw_entities(provider, client.ALBUM_SPEC, item_ids)
+    ]
+
+    assert [item["id"] for item in yielded] == item_ids
+    assert client.ALBUM_SPEC.key not in provider._disabled_batch_lookup_keys
+
+
 async def test_get_entity_data_and_iter_entities_fast_paths(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -443,7 +481,11 @@ async def test_rpc_request_success_and_error_paths() -> None:
         await shared_client.rpc_request(provider, "", ["albums"])
 
     provider.mass.http_session.post = Mock(return_value=FakeResponse({"result": None}))
-    with pytest.raises(ProviderUnavailableError, match="missing result"):
+    with pytest.raises(ProviderUnavailableError, match="must contain a result object"):
+        await shared_client.rpc_request(provider, "", ["albums"])
+
+    provider.mass.http_session.post = Mock(return_value=FakeResponse({"result": []}))
+    with pytest.raises(ProviderUnavailableError, match="must contain a result object"):
         await shared_client.rpc_request(provider, "", ["albums"])
 
 
