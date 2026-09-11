@@ -590,3 +590,111 @@ async def test_emit_event_logs_music_assistant_errors() -> None:
     await stream._emit_event(SimpleNamespace(player_id="player_a"))
 
     provider.logger.warning.assert_called_once()
+
+
+async def test_flush_subscriptions_noops_without_client_or_pending() -> None:
+    """Flush should return fast when session or pending set is missing."""
+    provider = _StubProvider(["player_a"])
+    stream = LyrionCometDEventStream(cast("Any", provider), _noop_event_callback)
+    stream._refresh_stale_player_subscriptions = AsyncMock(return_value=None)
+
+    await stream._flush_pending_player_subscriptions()
+    stream._refresh_stale_player_subscriptions.assert_not_awaited()
+
+    stream._client_id = "cid"
+    await stream._flush_pending_player_subscriptions()
+    stream._refresh_stale_player_subscriptions.assert_not_awaited()
+
+
+async def test_subscribe_helpers_noop_without_client() -> None:
+    """Per-player and server subscribe helpers should noop before handshake."""
+    provider = _StubProvider(["player_a"])
+    stream = LyrionCometDEventStream(cast("Any", provider), _noop_event_callback)
+    stream._bayeux.publish = AsyncMock(return_value=[])
+
+    await stream._subscribe_player_status("player_a")
+    await stream._subscribe_server_status()
+
+    stream._bayeux.publish.assert_not_awaited()
+
+
+async def test_handle_message_ignores_invalid_channel_or_data_shape() -> None:
+    """Message handler should ignore non-string channels and non-dict payload data."""
+    provider = _StubProvider(["player_a"])
+    stream = LyrionCometDEventStream(cast("Any", provider), _noop_event_callback)
+    stream._handle_player_status = AsyncMock(return_value=None)
+    stream._handle_server_status = MagicMock()
+
+    await stream._handle_message({"channel": None})
+    await stream._handle_message({"channel": "/x/slim/playerstatus/player_a", "data": "bad"})
+    await stream._handle_message({"channel": "/x/slim/serverstatus", "data": "bad"})
+
+    stream._handle_player_status.assert_not_awaited()
+    stream._handle_server_status.assert_not_called()
+
+
+async def test_recovery_helper_branches_cover_noops_and_non_track_expectation() -> None:
+    """Recovery paths should handle no-client/no-stale and ignore non-track expectation values."""
+    provider = _StubProvider(["player_a"])
+    stream = LyrionCometDEventStream(cast("Any", provider), _noop_event_callback)
+
+    await stream._run_watchdog_tick()
+
+    stream._client_id = "cid"
+    stream._subscribed_player_ids.add("player_a")
+    stream._status_seen_at["player_a"] = asyncio.get_running_loop().time()
+    await stream._run_watchdog_tick()
+
+    stream._status_by_player["player_a"] = {"mode": "play"}
+    stream._track_end_expectations["player_a"] = object()
+    stream._status_seen_at["player_a"] = asyncio.get_running_loop().time()
+    stream._recover_expected_status = AsyncMock(return_value=None)
+    await stream._run_expectation_tick()
+    stream._recover_expected_status.assert_not_awaited()
+
+
+async def test_track_expectation_helpers_cover_clear_and_transition_checks() -> None:
+    """Track expectation helpers should clear on invalid status and detect transitions."""
+    provider = _StubProvider(["player_a"])
+    stream = LyrionCometDEventStream(cast("Any", provider), _noop_event_callback)
+
+    stream._track_end_expectations["player_a"] = SimpleNamespace()
+    stream._update_track_end_expectation("player_a", {"mode": "stop"})
+    assert "player_a" not in stream._track_end_expectations
+
+    stream._update_track_end_expectation(
+        "player_a",
+        {
+            "mode": "play",
+            "time": 3,
+            "duration": 10,
+            "playlist_cur_index": 1,
+            "playlist_timestamp": 11.0,
+            "playlist_loop": [{"id": "a"}, {"id": "b"}],
+        },
+    )
+    expectation = stream._track_end_expectations["player_a"]
+    assert expectation is not None
+
+    stream._status_by_player["player_a"] = {
+        "mode": "pause",
+        "playlist_cur_index": 1,
+        "playlist_timestamp": 11.0,
+        "playlist_loop": [{"id": "a"}, {"id": "b"}],
+    }
+    assert stream._track_transition_satisfied("player_a", expectation)
+
+    stream._status_by_player["player_a"] = {
+        "mode": "play",
+        "playlist_cur_index": 2,
+        "playlist_timestamp": 11.0,
+        "playlist_loop": [{"id": "a"}, {"id": "c"}, {"id": "d"}],
+    }
+    assert stream._track_transition_satisfied("player_a", expectation)
+
+
+def test_requires_activity_expectation_sync_state_branch() -> None:
+    """Sync metadata should require activity expectation even without tracks."""
+    assert LyrionCometDEventStream._requires_activity_expectation(
+        {"mode": "stop", "sync_slaves": "child"}
+    )
