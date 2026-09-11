@@ -312,9 +312,7 @@ async def test_enqueue_next_media_covers_native_and_url_paths(
     mock_provider.mass.streams.resolve_stream_url = AsyncMock(return_value="http://stream/next")
     mock_provider.append_player_url.reset_mock()
     await player.enqueue_next_media(media)
-    mock_provider.append_player_url.assert_awaited_once_with(
-        "test_player", "http://stream/next"
-    )
+    mock_provider.append_player_url.assert_awaited_once_with("test_player", "http://stream/next")
 
 
 @pytest.mark.asyncio

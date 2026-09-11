@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncGenerator, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 from music_assistant_models.errors import MediaNotFoundError, ProviderUnavailableError
 
@@ -14,7 +14,7 @@ from music_assistant.controllers.tasks import (
     update_current_task_progress,
     update_current_task_progress_text,
 )
-from music_assistant.providers.lyrion.client import normalize_lms_text_value, rpc_request
+from music_assistant.providers.lyrion.client import normalize_lms_text_value
 from pylyrion.errors import LyrionProtocolError, LyrionRequestError, LyrionTimeoutError
 from pylyrion.library import ALBUM_SPEC as PY_ALBUM_SPEC
 from pylyrion.library import ARTIST_SPEC as PY_ARTIST_SPEC
@@ -25,14 +25,7 @@ from pylyrion.models import LyrionEndpoint
 from pylyrion.session import LyrionSession
 
 from . import parsers
-from .constants import (
-    ALBUM_TAGS,
-    ARTIST_TAGS,
-    ARTWORK_WORKER_COUNT,
-    BATCH_LOOKUP_SIZE,
-    BROWSE_PAGE_SIZE,
-    TRACK_TAGS,
-)
+from .constants import ALBUM_TAGS, ARTIST_TAGS, ARTWORK_WORKER_COUNT, BROWSE_PAGE_SIZE, TRACK_TAGS
 
 if TYPE_CHECKING:
     from music_assistant_models.media_items import Album, Artist, Track
@@ -353,9 +346,7 @@ async def _get_browse_ids(
     except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
         raise ProviderUnavailableError(str(err)) from err
 
-    update_current_task_progress_text(
-        f"Getting {spec.key} ids from Lyrion: done ({len(ids)})"
-    )
+    update_current_task_progress_text(f"Getting {spec.key} ids from Lyrion: done ({len(ids)})")
     provider.logger.debug(
         "Lyrion %s id discovery <- %s ids",
         spec.key,
@@ -789,5 +780,3 @@ def _normalize_lookup_ids(
             len(ordered_ids),
         )
     return ordered_ids
-
-
