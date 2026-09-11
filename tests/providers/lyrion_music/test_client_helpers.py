@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Callable
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, Mock
@@ -69,6 +70,25 @@ async def test_get_all_wrappers_delegate(monkeypatch: pytest.MonkeyPatch) -> Non
     assert await client.get_all_artists(provider) == ["a"]
     assert await client.get_all_albums(provider) == ["b"]
     assert await client.get_all_tracks(provider) == ["c"]
+
+
+async def test_rpc_request_uses_shared_throttler(monkeypatch: pytest.MonkeyPatch) -> None:
+    """JSON-RPC calls should pass through a shared Lyrion throttler."""
+    provider = _provider()
+    provider.mass.http_session.post.return_value = FakeResponse({"result": {"ok": True}})
+
+    acquired = False
+
+    @asynccontextmanager
+    async def fake_acquire():
+        nonlocal acquired
+        acquired = True
+        yield
+
+    monkeypatch.setattr(shared_client, "_RPC_THROTTLER", SimpleNamespace(acquire=fake_acquire))
+
+    assert await shared_client.rpc_request(provider, "", ["serverstatus"]) == {"ok": True}
+    assert acquired is True
 
 
 async def test_get_entity_pages_skip_not_found(monkeypatch: pytest.MonkeyPatch) -> None:

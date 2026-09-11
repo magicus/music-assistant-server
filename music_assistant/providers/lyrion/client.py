@@ -8,12 +8,15 @@ from typing import Any, Protocol, cast
 from aiohttp import ClientError, ClientTimeout
 from music_assistant_models.errors import ProviderUnavailableError
 
+from music_assistant.helpers.throttle_retry import ThrottlerManager
 from music_assistant.providers.lyrion.constants import (
     CONF_LMS_HOST,
     CONF_LMS_PORT,
     DEFAULT_LMS_PORT,
     RPC_TIMEOUT,
 )
+
+_RPC_THROTTLER = ThrottlerManager(rate_limit=1, period=1)
 
 
 class _ConfigProvider(Protocol):
@@ -87,11 +90,14 @@ async def rpc_request(
     url = build_lms_url(host, port, "/jsonrpc.js")
 
     try:
-        async with provider.mass.http_session.post(
-            url,
-            json=payload,
-            timeout=ClientTimeout(total=timeout),
-        ) as response:
+        async with (
+            _RPC_THROTTLER.acquire(),
+            provider.mass.http_session.post(
+                url,
+                json=payload,
+                timeout=ClientTimeout(total=timeout),
+            ) as response,
+        ):
             response.raise_for_status()
             data = cast("Mapping[str, object]", await response.json())
     except TimeoutError as err:
