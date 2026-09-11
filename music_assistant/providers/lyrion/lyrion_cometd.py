@@ -20,6 +20,7 @@ from .constants import (
     COMETD_SERVERSTATUS_BATCH_SIZE,
     COMETD_SERVERSTATUS_SUBSCRIBE_INTERVAL,
     COMETD_STATUS_STALENESS_FACTOR,
+    COMETD_STATUS_WATCHDOG_INTERVAL,
     RPC_TIMEOUT,
 )
 
@@ -48,6 +49,7 @@ class LyrionCometDEventStream:
         self._event_callback = event_callback
         self._bayeux = BayeuxClient(self._post)
         self._task: asyncio.Task[None] | None = None
+        self._watchdog_task: asyncio.Task[None] | None = None
         self._client_id: str | None = None
         self._subscribed_player_ids: set[str] = set()
         self._pending_player_ids: set[str] = set()
@@ -60,8 +62,12 @@ class LyrionCometDEventStream:
     def start(self) -> None:
         """Start the background stream task when needed."""
         if self._task is not None and not self._task.done():
+            if self._watchdog_task is None or self._watchdog_task.done():
+                self._watchdog_task = self.provider.mass.create_task(self._watchdog_loop())
             return
         self._task = self.provider.mass.create_task(self._listener_loop())
+        if self._watchdog_task is None or self._watchdog_task.done():
+            self._watchdog_task = self.provider.mass.create_task(self._watchdog_loop())
 
     async def stop(self) -> None:
         """Stop background task and clear session state."""
@@ -70,6 +76,12 @@ class LyrionCometDEventStream:
             with suppress(asyncio.CancelledError):
                 await self._task
             self._task = None
+
+        if self._watchdog_task is not None:
+            self._watchdog_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._watchdog_task
+            self._watchdog_task = None
 
         if self._client_id is not None:
             with suppress(ProviderUnavailableError):
@@ -149,6 +161,62 @@ class LyrionCometDEventStream:
             if self.provider.unloading:
                 return  # type: ignore[unreachable]
             await asyncio.sleep(COMETD_RETRY_DELAY)
+
+    async def _watchdog_loop(self) -> None:
+        """Periodically heal stale playerstatus subscriptions."""
+        while not self.provider.unloading:
+            await asyncio.sleep(COMETD_STATUS_WATCHDOG_INTERVAL)
+            if self.provider.unloading:
+                return
+            await self._run_watchdog_tick()
+
+    async def _run_watchdog_tick(self) -> None:
+        """Check whether CometD status has gone stale and recover it."""
+        if self._client_id is None:
+            return
+
+        stale_after = COMETD_PLAYERSTATUS_SUBSCRIBE_INTERVAL * COMETD_STATUS_STALENESS_FACTOR
+        now = time.monotonic()
+        stale_player_ids = [
+            player_id
+            for player_id in sorted(self._subscribed_player_ids)
+            if now - self._status_seen_at.get(player_id, 0.0) > stale_after
+        ]
+        if not stale_player_ids:
+            return
+
+        self.provider.logger.warning(
+            "CometD playerstatus stale for %s",
+            ", ".join(stale_player_ids),
+        )
+        if len(stale_player_ids) == len(self._subscribed_player_ids):
+            await self._restart_stale_session(stale_player_ids)
+            return
+
+        for player_id in stale_player_ids:
+            self._subscribed_player_ids.discard(player_id)
+            self._status_by_player.pop(player_id, None)
+            self._pending_player_ids.add(player_id)
+            self._touch_player_status_activity(player_id)
+
+    async def _restart_stale_session(self, stale_player_ids: list[str]) -> None:
+        """Restart the CometD session when the whole status stream looks dead."""
+        client_id = self._client_id
+        if client_id is None:
+            return
+
+        self.provider.logger.warning(
+            "Restarting CometD session after stale playerstatus for %s",
+            ", ".join(stale_player_ids),
+        )
+        self._reset_session_state()
+        if self._task is not None:
+            self._task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._task
+        self._task = self.provider.mass.create_task(self._listener_loop())
+        if self._watchdog_task is None or self._watchdog_task.done():
+            self._watchdog_task = self.provider.mass.create_task(self._watchdog_loop())
 
     async def _run_session(self) -> None:
         """Run one handshake/connect loop until reconnect is needed."""

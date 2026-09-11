@@ -269,3 +269,24 @@ async def test_session_reset_clears_status_cache() -> None:
     assert not stream._subscribed_player_ids
     assert not stream._status_by_player
     assert not stream._status_seen_at
+
+
+async def test_watchdog_restarts_when_all_subscriptions_go_stale() -> None:
+    """The watchdog should restart the session if the whole stream goes stale."""
+    provider = _StubProvider(["player_a"])
+    stream = LyrionCometDEventStream(cast("Any", provider), _noop_event_callback)
+
+    stream._client_id = "client-1"
+    stream._subscribed_player_ids.add("player_a")
+    stream._status_seen_at["player_a"] = 0.0
+
+    restart_calls: list[list[str]] = []
+
+    async def _restart_stale_session(stale_player_ids: list[str]) -> None:
+        restart_calls.append(stale_player_ids)
+
+    cast("Any", stream)._restart_stale_session = _restart_stale_session
+
+    await stream._run_watchdog_tick()
+
+    assert restart_calls == [["player_a"]]
