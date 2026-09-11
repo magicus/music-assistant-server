@@ -70,3 +70,15 @@ def test_plan_rebuilds_from_protected_prefix_when_cost_ratio_is_high() -> None:
 
     assert plan.mutations == ()
     assert plan.rebuild_from_index == 1
+
+
+def test_plan_clamps_oversized_protected_prefix_before_rebuild() -> None:
+    """Protected prefix should never exceed queue overlap when rebuilding."""
+    planner = QueueDiffPlanner(rebuild_cost_threshold=0, rebuild_ratio_threshold=0.0)
+    source = (("track", "a"), ("track", "b"))
+    target = (("track", "a"), ("track", "x"), ("track", "y"))
+
+    plan = planner.plan(source, target, protected_prefix_len=10)
+
+    assert plan.mutations == ()
+    assert plan.rebuild_from_index == 2

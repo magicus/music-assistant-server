@@ -67,15 +67,15 @@ class QueueDiffPlanner:
             when possible.
         """
         protected_prefix_len = max(protected_prefix_len, 0)
-
-        # If already-passed/buffered prefix diverged, do a full rebuild to
-        # avoid fragile mutation logic around uncertain identity there.
-        prefix_to_validate = min(
+        protected_prefix_len = min(
             protected_prefix_len,
             len(source_identities),
             len(target_identities),
         )
-        for index in range(prefix_to_validate):
+
+        # If already-passed/buffered prefix diverged, do a full rebuild to
+        # avoid fragile mutation logic around uncertain identity there.
+        for index in range(protected_prefix_len):
             if source_identities[index] != target_identities[index]:
                 return QueuePlan(mutations=(), rebuild_from_index=0)
 

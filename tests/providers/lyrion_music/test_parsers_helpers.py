@@ -3,11 +3,30 @@
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import Mock
 
 from music_assistant_models.enums import MediaType
 from music_assistant_models.media_items import Album, ItemMapping, UniqueList
 
 from music_assistant.providers.lyrion_music import artwork, parsers
+
+
+def test_to_lms_stream_url_brackets_ipv6_host() -> None:
+    """Track stream URLs should use bracketed IPv6 host literals."""
+    provider = Mock()
+
+    def _get_setup_value(key: str, default: Any = None) -> Any:
+        if key == "lms_host":
+            return "2001:db8::1"
+        if key == "port":
+            return 9000
+        return default
+
+    provider.get_setup_value = Mock(side_effect=_get_setup_value)
+
+    url = parsers.to_lms_stream_url(provider, "track-1", raw_url=None)
+
+    assert url.startswith("http://[2001:db8::1]:9000/")
 
 
 def test_extract_track_artists_fallback_unknown_artist(lyrion_provider: Any) -> None:

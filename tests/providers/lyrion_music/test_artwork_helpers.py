@@ -201,6 +201,12 @@ async def test_resolve_image_branching(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result == original
     assert fetch_calls == [original, "http://x/image_300x300_f"]
 
+    fetch_calls.clear()
+    cover_original = "http://x/music/1/cover_600x600_f"
+    result = await artwork.resolve_image(provider, cover_original)
+    assert result == cover_original
+    assert fetch_calls == [cover_original, "http://x/music/1/cover_300x300_f"]
+
 
 async def test_build_artist_and_album_delegate_to_parsers(
     monkeypatch: pytest.MonkeyPatch,

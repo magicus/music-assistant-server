@@ -28,12 +28,16 @@ if TYPE_CHECKING:
 
 async def resolve_image(provider: LyrionMusicProvider, path: str) -> str | bytes:
     """Resolve artist artwork URLs with LMS size fallback when needed."""
-    if "image_600x600_f" not in path:
+    if "image_600x600_f" in path:
+        fallback_path = path.replace("image_600x600_f", "image_300x300_f")
+    elif "cover_600x600_f" in path:
+        fallback_path = path.replace("cover_600x600_f", "cover_300x300_f")
+    else:
         return path
+
     if image_bytes := await fetch_remote_image_if_ok(provider, path):
         return image_bytes
 
-    fallback_path = path.replace("image_600x600_f", "image_300x300_f")
     if fallback_path != path and (
         fallback_bytes := await fetch_remote_image_if_ok(provider, fallback_path)
     ):
