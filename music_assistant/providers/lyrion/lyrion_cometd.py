@@ -7,7 +7,7 @@ import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 from aiohttp import ClientError, ClientTimeout
 from music_assistant_models.errors import MusicAssistantError, ProviderUnavailableError
@@ -34,8 +34,8 @@ from .constants import (
 if TYPE_CHECKING:
     from .provider import LyrionPlayerProvider
 
-StatusPayload = dict[str, Any]
-LmsPlayerEventCallback = Callable[[Any], Awaitable[None]]
+StatusPayload = dict[str, object]
+LmsPlayerEventCallback = Callable[[object], Awaitable[None]]
 
 
 @dataclass
@@ -518,7 +518,7 @@ class LyrionCometDEventStream:
         for message in response[1:]:
             await self._handle_message(message)
 
-    async def _handle_message(self, message: dict[str, Any]) -> None:
+    async def _handle_message(self, message: dict[str, object]) -> None:
         """Handle one normalized CometD message."""
         channel = message.get("channel")
         if not isinstance(channel, str):
@@ -578,7 +578,7 @@ class LyrionCometDEventStream:
         if event := self._status_wait_events.get(player_id):
             event.set()
 
-    def _handle_server_status(self, payload: dict[str, Any]) -> None:
+    def _handle_server_status(self, payload: dict[str, object]) -> None:
         """Detect server roster changes and trigger provider rediscovery."""
         self._apply_server_player_connection_state(payload)
 
@@ -612,7 +612,7 @@ class LyrionCometDEventStream:
             self._known_server_player_count = player_count
             self.provider.schedule_players_discovery()
 
-    def _apply_server_player_connection_state(self, payload: dict[str, Any]) -> None:
+    def _apply_server_player_connection_state(self, payload: dict[str, object]) -> None:
         """Apply connected flags from serverstatus to MA player availability."""
         players_loop = payload.get("players_loop")
         if not isinstance(players_loop, list):
@@ -782,7 +782,7 @@ class LyrionCometDEventStream:
                 )
             )
 
-    async def _emit_event(self, event: Any) -> None:
+    async def _emit_event(self, event: object) -> None:
         """Emit one normalized event without terminating the connect loop on MA errors."""
         try:
             await self._event_callback(event)
@@ -859,9 +859,9 @@ class LyrionCometDEventStream:
 
     async def _post(
         self,
-        messages: list[dict[str, Any]],
+        messages: list[dict[str, object]],
         timeout: int,
-    ) -> list[dict[str, Any]]:
+    ) -> list[dict[str, object]]:
         """POST Bayeux messages and return normalized dict payloads."""
         host = self.provider.get_configured_host()
         if not host:
@@ -879,7 +879,7 @@ class LyrionCometDEventStream:
             ) as response:
                 response.raise_for_status()
                 payload = cast(
-                    "dict[str, Any] | list[dict[str, Any]]",
+                    "dict[str, object] | list[dict[str, object]]",
                     await response.json(),
                 )
         except (ClientError, TimeoutError, ValueError) as err:
@@ -968,7 +968,7 @@ def _extract_current_track_id(status: StatusPayload) -> str | None:
     return None
 
 
-def _extract_server_player_ids(payload: dict[str, Any]) -> set[str]:
+def _extract_server_player_ids(payload: dict[str, object]) -> set[str]:
     """Extract normalized player ids from a serverstatus payload."""
     players_loop = payload.get("players_loop")
     if not isinstance(players_loop, list):
@@ -984,7 +984,7 @@ def _extract_server_player_ids(payload: dict[str, Any]) -> set[str]:
     return player_ids
 
 
-def _is_invalid_player_payload(payload: dict[str, Any]) -> bool:
+def _is_invalid_player_payload(payload: dict[str, object]) -> bool:
     """Return True when LMS status subscription reports an invalid player."""
     error = payload.get("error")
     return isinstance(error, str) and error == "invalid player"

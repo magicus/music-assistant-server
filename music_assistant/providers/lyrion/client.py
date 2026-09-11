@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, Protocol, cast
 
 from aiohttp import ClientError, ClientTimeout
@@ -58,13 +58,21 @@ def build_lms_url(host: str, port: int | None, path: str) -> str:
     return f"http://{normalized_host}:{port}{normalized_path}"
 
 
+def normalize_lms_text_value(value: object) -> str | None:
+    """Normalize a raw LMS scalar into a stripped text value."""
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
+
+
 async def rpc_request(
     provider: _ConfigProvider,
     player_id: str,
     command: Sequence[Any],
     *,
     timeout: int = RPC_TIMEOUT,
-) -> dict[str, Any]:
+) -> Mapping[str, object]:
     """Execute one LMS JSON-RPC request using the shared Lyrion transport."""
     host = get_configured_host(provider)
     if not host:
@@ -85,7 +93,7 @@ async def rpc_request(
             timeout=ClientTimeout(total=timeout),
         ) as response:
             response.raise_for_status()
-            data = cast("dict[str, Any]", await response.json())
+            data = cast("dict[str, object]", await response.json())
     except TimeoutError as err:
         raise ProviderUnavailableError(
             f"Lyrion server at {host}:{port} did not respond in time ({timeout}s). "
@@ -100,7 +108,7 @@ async def rpc_request(
             f"Lyrion JSON-RPC connection request to {host}:{port} failed: {err}"
         ) from err
 
-    if error_payload := cast("dict[str, Any] | None", data.get("error")):
+    if error_payload := cast("dict[str, object] | None", data.get("error")):
         error_code = error_payload.get("code", "unknown")
         error_message = error_payload.get("message", "unknown JSON-RPC error")
         raise ProviderUnavailableError(
@@ -108,7 +116,7 @@ async def rpc_request(
             f"code {error_code}: {error_message}"
         )
 
-    result = cast("dict[str, Any] | None", data.get("result"))
+    result = cast("dict[str, object] | None", data.get("result"))
     if result is None:
         raise ProviderUnavailableError(
             f"Lyrion JSON-RPC response for command {command[0] if command else '<unknown>'} "

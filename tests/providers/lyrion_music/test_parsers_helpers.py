@@ -40,6 +40,14 @@ def test_extract_track_artists_fallback_unknown_artist(lyrion_provider: Any) -> 
     assert artist.provider == lyrion_provider.instance_id
 
 
+def test_extract_values_and_ids_normalize_non_string_payloads() -> None:
+    """Parser helpers should normalize LMS scalars before splitting or extracting ids."""
+    assert parsers.extract_item_id({"id": 123}) == "123"
+    assert parsers.extract_first_list_value("123") == "123"
+    assert parsers.split_lms_values("a, b", split_mode="name") == ["a", "b"]
+    assert parsers.split_lms_values("1,2,3", split_mode="id") == ["1", "2", "3"]
+
+
 def _album(*, album_id: str, provider: str, artist_id: str, artist_name: str) -> Album:
     album = Album(
         item_id=album_id, provider=provider, name=f"Album {album_id}", provider_mappings=set()

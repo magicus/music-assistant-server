@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from time import time_ns
-from typing import Any, cast
+from typing import Any
 from urllib.parse import quote, unquote
 
 from music_assistant_models.background_task import TaskSchedule
@@ -38,6 +38,7 @@ from music_assistant.providers.lyrion.client import (
 from music_assistant.providers.lyrion.client import (
     get_configured_port as get_shared_configured_port,
 )
+from music_assistant.providers.lyrion.client import normalize_lms_text_value
 from music_assistant.providers.lyrion.setup_flow import validate_lms_endpoint
 
 from . import artwork, client, parsers, sync
@@ -633,7 +634,7 @@ class LyrionMusicProvider(MusicProvider):
             raise MediaNotFoundError(f"Unsupported media type: {media_type}")
 
         track_data = await self._get_track_data(item_id)
-        raw_url = cast("str | None", track_data.get("url"))
+        raw_url = normalize_lms_text_value(track_data.get("url"))
         stream_url = parsers.to_lms_stream_url(self, item_id, raw_url)
         content_type = ContentType.try_parse(raw_url or stream_url)
 

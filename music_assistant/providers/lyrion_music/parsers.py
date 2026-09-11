@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any, cast
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Literal
 from urllib.parse import quote
 
 from music_assistant_models.enums import ImageType, MediaType
@@ -23,6 +24,7 @@ from music_assistant.providers.lyrion.client import (
     build_lms_url,
     get_configured_host,
     get_configured_port,
+    normalize_lms_text_value,
 )
 
 from . import artwork
@@ -32,12 +34,16 @@ if TYPE_CHECKING:
     from music_assistant.providers.lyrion_music.provider import LyrionMusicProvider
 
 
-def parse_artist(provider: LyrionMusicProvider, raw_artist: dict[str, Any]) -> Artist:
+def parse_artist(provider: LyrionMusicProvider, raw_artist: Mapping[str, object]) -> Artist:
     """Parse LMS artist payload into an MA Artist model."""
     artist_id = extract_item_id(raw_artist)
     if artist_id is None:
         raise MediaNotFoundError("Artist payload without id")
-    name = cast("str", raw_artist.get("artist") or raw_artist.get("name") or artist_id)
+    name = (
+        normalize_lms_text_value(raw_artist.get("artist"))
+        or normalize_lms_text_value(raw_artist.get("name"))
+        or artist_id
+    )
     artist = Artist(
         item_id=artist_id,
         provider=provider.instance_id,
@@ -66,12 +72,16 @@ def parse_artist(provider: LyrionMusicProvider, raw_artist: dict[str, Any]) -> A
     return artist
 
 
-def parse_album(provider: LyrionMusicProvider, raw_album: dict[str, Any]) -> Album:
+def parse_album(provider: LyrionMusicProvider, raw_album: Mapping[str, object]) -> Album:
     """Parse LMS album payload into an MA Album model."""
     album_id = extract_item_id(raw_album)
     if album_id is None:
         raise MediaNotFoundError("Album payload without id")
-    name = cast("str", raw_album.get("album") or raw_album.get("title") or album_id)
+    name = (
+        normalize_lms_text_value(raw_album.get("album"))
+        or normalize_lms_text_value(raw_album.get("title"))
+        or album_id
+    )
 
     artists: UniqueList[Artist | ItemMapping] = UniqueList()
     artist_name, artist_id = extract_artist_ref(
@@ -133,17 +143,21 @@ def parse_album(provider: LyrionMusicProvider, raw_album: dict[str, Any]) -> Alb
     return album
 
 
-def parse_track(provider: LyrionMusicProvider, raw_track: dict[str, Any]) -> Track:
+def parse_track(provider: LyrionMusicProvider, raw_track: Mapping[str, object]) -> Track:
     """Parse LMS track payload into an MA Track model."""
     track_id = extract_item_id(raw_track)
     if track_id is None:
         raise MediaNotFoundError("Track payload without id")
 
-    title = cast("str", raw_track.get("title") or raw_track.get("track") or track_id)
+    title = (
+        normalize_lms_text_value(raw_track.get("title"))
+        or normalize_lms_text_value(raw_track.get("track"))
+        or track_id
+    )
     artists = extract_track_artists(provider, raw_track)
 
     album_id = extract_item_id(raw_track, id_keys=("album_id", "albumid"))
-    album_name = cast("str | None", raw_track.get("album"))
+    album_name = normalize_lms_text_value(raw_track.get("album"))
     album_mapping: ItemMapping | None = None
     if album_name:
         album_mapping = ItemMapping(
@@ -154,15 +168,18 @@ def parse_track(provider: LyrionMusicProvider, raw_track: dict[str, Any]) -> Tra
         )
 
     duration: int | None = None
-    raw_duration = raw_track.get("duration")
+    raw_duration = normalize_lms_text_value(raw_track.get("duration"))
     if raw_duration is not None:
         try:
-            duration = int(float(cast("str | int | float", raw_duration)))
+            duration = int(float(raw_duration))
         except TypeError, ValueError:
             duration = None
 
-    track_number = parse_int(raw_track.get("tracknum"), default=0)
-    disc_number = parse_int(raw_track.get("disc") or raw_track.get("discnum"), default=0)
+    track_number = parse_int(normalize_lms_text_value(raw_track.get("tracknum")), default=0)
+    disc_number = parse_int(
+        normalize_lms_text_value(raw_track.get("disc") or raw_track.get("discnum")),
+        default=0,
+    )
 
     track = Track(
         item_id=track_id,
@@ -194,7 +211,7 @@ def parse_track(provider: LyrionMusicProvider, raw_track: dict[str, Any]) -> Tra
 
 
 def extract_track_artists(
-    provider: LyrionMusicProvider, raw_track: dict[str, Any]
+    provider: LyrionMusicProvider, raw_track: Mapping[str, object]
 ) -> UniqueList[Artist | ItemMapping]:
     """Extract track artists using LMS role precedence."""
     role_groups: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
@@ -253,10 +270,12 @@ def extract_track_artists(
     )
 
 
-def parse_playlist(provider: LyrionMusicProvider, raw_playlist: dict[str, str]) -> Playlist:
+def parse_playlist(provider: LyrionMusicProvider, raw_playlist: Mapping[str, object]) -> Playlist:
     """Parse LMS playlist payload into an MA Playlist model."""
-    playlist_id = raw_playlist["id"]
-    playlist_name = raw_playlist["name"]
+    playlist_id = normalize_lms_text_value(raw_playlist.get("id"))
+    playlist_name = normalize_lms_text_value(raw_playlist.get("name"))
+    if playlist_id is None or playlist_name is None:
+        raise MediaNotFoundError("Playlist payload without id or name")
     return Playlist(
         item_id=playlist_id,
         provider=provider.instance_id,
@@ -273,14 +292,15 @@ def parse_playlist(provider: LyrionMusicProvider, raw_playlist: dict[str, str]) 
 
 
 def extract_item_id(
-    raw: dict[str, Any], id_keys: tuple[str, ...] = ("id", "track_id", "album_id", "artist_id")
+    raw: Mapping[str, object],
+    id_keys: tuple[str, ...] = ("id", "track_id", "album_id", "artist_id"),
 ) -> str | None:
     """Extract the first available id field from a raw LMS payload."""
     for key in id_keys:
-        value = raw.get(key)
+        value = normalize_lms_text_value(raw.get(key))
         if value is None:
             continue
-        value_str = str(value).split(",", 1)[0].strip()
+        value_str = value.split(",", 1)[0].strip()
         if value_str:
             return value_str
     return None
@@ -302,7 +322,7 @@ def to_lms_stream_url(provider: LyrionMusicProvider, track_id: str, raw_url: str
 
 
 def extract_artist_ref(
-    raw: dict[str, Any],
+    raw: Mapping[str, object],
     preferred_name_keys: tuple[str, ...] = (
         "artist",
         "albumartist",
@@ -323,7 +343,7 @@ def extract_artist_ref(
     """Extract artist display name and provider id from LMS payload."""
     artist_name: str | None = None
     for key in preferred_name_keys:
-        value = raw.get(key)
+        value = normalize_lms_text_value(raw.get(key))
         if value is None:
             continue
         candidate = extract_first_list_value(value)
@@ -337,19 +357,20 @@ def extract_artist_ref(
     return artist_name, artist_id
 
 
-def extract_first_list_value(value: Any) -> str:
+def extract_first_list_value(value: str) -> str | None:
     """Extract first value from scalar or comma-separated LMS field."""
-    if isinstance(value, str):
-        return value.split(", ", 1)[0].strip()
-    return str(value).strip()
+    normalized_value = value.strip()
+    if not normalized_value:
+        return None
+    return normalized_value.split(", ", 1)[0].strip() or None
 
 
 def extract_values_for_keys(
-    raw: dict[str, Any], keys: tuple[str, ...], split_mode: str
+    raw: Mapping[str, object], keys: tuple[str, ...], split_mode: Literal["id", "name"]
 ) -> list[str]:
     """Extract scalar or list values from the first populated key."""
     for key in keys:
-        value = raw.get(key)
+        value = normalize_lms_text_value(raw.get(key))
         if value is None:
             continue
         if values := split_lms_values(value, split_mode=split_mode):
@@ -357,20 +378,16 @@ def extract_values_for_keys(
     return []
 
 
-def split_lms_values(value: Any, split_mode: str) -> list[str]:
+def split_lms_values(value: str, split_mode: Literal["id", "name"]) -> list[str]:
     """Split LMS value into scalar or multi-value list."""
-    if isinstance(value, str):
-        raw_value = value.strip()
-        if not raw_value:
-            return []
-        if split_mode == "id":
-            return [part.strip() for part in raw_value.split(",") if part.strip()]
-        if ", " in raw_value:
-            return [part.strip() for part in raw_value.split(", ") if part.strip()]
-        return [raw_value]
-
-    normalized = str(value).strip()
-    return [normalized] if normalized else []
+    raw_value = value.strip()
+    if not raw_value:
+        return []
+    if split_mode == "id":
+        return [part.strip() for part in raw_value.split(",") if part.strip()]
+    if ", " in raw_value:
+        return [part.strip() for part in raw_value.split(", ") if part.strip()]
+    return [raw_value]
 
 
 def album_metadata_needs_update(library_album: Album, provider_album: Album) -> bool:
@@ -387,27 +404,24 @@ def artist_metadata_needs_update(library_artist: Artist, provider_artist: Artist
     return artwork.get_thumb_path(library_artist) != artwork.get_thumb_path(provider_artist)
 
 
-def parse_int(value: Any, default: int = 0) -> int:
+def parse_int(value: str | None, default: int = 0) -> int:
     """Parse int-like values from LMS payload, with safe fallback."""
     if value is None:
         return default
     try:
-        return int(str(value).strip())
+        return int(value.strip())
     except TypeError, ValueError:
         return default
 
 
-def _serialize_mapping_details(raw: dict[str, Any], keys: tuple[str, ...]) -> str | None:
+def _serialize_mapping_details(raw: Mapping[str, object], keys: tuple[str, ...]) -> str | None:
     """Serialize selected LMS payload fields for later provider-local reuse."""
     details: dict[str, str] = {}
     for key in keys:
-        value = raw.get(key)
+        value = normalize_lms_text_value(raw.get(key))
         if value is None:
             continue
-        value_str = str(value).strip()
-        if not value_str:
-            continue
-        details[key] = value_str
+        details[key] = value
     if not details:
         return None
     return json.dumps(details, separators=(",", ":"))

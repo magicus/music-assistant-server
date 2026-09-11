@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import dataclasses
-from typing import TYPE_CHECKING, Any
+from collections.abc import Mapping
+from typing import TYPE_CHECKING
 from urllib.parse import quote
 
 from aiohttp import ClientError, ClientTimeout
@@ -15,6 +16,7 @@ from music_assistant.providers.lyrion.client import (
     build_lms_url,
     get_configured_host,
     get_configured_port,
+    normalize_lms_text_value,
 )
 
 from . import parsers
@@ -53,12 +55,12 @@ async def resolve_image(provider: LyrionMusicProvider, path: str) -> str | bytes
     return path
 
 
-async def build_artist(provider: LyrionMusicProvider, raw_artist: dict[str, Any]) -> Artist:
+async def build_artist(provider: LyrionMusicProvider, raw_artist: Mapping[str, object]) -> Artist:
     """Build artist model from LMS payload and validate artwork URL."""
     return parsers.parse_artist(provider, raw_artist)
 
 
-async def build_album(provider: LyrionMusicProvider, raw_album: dict[str, Any]) -> Album:
+async def build_album(provider: LyrionMusicProvider, raw_album: Mapping[str, object]) -> Album:
     """Build album model from LMS payload and validate artwork URL."""
     return parsers.parse_album(provider, raw_album)
 
@@ -97,67 +99,61 @@ async def ensure_preferred_artwork_size(
 
 def extract_artwork_url(
     provider: LyrionMusicProvider,
-    raw: dict[str, Any],
+    raw: Mapping[str, object],
     fallback_id: str | None = None,
 ) -> str | None:
     """Extract an artwork URL from known LMS payload fields."""
     for key in ("artwork_url", "artwork", "icon"):
-        if (value := raw.get(key)) is None:
+        if (value := normalize_lms_text_value(raw.get(key))) is None:
             continue
-        path = str(value).strip()
-        if not path:
-            continue
-        if path.startswith(("http://", "https://")):
-            return append_artwork_cache_buster(provider, path)
-        if path.startswith("/"):
+        if value.startswith(("http://", "https://")):
+            return append_artwork_cache_buster(provider, value)
+        if value.startswith("/"):
             return append_artwork_cache_buster(
                 provider,
-                to_lms_absolute_url(provider, path),
+                to_lms_absolute_url(provider, value),
             )
 
-    cover_id = raw.get("coverid")
-    if cover_id is None:
-        cover_id = raw.get("artwork_track_id")
-    if cover_id is None:
-        cover_id = fallback_id
+    cover_id = (
+        normalize_lms_text_value(raw.get("coverid"))
+        or normalize_lms_text_value(raw.get("artwork_track_id"))
+        or fallback_id
+    )
     if cover_id is None:
         return None
-    encoded_cover_id = quote(str(cover_id), safe="")
+    encoded_cover_id = quote(cover_id, safe="")
     return append_artwork_cache_buster(
         provider,
         to_lms_absolute_url(provider, f"/music/{encoded_cover_id}/cover_600x600_f"),
     )
 
 
-def extract_artist_artwork_url(provider: LyrionMusicProvider, raw: dict[str, Any]) -> str | None:
+def extract_artist_artwork_url(
+    provider: LyrionMusicProvider, raw: Mapping[str, object]
+) -> str | None:
     """Extract artist artwork URL from known LMS artist fields."""
-    portrait_id = raw.get("portraitid")
+    portrait_id = normalize_lms_text_value(raw.get("portraitid"))
     if portrait_id is not None:
-        portrait_id_str = str(portrait_id).strip()
-        if portrait_id_str:
-            encoded_id = quote(portrait_id_str, safe="")
-            return append_artwork_cache_buster(
+        encoded_id = quote(portrait_id, safe="")
+        return append_artwork_cache_buster(
+            provider,
+            to_lms_absolute_url(
                 provider,
-                to_lms_absolute_url(
-                    provider,
-                    f"/contributor/{encoded_id}/image_600x600_f",
-                ),
-            )
+                f"/contributor/{encoded_id}/image_600x600_f",
+            ),
+        )
 
     for key in ("artwork_url", "artwork", "icon"):
-        value = raw.get(key)
+        value = normalize_lms_text_value(raw.get(key))
         if value is None:
             continue
-        path = str(value).strip()
-        if not path:
-            continue
-        path = normalize_artist_artwork_path(path)
-        if path.startswith(("http://", "https://")):
-            return append_artwork_cache_buster(provider, path)
-        if path.startswith("/"):
+        value = normalize_artist_artwork_path(value)
+        if value.startswith(("http://", "https://")):
+            return append_artwork_cache_buster(provider, value)
+        if value.startswith("/"):
             return append_artwork_cache_buster(
                 provider,
-                to_lms_absolute_url(provider, path),
+                to_lms_absolute_url(provider, value),
             )
 
     artist_id = parsers.extract_item_id(

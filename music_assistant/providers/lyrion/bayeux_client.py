@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import Any
 
 from music_assistant_models.errors import ProviderUnavailableError
 
-BayeuxMessage = dict[str, Any]
+BayeuxMessage = dict[str, object]
 BayeuxSender = Callable[
     [list[BayeuxMessage], int],
     Awaitable[list[BayeuxMessage]],
@@ -133,7 +132,7 @@ class BayeuxClient:
         self,
         channel: str,
         client_id: str,
-        data: dict[str, Any],
+        data: dict[str, object],
         timeout: int,
     ) -> list[BayeuxMessage]:
         """Post one non-meta Bayeux message."""

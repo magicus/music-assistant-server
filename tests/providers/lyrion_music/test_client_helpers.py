@@ -456,3 +456,11 @@ def test_get_configured_host_and_port() -> None:
     assert shared_client.get_configured_port(_provider(port="9000")) == 9000
     assert shared_client.get_configured_port(_provider(port="bad"), default=1234) == 1234
     assert shared_client.get_configured_port(_provider(port=None), default=None) is None
+
+
+def test_normalize_lms_text_value() -> None:
+    """Raw LMS scalar values should be coerced to stripped text near the transport boundary."""
+    assert shared_client.normalize_lms_text_value("  abc  ") == "abc"
+    assert shared_client.normalize_lms_text_value(42) == "42"
+    assert shared_client.normalize_lms_text_value("") is None
+    assert shared_client.normalize_lms_text_value(None) is None
