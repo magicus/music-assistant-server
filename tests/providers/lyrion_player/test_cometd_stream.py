@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from music_assistant.providers.lyrion.lyrion_cometd import LyrionCometDEventStream
 from music_assistant.providers.lyrion_player.cometd_events import LmsPlayerPlaylistChangedEvent
@@ -29,6 +29,7 @@ class _StubProvider:
             players=SimpleNamespace(get_player=lambda _player_id: None),
         )
         self.logger = MagicMock()
+        self.get_player_status = AsyncMock(return_value={})
         self.discovery_calls = 0
 
     def schedule_players_discovery(self) -> None:
@@ -290,3 +291,82 @@ async def test_watchdog_restarts_when_all_subscriptions_go_stale() -> None:
     await stream._run_watchdog_tick()
 
     assert restart_calls == [["player_a"]]
+
+
+async def test_playback_status_arms_track_end_expectation() -> None:
+    """Play status with time+duration should arm a track-end expectation."""
+    provider = _StubProvider(["player_a"])
+    stream = LyrionCometDEventStream(cast("Any", provider), _noop_event_callback)
+
+    await stream._handle_message(
+        {
+            "channel": "/abc/slim/playerstatus/player_a",
+            "data": {
+                "mode": "play",
+                "time": 95,
+                "duration": 100,
+                "playlist_cur_index": 3,
+            },
+        }
+    )
+
+    assert "player_a" in stream._track_end_expectations
+
+
+async def test_track_end_due_triggers_implicit_recovery() -> None:
+    """A due track-end expectation should trigger implicit status recovery."""
+    provider = _StubProvider(["player_a"])
+    stream = LyrionCometDEventStream(cast("Any", provider), _noop_event_callback)
+
+    await stream._handle_message(
+        {
+            "channel": "/abc/slim/playerstatus/player_a",
+            "data": {
+                "mode": "play",
+                "time": 1,
+                "duration": 1,
+                "playlist_cur_index": 0,
+            },
+        }
+    )
+    expectation = stream._track_end_expectations["player_a"]
+    expectation.expected_transition_at = 0.0
+
+    calls: list[tuple[str, str]] = []
+
+    async def _recover_expected_status(player_id: str, reason: str) -> None:
+        calls.append((player_id, reason))
+
+    cast("Any", stream)._recover_expected_status = _recover_expected_status
+
+    await stream._run_expectation_tick()
+
+    assert calls == [("player_a", "track-end transition")]
+
+
+async def test_active_state_timeout_triggers_implicit_recovery() -> None:
+    """Active runtime state without fresh updates should trigger implicit recovery."""
+    provider = _StubProvider(["player_a"])
+    stream = LyrionCometDEventStream(cast("Any", provider), _noop_event_callback)
+
+    await stream._handle_message(
+        {
+            "channel": "/abc/slim/playerstatus/player_a",
+            "data": {
+                "mode": "pause",
+                "playlist_tracks": 4,
+            },
+        }
+    )
+    stream._status_seen_at["player_a"] = 0.0
+
+    calls: list[tuple[str, str]] = []
+
+    async def _recover_expected_status(player_id: str, reason: str) -> None:
+        calls.append((player_id, reason))
+
+    cast("Any", stream)._recover_expected_status = _recover_expected_status
+
+    await stream._run_expectation_tick()
+
+    assert calls == [("player_a", "active-state timeout")]

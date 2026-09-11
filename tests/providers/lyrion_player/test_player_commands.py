@@ -14,7 +14,6 @@ from music_assistant_models.errors import (
     ProviderUnavailableError,
 )
 
-from music_assistant.providers.lyrion_player.constants import COMETD_COMMAND_STATUS_POLL_ATTEMPTS
 from music_assistant.providers.lyrion_player.player import LyrionPlayer
 from music_assistant.providers.lyrion_player.provider import LyrionPlayerProvider
 
@@ -34,6 +33,7 @@ def mock_provider() -> MagicMock:
     provider.get_last_cometd_status_seen_at = MagicMock(return_value=0.0)
     provider.get_cached_cometd_status = MagicMock(return_value={"playlist_cur_index": 0})
     provider.wait_for_cometd_status_update = AsyncMock(return_value=True)
+    provider.verify_cometd_status_expectation = AsyncMock(return_value=True)
     provider.get_player_status = AsyncMock(return_value={"mode": "play"})
     provider.apply_status_update = MagicMock()
     return provider
@@ -240,13 +240,10 @@ async def test_transport_and_seek_wrap_provider_unavailable(
 async def test_next_track_retries_polling_when_cometd_confirmation_is_missing(
     player: LyrionPlayer, mock_provider: MagicMock
 ) -> None:
-    """When CometD stays silent after a command, fallback polling should retry."""
-    mock_provider.wait_for_cometd_status_update = AsyncMock(return_value=False)
-
+    """Command verification delegates to shared CometD expectation helper."""
     await player.next_track()
 
-    assert mock_provider.get_player_status.await_count == COMETD_COMMAND_STATUS_POLL_ATTEMPTS
-    assert mock_provider.apply_status_update.call_count == COMETD_COMMAND_STATUS_POLL_ATTEMPTS
+    mock_provider.verify_cometd_status_expectation.assert_awaited_once()
 
 
 @pytest.mark.asyncio

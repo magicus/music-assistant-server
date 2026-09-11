@@ -25,9 +25,6 @@ from music_assistant.helpers.util import is_valid_mac_address
 from music_assistant.models.player import Player, PlayerMedia
 
 from .constants import (
-    COMETD_COMMAND_STATUS_BACKOFF,
-    COMETD_COMMAND_STATUS_POLL_ATTEMPTS,
-    COMETD_COMMAND_STATUS_VERIFY_TIMEOUT,
     CONF_FALLBACK_POLLING,
     CONF_FALLBACK_POLLING_INTERVAL,
     DEFAULT_FALLBACK_POLLING_INTERVAL,
@@ -429,57 +426,11 @@ class LyrionPlayer(Player):
         expected_state: str = "status update",
     ) -> None:
         """Wait for expected status and poll LMS retries if CometD stays silent."""
-        if await self.provider.wait_for_cometd_status_update(
+        await self.provider.verify_cometd_status_expectation(
             self.player_id,
             baseline,
-            COMETD_COMMAND_STATUS_VERIFY_TIMEOUT,
-        ):
-            cached_status = self.provider.get_cached_cometd_status(self.player_id)
-            if expectation is None:
-                return
-            if cached_status is not None and expectation(cached_status):
-                return
-
-        self.provider.logger.warning(
-            "No CometD confirmation for %s (%s) within %ss; polling LMS up to %s times",
-            self.player_id,
-            expected_state,
-            COMETD_COMMAND_STATUS_VERIFY_TIMEOUT,
-            COMETD_COMMAND_STATUS_POLL_ATTEMPTS,
-        )
-
-        for attempt, wait_seconds in enumerate(COMETD_COMMAND_STATUS_BACKOFF):
-            if await self.provider.wait_for_cometd_status_update(
-                self.player_id,
-                baseline,
-                wait_seconds,
-            ):
-                cached_status = self.provider.get_cached_cometd_status(self.player_id)
-                if expectation is None:
-                    return
-                if cached_status is not None and expectation(cached_status):
-                    return
-
-            try:
-                status = await self.provider.get_player_status(self.player_id)
-            except ProviderUnavailableError as err:
-                self.provider.logger.warning(
-                    "Fallback status poll %s/%s failed for %s: %s",
-                    attempt + 1,
-                    COMETD_COMMAND_STATUS_POLL_ATTEMPTS,
-                    self.player_id,
-                    err,
-                )
-            else:
-                self.provider.apply_status_update(self, status)
-                if expectation is None or expectation(status):
-                    return
-
-        self.provider.logger.warning(
-            "No CometD status confirmation for %s (%s) after %s fallback polls",
-            self.player_id,
-            expected_state,
-            COMETD_COMMAND_STATUS_POLL_ATTEMPTS,
+            expectation=expectation,
+            expected_state=expected_state,
         )
 
     async def _on_ma_queue_items_updated(self, event: MassEvent) -> None:

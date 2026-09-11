@@ -6,6 +6,7 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 from aiohttp import ClientError, ClientTimeout
@@ -14,7 +15,11 @@ from music_assistant_models.errors import MusicAssistantError, ProviderUnavailab
 from .bayeux_client import BayeuxClient
 from .client import build_lms_url
 from .constants import (
+    COMETD_ACTIVE_STATE_TIMEOUT,
+    COMETD_COMMAND_STATUS_BACKOFF,
     COMETD_CONNECT_TIMEOUT,
+    COMETD_EXPECTATION_LOOP_IDLE_INTERVAL,
+    COMETD_IMPLICIT_STATUS_BACKOFF,
     COMETD_PLAYERSTATUS_SUBSCRIBE_INTERVAL,
     COMETD_PLAYERSTATUS_TAGS,
     COMETD_RETRY_DELAY,
@@ -22,6 +27,7 @@ from .constants import (
     COMETD_SERVERSTATUS_SUBSCRIBE_INTERVAL,
     COMETD_STATUS_STALENESS_FACTOR,
     COMETD_STATUS_WATCHDOG_INTERVAL,
+    COMETD_TRACK_END_GRACE,
     RPC_TIMEOUT,
 )
 
@@ -30,6 +36,16 @@ if TYPE_CHECKING:
 
 StatusPayload = dict[str, Any]
 LmsPlayerEventCallback = Callable[[Any], Awaitable[None]]
+
+
+@dataclass
+class _TrackEndExpectation:
+    """Expected playback transition when current track nears end."""
+
+    expected_transition_at: float
+    baseline_index: int | None
+    baseline_track_id: str | None
+    baseline_playlist_timestamp: float | None
 
 
 class LyrionCometDEventStream:
@@ -57,6 +73,9 @@ class LyrionCometDEventStream:
         self._status_by_player: dict[str, StatusPayload] = {}
         self._status_seen_at: dict[str, float] = {}
         self._status_wait_events: dict[str, asyncio.Event] = {}
+        self._expectation_task: asyncio.Task[None] | None = None
+        self._track_end_expectations: dict[str, _TrackEndExpectation] = {}
+        self._expectation_recovery_inflight: set[str] = set()
         self._known_server_player_ids: set[str] | None = None
         self._known_server_player_count: int | None = None
 
@@ -65,10 +84,14 @@ class LyrionCometDEventStream:
         if self._task is not None and not self._task.done():
             if self._watchdog_task is None or self._watchdog_task.done():
                 self._watchdog_task = self.provider.mass.create_task(self._watchdog_loop())
+            if self._expectation_task is None or self._expectation_task.done():
+                self._expectation_task = self.provider.mass.create_task(self._expectation_loop())
             return
         self._task = self.provider.mass.create_task(self._listener_loop())
         if self._watchdog_task is None or self._watchdog_task.done():
             self._watchdog_task = self.provider.mass.create_task(self._watchdog_loop())
+        if self._expectation_task is None or self._expectation_task.done():
+            self._expectation_task = self.provider.mass.create_task(self._expectation_loop())
 
     async def stop(self) -> None:
         """Stop background task and clear session state."""
@@ -83,6 +106,12 @@ class LyrionCometDEventStream:
             with suppress(asyncio.CancelledError):
                 await self._watchdog_task
             self._watchdog_task = None
+
+        if self._expectation_task is not None:
+            self._expectation_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._expectation_task
+            self._expectation_task = None
 
         if self._client_id is not None:
             with suppress(ProviderUnavailableError):
@@ -110,6 +139,8 @@ class LyrionCometDEventStream:
         self._status_by_player.pop(player_id, None)
         self._status_seen_at.pop(player_id, None)
         self._status_wait_events.pop(player_id, None)
+        self._track_end_expectations.pop(player_id, None)
+        self._expectation_recovery_inflight.discard(player_id)
 
     def get_last_player_status_seen_at(self, player_id: str) -> float | None:
         """Return the last time CometD updated one player's status."""
@@ -154,6 +185,83 @@ class LyrionCometDEventStream:
             if self._status_seen_at.get(player_id, 0.0) > baseline:
                 return True
 
+    async def verify_player_status_expectation(
+        self,
+        player_id: str,
+        baseline: float | None,
+        expectation: Callable[[StatusPayload], bool] | None = None,
+        expected_state: str = "status update",
+    ) -> bool:
+        """
+        Verify expected status via CometD first, then fallback polling with backoff.
+
+        :param player_id: LMS player id.
+        :param baseline: Baseline status timestamp before expectation started.
+        :param expectation: Optional predicate for expected status shape.
+        :param expected_state: Human-readable expected-state description for logging.
+        :returns: True when expectation was satisfied.
+        """
+
+        def _is_satisfied(status: StatusPayload | None) -> bool:
+            if status is None:
+                return False
+            if expectation is None:
+                return True
+            return expectation(status)
+
+        if await self.wait_for_player_status_update(
+            player_id,
+            baseline,
+            COMETD_COMMAND_STATUS_BACKOFF[0],
+        ):
+            if _is_satisfied(self.get_player_status_snapshot(player_id)):
+                return True
+
+        self.provider.logger.warning(
+            "No CometD confirmation for %s (%s) within %ss; polling LMS up to %s times",
+            player_id,
+            expected_state,
+            COMETD_COMMAND_STATUS_BACKOFF[0],
+            len(COMETD_COMMAND_STATUS_BACKOFF),
+        )
+
+        rolling_baseline = baseline
+        for attempt, wait_seconds in enumerate(COMETD_COMMAND_STATUS_BACKOFF):
+            if await self.wait_for_player_status_update(
+                player_id,
+                rolling_baseline,
+                wait_seconds,
+            ):
+                if _is_satisfied(self.get_player_status_snapshot(player_id)):
+                    return True
+                rolling_baseline = self.get_last_player_status_seen_at(player_id)
+
+            try:
+                status = await self.provider.get_player_status(player_id)
+            except ProviderUnavailableError as err:
+                self.provider.logger.warning(
+                    "Fallback status poll %s/%s failed for %s (%s): %s",
+                    attempt + 1,
+                    len(COMETD_COMMAND_STATUS_BACKOFF),
+                    player_id,
+                    expected_state,
+                    err,
+                )
+                continue
+
+            await self._handle_player_status(player_id, status)
+            rolling_baseline = self.get_last_player_status_seen_at(player_id)
+            if _is_satisfied(self.get_player_status_snapshot(player_id)):
+                return True
+
+        self.provider.logger.warning(
+            "No CometD status confirmation for %s (%s) after %s fallback polls",
+            player_id,
+            expected_state,
+            len(COMETD_COMMAND_STATUS_BACKOFF),
+        )
+        return False
+
     async def _listener_loop(self) -> None:
         """Keep one CometD session alive and reconnect on failures."""
         while not self.provider.unloading:
@@ -177,6 +285,88 @@ class LyrionCometDEventStream:
             if self.provider.unloading:
                 return
             await self._run_watchdog_tick()
+
+    async def _expectation_loop(self) -> None:
+        """Monitor implicit state expectations that should resolve without commands."""
+        while not self.provider.unloading:
+            await asyncio.sleep(self._next_expectation_delay())
+            if self.provider.unloading:
+                return
+            await self._run_expectation_tick()
+
+    def _next_expectation_delay(self) -> float:
+        """Compute next loop delay using inverse backoff near track end."""
+        if not self._track_end_expectations:
+            return COMETD_EXPECTATION_LOOP_IDLE_INTERVAL
+
+        now = time.monotonic()
+        nearest_delay = COMETD_EXPECTATION_LOOP_IDLE_INTERVAL
+        for expectation in self._track_end_expectations.values():
+            remaining = expectation.expected_transition_at - now
+            if remaining <= COMETD_TRACK_END_GRACE:
+                return COMETD_IMPLICIT_STATUS_BACKOFF[-1]
+
+            next_delay = COMETD_EXPECTATION_LOOP_IDLE_INTERVAL
+            for backoff in COMETD_IMPLICIT_STATUS_BACKOFF:
+                if remaining > backoff:
+                    next_delay = min(next_delay, remaining - backoff)
+                    break
+            nearest_delay = min(nearest_delay, next_delay)
+        return max(COMETD_IMPLICIT_STATUS_BACKOFF[-1], nearest_delay)
+
+    async def _run_expectation_tick(self) -> None:
+        """Evaluate non-command expectations and recover when they are missed."""
+        now = time.monotonic()
+
+        for player_id, status in list(self._status_by_player.items()):
+            if player_id in self._expectation_recovery_inflight:
+                continue
+
+            if self._requires_activity_expectation(status):
+                status_age = now - self._status_seen_at.get(player_id, now)
+                if status_age > COMETD_ACTIVE_STATE_TIMEOUT:
+                    await self._recover_expected_status(
+                        player_id,
+                        reason="active-state timeout",
+                    )
+                    continue
+
+            expectation = self._track_end_expectations.get(player_id)
+            if expectation is None:
+                continue
+            if self._track_transition_satisfied(player_id, expectation):
+                self._track_end_expectations.pop(player_id, None)
+                continue
+            if now + COMETD_TRACK_END_GRACE < expectation.expected_transition_at:
+                continue
+
+            await self._recover_expected_status(
+                player_id,
+                reason="track-end transition",
+            )
+
+    async def _recover_expected_status(self, player_id: str, reason: str) -> None:
+        """Poll JSON-RPC with backoff until the expected state recovers."""
+        if player_id in self._expectation_recovery_inflight:
+            return
+        self._expectation_recovery_inflight.add(player_id)
+        try:
+            baseline = self.get_last_player_status_seen_at(player_id)
+
+            def _expectation(status: StatusPayload) -> bool:
+                expectation = self._track_end_expectations.get(player_id)
+                if expectation is None:
+                    return True
+                return self._track_transition_satisfied(player_id, expectation)
+
+            await self.verify_player_status_expectation(
+                player_id,
+                baseline,
+                expectation=_expectation,
+                expected_state=reason,
+            )
+        finally:
+            self._expectation_recovery_inflight.discard(player_id)
 
     async def _run_watchdog_tick(self) -> None:
         """Check whether CometD status has gone stale and recover it."""
@@ -377,6 +567,8 @@ class LyrionCometDEventStream:
         self._status_by_player.clear()
         self._status_seen_at.clear()
         self._status_wait_events.clear()
+        self._track_end_expectations.clear()
+        self._expectation_recovery_inflight.clear()
         self._known_server_player_ids = None
         self._known_server_player_count = None
 
@@ -495,6 +687,7 @@ class LyrionCometDEventStream:
         merged.update(partial)
         self._status_by_player[player_id] = merged
         self._touch_player_status_activity(player_id)
+        self._update_track_end_expectation(player_id, merged)
 
         is_initial = previous is None
         await self._emit_event(
@@ -599,6 +792,70 @@ class LyrionCometDEventStream:
                 getattr(event, "player_id", "unknown"),
                 err,
             )
+
+    def _update_track_end_expectation(self, player_id: str, status: StatusPayload) -> None:
+        """Arm or clear track-end transition expectation from runtime playback status."""
+        if _get_mode(status) != "play":
+            self._track_end_expectations.pop(player_id, None)
+            return
+
+        elapsed = _get_float(status, "time")
+        duration = _get_float(status, "duration")
+        if elapsed is None or duration is None or duration <= 0:
+            self._track_end_expectations.pop(player_id, None)
+            return
+
+        remaining = max(0.0, duration - elapsed)
+        self._track_end_expectations[player_id] = _TrackEndExpectation(
+            expected_transition_at=time.monotonic() + remaining,
+            baseline_index=_get_int(status, "playlist_cur_index"),
+            baseline_track_id=_extract_current_track_id(status),
+            baseline_playlist_timestamp=_get_float(status, "playlist_timestamp"),
+        )
+
+    def _track_transition_satisfied(
+        self,
+        player_id: str,
+        expectation: _TrackEndExpectation,
+    ) -> bool:
+        """Return True if playback moved off expected track state."""
+        status = self._status_by_player.get(player_id)
+        if status is None:
+            return True
+        if _get_mode(status) != "play":
+            return True
+
+        current_index = _get_int(status, "playlist_cur_index")
+        if expectation.baseline_index is not None and current_index != expectation.baseline_index:
+            return True
+
+        current_track_id = _extract_current_track_id(status)
+        if expectation.baseline_track_id and current_track_id != expectation.baseline_track_id:
+            return True
+
+        current_timestamp = _get_float(status, "playlist_timestamp")
+        if (
+            expectation.baseline_playlist_timestamp is not None
+            and current_timestamp is not None
+            and current_timestamp != expectation.baseline_playlist_timestamp
+        ):
+            return True
+
+        return False
+
+    @staticmethod
+    def _requires_activity_expectation(status: StatusPayload) -> bool:
+        """Return True if runtime state should keep producing fresh updates."""
+        if _get_mode(status) in ("play", "pause"):
+            return True
+        if _get_int(status, "playlist_tracks") not in (None, 0):
+            return True
+        return bool(
+            status.get("sync_master")
+            or status.get("sync_master_id")
+            or status.get("sync_slaves")
+            or status.get("sync_slaves_loop")
+        )
 
     async def _post(
         self,

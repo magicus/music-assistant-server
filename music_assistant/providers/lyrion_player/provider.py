@@ -252,6 +252,21 @@ class LyrionPlayerProvider(PlayerProvider):
             timeout,
         )
 
+    async def verify_cometd_status_expectation(
+        self,
+        player_id: str,
+        baseline: float | None,
+        expectation: Callable[[dict[str, Any]], bool] | None = None,
+        expected_state: str = "status update",
+    ) -> bool:
+        """Verify expected status via CometD and fallback polling."""
+        return await self._cometd_stream.verify_player_status_expectation(
+            player_id,
+            baseline,
+            expectation,
+            expected_state,
+        )
+
     async def send_player_command(
         self,
         player_id: str,
