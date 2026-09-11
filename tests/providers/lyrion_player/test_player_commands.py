@@ -40,6 +40,10 @@ def mock_provider() -> MagicMock:
     provider.pause_player = AsyncMock()
     provider.stop_player = AsyncMock()
     provider.set_player_power = AsyncMock()
+    provider.play_player_with_verify = AsyncMock()
+    provider.pause_player_with_verify = AsyncMock()
+    provider.stop_player_with_verify = AsyncMock()
+    provider.set_player_power_with_verify = AsyncMock()
     provider.sync_player_to = AsyncMock()
     provider.unsync_player = AsyncMock()
     provider.next_player_track = AsyncMock()
@@ -47,14 +51,19 @@ def mock_provider() -> MagicMock:
     provider.seek_player = AsyncMock()
     provider.set_player_volume = AsyncMock()
     provider.set_player_muted = AsyncMock()
+    provider.next_player_track_with_verify = AsyncMock()
+    provider.previous_player_track_with_verify = AsyncMock()
+    provider.seek_player_with_verify = AsyncMock()
+    provider.set_player_volume_with_verify = AsyncMock()
+    provider.set_player_muted_with_verify = AsyncMock()
     provider.set_player_sync_volume = AsyncMock()
     provider.play_player_url = AsyncMock()
     provider.append_player_url = AsyncMock()
     provider.get_player_queue_status = AsyncMock(return_value={"mode": "play"})
-    provider.get_last_cometd_status_seen_at = MagicMock(return_value=0.0)
-    provider.get_cached_cometd_status = MagicMock(return_value={"playlist_cur_index": 0})
-    provider.wait_for_cometd_status_update = AsyncMock(return_value=True)
-    provider.verify_cometd_status_expectation = AsyncMock(return_value=True)
+    provider.get_last_status_seen_at = MagicMock(return_value=0.0)
+    provider.get_cached_status = MagicMock(return_value={"playlist_cur_index": 0})
+    provider.wait_for_status_update = AsyncMock(return_value=True)
+    provider.verify_status_expectation = AsyncMock(return_value=True)
     provider.get_player_status = AsyncMock(return_value={"mode": "play"})
     provider.apply_status_update = MagicMock()
     return provider
@@ -118,7 +127,7 @@ async def test_volume_mute_dispatches_lms_command(
     """Muting maps to LMS mixer muting command and updates local state."""
     await player.volume_mute(True)
 
-    mock_provider.set_player_muted.assert_awaited_once_with("test_player", True)
+    mock_provider.set_player_muted_with_verify.assert_awaited_once_with("test_player", True)
     assert player.volume_muted is True
 
 
@@ -132,7 +141,7 @@ async def test_grouped_volume_mute_disables_sync_volume_first(
     await player.volume_mute(True)
 
     mock_provider.set_player_sync_volume.assert_awaited_once_with("test_player", False)
-    mock_provider.set_player_muted.assert_awaited_once_with("test_player", True)
+    mock_provider.set_player_muted_with_verify.assert_awaited_once_with("test_player", True)
 
 
 @pytest.mark.asyncio
@@ -140,7 +149,7 @@ async def test_volume_mute_wraps_provider_unavailable(
     player: LyrionPlayer, mock_provider: MagicMock
 ) -> None:
     """Provider availability failures surface as PlayerCommandFailed."""
-    mock_provider.set_player_muted.side_effect = ProviderUnavailableError("offline")
+    mock_provider.set_player_muted_with_verify.side_effect = ProviderUnavailableError("offline")
 
     with pytest.raises(PlayerCommandFailed, match="volume_mute failed"):
         await player.volume_mute(False)
@@ -153,7 +162,7 @@ async def test_next_track_dispatches_playlist_index_increment(
     """Next track maps to LMS playlist index +1."""
     await player.next_track()
 
-    mock_provider.next_player_track.assert_awaited_once_with("test_player")
+    mock_provider.next_player_track_with_verify.assert_awaited_once_with("test_player")
 
 
 @pytest.mark.asyncio
@@ -163,7 +172,7 @@ async def test_previous_track_dispatches_playlist_index_decrement(
     """Previous track maps to LMS playlist index -1."""
     await player.previous_track()
 
-    mock_provider.previous_player_track.assert_awaited_once_with("test_player")
+    mock_provider.previous_player_track_with_verify.assert_awaited_once_with("test_player")
 
 
 @pytest.mark.asyncio
@@ -175,7 +184,7 @@ async def test_seek_dispatches_time_and_updates_elapsed(
 
     await player.seek(42)
 
-    mock_provider.seek_player.assert_awaited_once_with("test_player", 42)
+    mock_provider.seek_player_with_verify.assert_awaited_once_with("test_player", 42)
     assert player.elapsed_time == 42.0
     assert player.elapsed_time_last_updated is not None
     assert player.elapsed_time_last_updated >= before
@@ -188,7 +197,7 @@ async def test_seek_clamps_negative_positions(
     """Negative seek positions clamp to zero seconds."""
     await player.seek(-11)
 
-    mock_provider.seek_player.assert_awaited_once_with("test_player", 0)
+    mock_provider.seek_player_with_verify.assert_awaited_once_with("test_player", 0)
     assert player.elapsed_time == 0.0
 
 
@@ -202,7 +211,7 @@ async def test_grouped_volume_set_disables_sync_volume_first(
     await player.volume_set(42)
 
     mock_provider.set_player_sync_volume.assert_awaited_once_with("test_player", False)
-    mock_provider.set_player_volume.assert_awaited_once_with("test_player", 42)
+    mock_provider.set_player_volume_with_verify.assert_awaited_once_with("test_player", 42)
 
 
 @pytest.mark.asyncio
@@ -212,7 +221,7 @@ async def test_ungrouped_volume_set_skips_sync_volume_disable(
     """Ungrouped player volume changes should not send LMS syncVolume commands."""
     await player.volume_set(42)
 
-    mock_provider.set_player_volume.assert_awaited_once_with("test_player", 42)
+    mock_provider.set_player_volume_with_verify.assert_awaited_once_with("test_player", 42)
 
 
 @pytest.mark.asyncio
@@ -220,18 +229,18 @@ async def test_transport_and_seek_wrap_provider_unavailable(
     player: LyrionPlayer, mock_provider: MagicMock
 ) -> None:
     """Transport and seek failures are wrapped consistently."""
-    mock_provider.next_player_track.side_effect = ProviderUnavailableError("down")
+    mock_provider.next_player_track_with_verify.side_effect = ProviderUnavailableError("down")
 
     with pytest.raises(PlayerCommandFailed, match="next_track failed"):
         await player.next_track()
 
-    mock_provider.next_player_track.reset_mock(side_effect=True)
-    mock_provider.previous_player_track.side_effect = ProviderUnavailableError("down")
+    mock_provider.next_player_track_with_verify.reset_mock(side_effect=True)
+    mock_provider.previous_player_track_with_verify.side_effect = ProviderUnavailableError("down")
     with pytest.raises(PlayerCommandFailed, match="previous_track failed"):
         await player.previous_track()
 
-    mock_provider.previous_player_track.reset_mock(side_effect=True)
-    mock_provider.seek_player.side_effect = ProviderUnavailableError("down")
+    mock_provider.previous_player_track_with_verify.reset_mock(side_effect=True)
+    mock_provider.seek_player_with_verify.side_effect = ProviderUnavailableError("down")
     with pytest.raises(PlayerCommandFailed, match="seek failed"):
         await player.seek(12)
 
@@ -253,14 +262,14 @@ async def test_poll_applies_status_and_wraps_provider_unavailable(
 async def test_play_media_native_queue_path_skips_stream_url_resolution(
     player: LyrionPlayer, mock_provider: MagicMock
 ) -> None:
-    """Native track-id playback should avoid URL fallback path."""
+    """play_media should delegate media routing to queue sync helper."""
     media = MagicMock()
     media.uri = "lyrion://track/1"
-    player._queue_sync.try_play_lyrion_track_id = AsyncMock(return_value=True)
+    player._queue_sync.play_media = AsyncMock(return_value=None)
 
     await player.play_media(media)
 
-    player._queue_sync.try_play_lyrion_track_id.assert_awaited_once_with(media)
+    player._queue_sync.play_media.assert_awaited_once_with(media)
     mock_provider.play_player_url.assert_not_awaited()
     assert player.current_media is media
 
@@ -269,27 +278,25 @@ async def test_play_media_native_queue_path_skips_stream_url_resolution(
 async def test_play_media_stream_url_path_dispatches_playlist_play(
     player: LyrionPlayer, mock_provider: MagicMock
 ) -> None:
-    """Non-native media should resolve a stream URL and use playlist play."""
+    """play_media should no longer resolve URLs directly in LyrionPlayer."""
     media = MagicMock()
     media.uri = "spotify://track/123"
-    player._queue_sync.try_play_lyrion_track_id = AsyncMock(return_value=False)
-    mock_provider.mass.streams.resolve_stream_url = AsyncMock(return_value="http://stream/abc")
+    player._queue_sync.play_media = AsyncMock(return_value=None)
 
     await player.play_media(media)
 
-    mock_provider.play_player_url.assert_awaited_once_with("test_player", "http://stream/abc")
+    player._queue_sync.play_media.assert_awaited_once_with(media)
+    mock_provider.play_player_url.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_play_media_wraps_provider_unavailable_in_url_path(
     player: LyrionPlayer, mock_provider: MagicMock
 ) -> None:
-    """URL fallback playback errors should map to PlayerCommandFailed."""
+    """Queue-sync playback errors should map to PlayerCommandFailed."""
     media = MagicMock()
     media.uri = "spotify://track/123"
-    player._queue_sync.try_play_lyrion_track_id = AsyncMock(return_value=False)
-    mock_provider.mass.streams.resolve_stream_url = AsyncMock(return_value="http://stream/abc")
-    mock_provider.play_player_url.side_effect = ProviderUnavailableError("down")
+    player._queue_sync.play_media = AsyncMock(side_effect=ProviderUnavailableError("down"))
 
     with pytest.raises(PlayerCommandFailed, match="play_media failed"):
         await player.play_media(media)
@@ -299,20 +306,14 @@ async def test_play_media_wraps_provider_unavailable_in_url_path(
 async def test_enqueue_next_media_covers_native_and_url_paths(
     player: LyrionPlayer, mock_provider: MagicMock
 ) -> None:
-    """enqueue_next_media should handle both native and URL-based queue insertion."""
+    """enqueue_next_media should delegate insertion details to queue sync."""
     media = MagicMock()
     media.uri = "spotify://track/123"
 
-    player._queue_sync.try_play_lyrion_track_id = AsyncMock(return_value=True)
-    player._queue_sync.sync_ma_queue_to_lms = AsyncMock()
+    player._queue_sync.enqueue_next_media = AsyncMock(return_value=None)
     await player.enqueue_next_media(media)
-    player._queue_sync.sync_ma_queue_to_lms.assert_awaited_once()
-
-    player._queue_sync.try_play_lyrion_track_id = AsyncMock(return_value=False)
-    mock_provider.mass.streams.resolve_stream_url = AsyncMock(return_value="http://stream/next")
-    mock_provider.append_player_url.reset_mock()
-    await player.enqueue_next_media(media)
-    mock_provider.append_player_url.assert_awaited_once_with("test_player", "http://stream/next")
+    player._queue_sync.enqueue_next_media.assert_awaited_once_with(media)
+    mock_provider.append_player_url.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -326,11 +327,17 @@ async def test_play_pause_stop_and_power_dispatch_expected_commands(
     await player.power(True)
     await player.power(False)
 
-    mock_provider.play_player.assert_awaited_once_with("test_player")
-    mock_provider.pause_player.assert_awaited_once_with("test_player")
-    mock_provider.stop_player.assert_awaited_once_with("test_player")
-    assert mock_provider.set_player_power.await_args_list[0].args == ("test_player", True)
-    assert mock_provider.set_player_power.await_args_list[1].args == ("test_player", False)
+    mock_provider.play_player_with_verify.assert_awaited_once_with("test_player")
+    mock_provider.pause_player_with_verify.assert_awaited_once_with("test_player")
+    mock_provider.stop_player_with_verify.assert_awaited_once_with("test_player")
+    assert mock_provider.set_player_power_with_verify.await_args_list[0].args == (
+        "test_player",
+        True,
+    )
+    assert mock_provider.set_player_power_with_verify.await_args_list[1].args == (
+        "test_player",
+        False,
+    )
 
 
 @pytest.mark.asyncio
@@ -368,13 +375,13 @@ def test_player_status_helper_functions_cover_fallback_branches() -> None:
 
 
 @pytest.mark.asyncio
-async def test_next_track_retries_polling_when_cometd_confirmation_is_missing(
+async def test_next_track_retries_polling_when_status_confirmation_is_missing(
     player: LyrionPlayer, mock_provider: MagicMock
 ) -> None:
-    """Command verification delegates to shared CometD expectation helper."""
+    """Command verification delegates to shared status expectation helper."""
     await player.next_track()
 
-    mock_provider.verify_cometd_status_expectation.assert_awaited_once()
+    mock_provider.next_player_track_with_verify.assert_awaited_once_with("test_player")
 
 
 @pytest.mark.asyncio
@@ -463,11 +470,11 @@ async def test_play_pause_stop_power_and_volume_set_wrap_provider_unavailable(
     player: LyrionPlayer, mock_provider: MagicMock
 ) -> None:
     """Command helpers should wrap ProviderUnavailableError consistently."""
-    mock_provider.set_player_volume.side_effect = ProviderUnavailableError("down")
-    mock_provider.play_player.side_effect = ProviderUnavailableError("down")
-    mock_provider.pause_player.side_effect = ProviderUnavailableError("down")
-    mock_provider.stop_player.side_effect = ProviderUnavailableError("down")
-    mock_provider.set_player_power.side_effect = ProviderUnavailableError("down")
+    mock_provider.set_player_volume_with_verify.side_effect = ProviderUnavailableError("down")
+    mock_provider.play_player_with_verify.side_effect = ProviderUnavailableError("down")
+    mock_provider.pause_player_with_verify.side_effect = ProviderUnavailableError("down")
+    mock_provider.stop_player_with_verify.side_effect = ProviderUnavailableError("down")
+    mock_provider.set_player_power_with_verify.side_effect = ProviderUnavailableError("down")
     with pytest.raises(PlayerCommandFailed, match="play failed"):
         await player.play()
 
@@ -488,17 +495,14 @@ async def test_play_pause_stop_power_and_volume_set_wrap_provider_unavailable(
 async def test_next_previous_with_unknown_cached_index_use_baseline_only(
     player: LyrionPlayer, mock_provider: MagicMock
 ) -> None:
-    """When no cached playlist index exists, next/previous should use basic status verification."""
-    mock_provider.get_cached_cometd_status.return_value = {"playlist_cur_index": None}
+    """When no cached playlist index exists, next/previous still delegate to provider wrappers."""
+    mock_provider.get_cached_status.return_value = {"playlist_cur_index": None}
 
     await player.next_track()
     await player.previous_track()
 
-    calls = mock_provider.verify_cometd_status_expectation.await_args_list
-    assert calls[0].args[0] == "test_player"
-    assert calls[0].kwargs["expectation"] is None
-    assert calls[1].args[0] == "test_player"
-    assert calls[1].kwargs["expectation"] is None
+    mock_provider.next_player_track_with_verify.assert_awaited_once_with("test_player")
+    mock_provider.previous_player_track_with_verify.assert_awaited_once_with("test_player")
 
 
 @pytest.mark.asyncio

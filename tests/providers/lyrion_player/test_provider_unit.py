@@ -55,8 +55,9 @@ def _build_provider_stub() -> LyrionPlayerProvider:
     provider._discover_players_task = None
     provider._discover_players_again = False
     provider._unregister_stream_redirect_route = None
-    provider._cometd_adapter = MagicMock()
-    provider._cometd_stream = SimpleNamespace(
+    provider._status_event_adapter = MagicMock()
+    provider._unsubscribe_status_events = None
+    provider._status_stream = SimpleNamespace(
         start=MagicMock(),
         stop=AsyncMock(),
         mark_player_seen=MagicMock(),
@@ -109,8 +110,8 @@ def test_get_configured_host_and_port_parsing() -> None:
 
 
 @pytest.mark.asyncio
-async def test_loaded_and_unload_manage_routes_discovery_and_cometd() -> None:
-    """Provider load/unload should wire route registration, discovery and CometD lifecycle."""
+async def test_loaded_and_unload_manage_routes_discovery_and_status_stream() -> None:
+    """Provider load/unload should wire route registration, discovery and status stream lifecycle."""
     provider = _build_provider_stub()
     provider.discover_players = AsyncMock()
 
@@ -118,11 +119,11 @@ async def test_loaded_and_unload_manage_routes_discovery_and_cometd() -> None:
 
     provider.mass.streams.register_dynamic_route.assert_called_once()
     provider.discover_players.assert_awaited_once()
-    provider._cometd_stream.start.assert_called_once()
+    provider._status_stream.start.assert_called_once()
 
     with patch("music_assistant.models.provider.Provider.unload", new=AsyncMock()) as unload_base:
         await provider.unload(False)
-    provider._cometd_stream.stop.assert_awaited_once()
+    provider._status_stream.stop.assert_awaited_once()
     unload_base.assert_awaited_once()
 
 
@@ -158,9 +159,9 @@ async def test_discover_players_registers_new_and_unloads_missing() -> None:
     await provider.discover_players()
 
     assert players.register.await_count == 2
-    provider._cometd_stream.mark_player_seen.assert_any_call("new-1")
-    provider._cometd_stream.mark_player_seen.assert_any_call("new-2")
-    provider._cometd_stream.mark_player_removed.assert_called_once_with("gone")
+    provider._status_stream.mark_player_seen.assert_any_call("new-1")
+    provider._status_stream.mark_player_seen.assert_any_call("new-2")
+    provider._status_stream.mark_player_removed.assert_called_once_with("gone")
     cast("Any", players.unregister).assert_awaited_once_with("gone")
 
 
@@ -223,18 +224,18 @@ async def test_handle_get_stream_url_rejects_invalid_input_and_resolution_failur
 
 
 @pytest.mark.asyncio
-async def test_provider_init_wires_cometd_adapter_and_stream() -> None:
-    """Constructor should create adapter and stream after base init."""
+async def test_provider_init_wires_status_adapter_and_stream() -> None:
+    """Constructor should create status adapter and stream after base init."""
     with (
         patch(
             "music_assistant.models.player_provider.PlayerProvider.__init__",
             return_value=None,
         ),
         patch(
-            "music_assistant.providers.lyrion_player.provider.LyrionCometDEventAdapter"
+            "music_assistant.providers.lyrion_player.provider.LyrionStatusEventAdapter"
         ) as mock_adapter_cls,
         patch(
-            "music_assistant.providers.lyrion_player.provider.LyrionCometDEventStream"
+            "music_assistant.providers.lyrion_player.provider.PlayerStatusStream"
         ) as mock_stream_cls,
     ):
         adapter = MagicMock()
@@ -245,9 +246,13 @@ async def test_provider_init_wires_cometd_adapter_and_stream() -> None:
 
         provider = LyrionPlayerProvider()
 
-    assert provider._cometd_adapter is adapter
-    assert provider._cometd_stream is stream
-    mock_stream_cls.assert_called_once_with(provider, adapter.handle_event)
+    assert provider._status_event_adapter is adapter
+    assert provider._status_stream is stream
+    mock_stream_cls.assert_called_once()
+    assert (
+        mock_stream_cls.call_args.kwargs["post_messages"] == provider._post_status_stream_messages
+    )
+    assert provider._unsubscribe_status_events is not None
 
 
 @pytest.mark.asyncio
@@ -272,24 +277,24 @@ async def test_get_config_entries_and_handle_async_init() -> None:
 
 
 @pytest.mark.asyncio
-async def test_provider_cometd_wrapper_methods_delegate_to_stream() -> None:
-    """Provider convenience methods should delegate to CometD stream internals."""
+async def test_provider_status_wrapper_methods_delegate_to_stream() -> None:
+    """Provider convenience methods should delegate to status stream internals."""
     provider = _build_provider_stub()
 
-    assert provider.get_last_cometd_status_seen_at("p1") == 1.0
-    assert provider.get_cached_cometd_status("p1") == {"mode": "play"}
+    assert provider.get_last_status_seen_at("p1") == 1.0
+    assert provider.get_cached_status("p1") == {"mode": "play"}
 
-    assert await provider.wait_for_cometd_status_update("p1", since=0.5, timeout=2)
-    provider._cometd_stream.wait_for_player_status_update.assert_awaited_once_with("p1", 0.5, 2)
+    assert await provider.wait_for_status_update("p1", since=0.5, timeout=2)
+    provider._status_stream.wait_for_player_status_update.assert_awaited_once_with("p1", 0.5, 2)
 
     expectation = lambda status: status.get("mode") == "play"
-    assert await provider.verify_cometd_status_expectation(
+    assert await provider.verify_status_expectation(
         "p1",
         baseline=1.0,
         expectation=expectation,
         expected_state="play",
     )
-    provider._cometd_stream.verify_player_status_expectation.assert_awaited_once_with(
+    provider._status_stream.verify_player_status_expectation.assert_awaited_once_with(
         "p1",
         1.0,
         expectation,
@@ -326,7 +331,7 @@ def test_apply_status_update_delegates_to_adapter() -> None:
 
     provider.apply_status_update(player, status)
 
-    provider._cometd_adapter.apply_status.assert_called_once_with(player, status)
+    provider._status_event_adapter.apply_status.assert_called_once_with(player, status)
 
 
 @pytest.mark.asyncio
@@ -428,7 +433,7 @@ async def test_unload_cancels_discovery_task_when_present() -> None:
         await provider.unload(False)
 
     assert provider._discover_players_task is None
-    provider._cometd_stream.stop.assert_awaited_once()
+    provider._status_stream.stop.assert_awaited_once()
     unload_base.assert_awaited_once()
 
 
@@ -457,7 +462,7 @@ async def test_discover_players_handles_missing_ids_existing_players_and_paging(
     await provider.discover_players()
 
     existing.sync_from_lms.assert_awaited_once()
-    provider._cometd_stream.mark_player_seen.assert_any_call("existing")
+    provider._status_stream.mark_player_seen.assert_any_call("existing")
     provider.mass.players.register.assert_not_awaited()
 
 

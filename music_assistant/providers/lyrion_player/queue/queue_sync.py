@@ -95,6 +95,47 @@ class LyrionQueueSync:
         """Return whether LMS->MA queue sync is currently active."""
         return self._syncing_from_lms_queue
 
+    async def play_media(self, media: PlayerMedia) -> None:
+        """
+        Start playback for media via native LMS track_id when possible.
+
+        Falls back to MA stream URL playback when no native LMS mapping exists.
+
+        :param media: Media payload received from MA queue controller.
+        """
+        if await self.try_play_lyrion_track_id(media):
+            return
+
+        stream_url = await self.player.mass.streams.resolve_stream_url(
+            self.player.player_id,
+            media,
+        )
+        await self.player.provider.play_player_url(
+            self.player.player_id,
+            stream_url,
+        )
+
+    async def enqueue_next_media(self, media: PlayerMedia) -> None:
+        """
+        Enqueue media via native LMS track_id when possible.
+
+        Falls back to MA stream URL enqueue when no native LMS mapping exists.
+
+        :param media: Media payload received from MA queue controller.
+        """
+        if await self.try_play_lyrion_track_id(media, command="add"):
+            await self.sync_ma_queue_to_lms()
+            return
+
+        stream_url = await self.player.mass.streams.resolve_stream_url(
+            self.player.player_id,
+            media,
+        )
+        await self.player.provider.append_player_url(
+            self.player.player_id,
+            stream_url,
+        )
+
     async def sync_ma_queue_to_lms(
         self,
         sync_items: bool = True,

@@ -8,17 +8,19 @@ from typing import TYPE_CHECKING
 
 from music_assistant_models.enums import PlaybackState
 
-from .cometd_events import (
-    LmsPlayerEvent,
-    LmsPlayerPlaylistChangedEvent,
-    LmsPlayerRepeatChangedEvent,
-    LmsPlayerShuffleChangedEvent,
-    LmsPlayerStatusUpdatedEvent,
+from pylyrion.cometd.player_status_events import (
+    NormalizedPlayerStatusEvent,
+    PlayerPlaylistChanged,
+    PlayerRepeatChanged,
+    PlayerShuffleChanged,
+    PlayerStatusUpdated,
 )
+
 from .player import LyrionPlayer
 
 if TYPE_CHECKING:
-    from .cometd_events import StatusPayload
+    from pylyrion.cometd.helpers import StatusPayload
+
     from .provider import LyrionPlayerProvider
 
 
@@ -40,7 +42,7 @@ class LyrionCometDEventAdapter:
         """
         self.provider = provider
 
-    async def handle_event(self, event: LmsPlayerEvent) -> None:
+    async def handle_event(self, event: NormalizedPlayerStatusEvent) -> None:
         """
         Apply one internal event to MA state.
 
@@ -50,17 +52,17 @@ class LyrionCometDEventAdapter:
         if not isinstance(player, LyrionPlayer):
             return
 
-        if isinstance(event, LmsPlayerStatusUpdatedEvent):
+        if isinstance(event, PlayerStatusUpdated):
             self.apply_status(player, event.status)
             if event.is_initial:
                 await player.sync_queue_from_lms()
 
-        if isinstance(event, LmsPlayerPlaylistChangedEvent):
+        if isinstance(event, PlayerPlaylistChanged):
             await player.sync_queue_from_lms()
 
         if isinstance(
             event,
-            (LmsPlayerRepeatChangedEvent, LmsPlayerShuffleChangedEvent),
+            (PlayerRepeatChanged, PlayerShuffleChanged),
         ):
             await player.sync_queue_from_lms()
 

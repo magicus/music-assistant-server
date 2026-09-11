@@ -505,6 +505,60 @@ async def test_try_play_lyrion_track_id_branches_and_success_paths() -> None:
     assert await queue_sync.try_play_lyrion_track_id(media, command="add") is False
 
 
+@pytest.mark.asyncio
+async def test_play_media_delegates_native_or_url_fallback() -> None:
+    """play_media should use native track-id first, then URL fallback."""
+    queue_sync, player = _build_queue_sync()
+    media = SimpleNamespace(uri="spotify://track/1")
+
+    queue_sync.try_play_lyrion_track_id = AsyncMock(return_value=True)
+    player.mass.streams = SimpleNamespace(resolve_stream_url=AsyncMock())
+    player.provider.play_player_url = AsyncMock()
+
+    await queue_sync.play_media(media)
+
+    queue_sync.try_play_lyrion_track_id.assert_awaited_once_with(media)
+    player.mass.streams.resolve_stream_url.assert_not_awaited()
+    player.provider.play_player_url.assert_not_awaited()
+
+    queue_sync.try_play_lyrion_track_id = AsyncMock(return_value=False)
+    player.mass.streams.resolve_stream_url = AsyncMock(return_value="http://stream/play")
+    player.provider.play_player_url = AsyncMock()
+
+    await queue_sync.play_media(media)
+
+    player.mass.streams.resolve_stream_url.assert_awaited_once_with("player-1", media)
+    player.provider.play_player_url.assert_awaited_once_with("player-1", "http://stream/play")
+
+
+@pytest.mark.asyncio
+async def test_enqueue_next_media_delegates_native_or_url_fallback() -> None:
+    """enqueue_next_media should use native add first, then URL fallback."""
+    queue_sync, player = _build_queue_sync()
+    media = SimpleNamespace(uri="spotify://track/2")
+
+    queue_sync.try_play_lyrion_track_id = AsyncMock(return_value=True)
+    queue_sync.sync_ma_queue_to_lms = AsyncMock()
+    player.mass.streams = SimpleNamespace(resolve_stream_url=AsyncMock())
+    player.provider.append_player_url = AsyncMock()
+
+    await queue_sync.enqueue_next_media(media)
+
+    queue_sync.try_play_lyrion_track_id.assert_awaited_once_with(media, command="add")
+    queue_sync.sync_ma_queue_to_lms.assert_awaited_once()
+    player.mass.streams.resolve_stream_url.assert_not_awaited()
+    player.provider.append_player_url.assert_not_awaited()
+
+    queue_sync.try_play_lyrion_track_id = AsyncMock(return_value=False)
+    player.mass.streams.resolve_stream_url = AsyncMock(return_value="http://stream/add")
+    player.provider.append_player_url = AsyncMock()
+
+    await queue_sync.enqueue_next_media(media)
+
+    player.mass.streams.resolve_stream_url.assert_awaited_once_with("player-1", media)
+    player.provider.append_player_url.assert_awaited_once_with("player-1", "http://stream/add")
+
+
 def test_queue_sync_small_helpers_cover_mapping_and_limits() -> None:
     """Small helper methods should preserve identity/signature/repeat semantics."""
     queue_sync, player = _build_queue_sync()

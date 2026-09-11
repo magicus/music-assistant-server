@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from typing import Any, cast
 from urllib.parse import urlencode
 
-from aiohttp import web
+from aiohttp import ClientError, ClientTimeout, web
 from music_assistant_models.config_entries import ConfigEntry
 from music_assistant_models.enums import ConfigEntryType
 from music_assistant_models.errors import (
@@ -18,16 +18,15 @@ from music_assistant_models.errors import (
 )
 
 from music_assistant.models.player_provider import PlayerProvider
-from music_assistant.providers.lyrion.client import rpc_request
-from music_assistant.providers.lyrion.cometd.stream import LyrionCometDEventStream
-from music_assistant.providers.lyrion.constants import COMETD_COMMAND_STATUS_VERIFY_TIMEOUT
+from music_assistant.providers.lyrion.client import build_lms_url, rpc_request
+from music_assistant.providers.lyrion.constants import STATUS_COMMAND_VERIFY_TIMEOUT
 from music_assistant.providers.lyrion.setup_flow import validate_lms_endpoint
 from pylyrion.client import LyrionClient
+from pylyrion.cometd import PlayerStatusStream
 from pylyrion.errors import LyrionProtocolError, LyrionRequestError, LyrionTimeoutError
 from pylyrion.models import LyrionEndpoint
 from pylyrion.session import LyrionSession
 
-from .cometd_event_adapter import LyrionCometDEventAdapter
 from .constants import (
     CONF_FALLBACK_POLLING,
     CONF_FALLBACK_POLLING_INTERVAL,
@@ -38,23 +37,30 @@ from .constants import (
     PLAYERS_BATCH_SIZE,
 )
 from .player import LyrionPlayer
+from .status_event_adapter import LyrionStatusEventAdapter
 
 
 class LyrionPlayerProvider(PlayerProvider):
     """Player provider for Lyrion/Logitech Media Server managed players."""
 
     _unregister_stream_redirect_route: Callable[[], None] | None
+    _unsubscribe_status_events: Callable[[], None] | None
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Initialize provider internals."""
         super().__init__(*args, **kwargs)
         self._unregister_stream_redirect_route = None
+        self._unsubscribe_status_events = None
         self._discover_players_task: asyncio.Task[None] | None = None
         self._discover_players_again = False
-        self._cometd_adapter = LyrionCometDEventAdapter(self)
-        self._cometd_stream = LyrionCometDEventStream(
+        self._status_event_adapter = LyrionStatusEventAdapter(self)
+        self._status_stream = PlayerStatusStream(
             self,
-            self._cometd_adapter.handle_event,
+            post_messages=self._post_status_stream_messages,
+            recoverable_errors=(ProviderUnavailableError, LyrionRequestError),
+        )
+        self._unsubscribe_status_events = self._status_stream.subscribe(
+            self._status_event_adapter.handle_event
         )
 
     async def get_config_entries(self) -> tuple[ConfigEntry, ...]:
@@ -100,7 +106,7 @@ class LyrionPlayerProvider(PlayerProvider):
             self._handle_get_stream_url,
         )
         await self.discover_players()
-        self._cometd_stream.start()
+        self._status_stream.start()
 
     async def unload(self, is_removed: bool = False) -> None:
         """Handle unload/close of the provider."""
@@ -110,7 +116,10 @@ class LyrionPlayerProvider(PlayerProvider):
                 await self._discover_players_task
             self._discover_players_task = None
 
-        await self._cometd_stream.stop()
+        await self._status_stream.stop()
+        if unsubscribe := self._unsubscribe_status_events:
+            self._unsubscribe_status_events = None
+            unsubscribe()
         if unregister := self._unregister_stream_redirect_route:
             self._unregister_stream_redirect_route = None
             unregister()
@@ -185,7 +194,7 @@ class LyrionPlayerProvider(PlayerProvider):
                 existing_player = self.mass.players.get_player(player_id)
                 if existing_player and isinstance(existing_player, LyrionPlayer):
                     await existing_player.sync_from_lms(player_data)
-                    self._cometd_stream.mark_player_seen(player_id)
+                    self._status_stream.mark_player_seen(player_id)
                     continue
                 lyrion_player = LyrionPlayer(
                     provider=self,
@@ -193,18 +202,18 @@ class LyrionPlayerProvider(PlayerProvider):
                     initial_data=player_data,
                 )
                 await self.mass.players.register(lyrion_player)
-                self._cometd_stream.mark_player_seen(player_id)
+                self._status_stream.mark_player_seen(player_id)
 
             if len(players) < PLAYERS_BATCH_SIZE:
                 break
             offset += PLAYERS_BATCH_SIZE
 
         for player_id in seen_player_ids:
-            self._cometd_stream.mark_player_seen(player_id)
+            self._status_stream.mark_player_seen(player_id)
 
         for known_player in self.players:
             if known_player.player_id not in seen_player_ids:
-                self._cometd_stream.mark_player_removed(known_player.player_id)
+                self._status_stream.mark_player_removed(known_player.player_id)
                 await self.mass.players.unregister(known_player.player_id)
 
     async def remove_player(self, player_id: str) -> None:
@@ -451,47 +460,154 @@ class LyrionPlayerProvider(PlayerProvider):
         status: dict[str, Any],
     ) -> None:
         """
-        Apply a normalized player status payload through the CometD adapter.
+        Apply a normalized player status payload through the status adapter.
 
         :param player: Target Lyrion player.
         :param status: LMS player status payload.
         """
-        self._cometd_adapter.apply_status(player, status)
+        self._status_event_adapter.apply_status(player, status)
 
-    def get_last_cometd_status_seen_at(self, player_id: str) -> float | None:
-        """Return the last CometD status timestamp for one player."""
-        return self._cometd_stream.get_last_player_status_seen_at(player_id)
+    def get_last_status_seen_at(self, player_id: str) -> float | None:
+        """Return the last status-stream timestamp for one player."""
+        return self._status_stream.get_last_player_status_seen_at(player_id)
 
-    def get_cached_cometd_status(self, player_id: str) -> dict[str, Any] | None:
-        """Return the cached CometD status snapshot for one player."""
-        return self._cometd_stream.get_player_status_snapshot(player_id)
+    def get_cached_status(self, player_id: str) -> dict[str, Any] | None:
+        """Return cached status snapshot for one player."""
+        return self._status_stream.get_player_status_snapshot(player_id)
 
-    async def wait_for_cometd_status_update(
+    async def wait_for_status_update(
         self,
         player_id: str,
         since: float | None,
-        timeout: float = COMETD_COMMAND_STATUS_VERIFY_TIMEOUT,
+        timeout: float = STATUS_COMMAND_VERIFY_TIMEOUT,
     ) -> bool:
-        """Wait for a newer CometD status update for one player."""
-        return await self._cometd_stream.wait_for_player_status_update(
+        """Wait for a newer status update for one player."""
+        return await self._status_stream.wait_for_player_status_update(
             player_id,
             since,
             timeout,
         )
 
-    async def verify_cometd_status_expectation(
+    async def verify_status_expectation(
         self,
         player_id: str,
         baseline: float | None,
         expectation: Callable[[dict[str, Any]], bool] | None = None,
         expected_state: str = "status update",
     ) -> bool:
-        """Verify expected status via CometD and fallback polling."""
-        return await self._cometd_stream.verify_player_status_expectation(
+        """Verify expected status via stream events and fallback polling."""
+        return await self._status_stream.verify_player_status_expectation(
             player_id,
             baseline,
             expectation,
             expected_state,
+        )
+
+    async def play_player_with_verify(self, player_id: str) -> None:
+        """Resume playback and verify mode transition to play."""
+        await self._run_command_with_status_verify(
+            player_id,
+            command=lambda: self.play_player(player_id),
+            expectation=lambda status: _get_status_str(status, "mode") == "play",
+            expected_state="mode=play",
+        )
+
+    async def pause_player_with_verify(self, player_id: str) -> None:
+        """Pause playback and verify mode transition to pause."""
+        await self._run_command_with_status_verify(
+            player_id,
+            command=lambda: self.pause_player(player_id),
+            expectation=lambda status: _get_status_str(status, "mode") == "pause",
+            expected_state="mode=pause",
+        )
+
+    async def stop_player_with_verify(self, player_id: str) -> None:
+        """Stop playback and verify mode transition to stop."""
+        await self._run_command_with_status_verify(
+            player_id,
+            command=lambda: self.stop_player(player_id),
+            expectation=lambda status: _get_status_str(status, "mode") == "stop",
+            expected_state="mode=stop",
+        )
+
+    async def set_player_power_with_verify(self, player_id: str, powered: bool) -> None:
+        """Set power and verify power status."""
+        target = 1 if powered else 0
+        await self._run_command_with_status_verify(
+            player_id,
+            command=lambda: self.set_player_power(player_id, powered),
+            expectation=lambda status: _get_status_int(status, "power") == target,
+            expected_state=f"power={target}",
+        )
+
+    async def set_player_volume_with_verify(self, player_id: str, volume_level: int) -> None:
+        """Set volume and verify mixer volume."""
+        target = max(0, min(100, int(volume_level)))
+        await self._run_command_with_status_verify(
+            player_id,
+            command=lambda: self.set_player_volume(player_id, target),
+            expectation=lambda status: _get_status_int(status, "mixer volume") == target,
+            expected_state=f"mixer volume={target}",
+        )
+
+    async def set_player_muted_with_verify(self, player_id: str, muted: bool) -> None:
+        """Set mute and verify mixer muting status."""
+        target = 1 if muted else 0
+        await self._run_command_with_status_verify(
+            player_id,
+            command=lambda: self.set_player_muted(player_id, muted),
+            expectation=lambda status: _get_status_int(status, "mixer muting") == target,
+            expected_state=f"mixer muting={target}",
+        )
+
+    async def next_player_track_with_verify(self, player_id: str) -> None:
+        """Skip to next track and verify queue index transition."""
+        previous = self.get_cached_status(player_id)
+        previous_index = _get_status_int(previous or {}, "playlist_cur_index")
+        if previous_index is None:
+            await self._run_command_with_status_verify(
+                player_id,
+                command=lambda: self.next_player_track(player_id),
+            )
+            return
+
+        await self._run_command_with_status_verify(
+            player_id,
+            command=lambda: self.next_player_track(player_id),
+            expectation=lambda status: (
+                _get_status_int(status, "playlist_cur_index") not in (None, previous_index)
+            ),
+            expected_state="playlist_cur_index changed",
+        )
+
+    async def previous_player_track_with_verify(self, player_id: str) -> None:
+        """Skip to previous track and verify queue index transition."""
+        previous = self.get_cached_status(player_id)
+        previous_index = _get_status_int(previous or {}, "playlist_cur_index")
+        if previous_index is None:
+            await self._run_command_with_status_verify(
+                player_id,
+                command=lambda: self.previous_player_track(player_id),
+            )
+            return
+
+        await self._run_command_with_status_verify(
+            player_id,
+            command=lambda: self.previous_player_track(player_id),
+            expectation=lambda status: (
+                _get_status_int(status, "playlist_cur_index") not in (None, previous_index)
+            ),
+            expected_state="playlist_cur_index changed",
+        )
+
+    async def seek_player_with_verify(self, player_id: str, position: int) -> None:
+        """Seek playback and verify time progression near target."""
+        target = max(0, int(position))
+        await self._run_command_with_status_verify(
+            player_id,
+            command=lambda: self.seek_player(player_id, target),
+            expectation=lambda status: _time_matches_target(status, target),
+            expected_state=f"time~={target}",
         )
 
     async def send_player_command(
@@ -509,6 +625,23 @@ class LyrionPlayerProvider(PlayerProvider):
             return await self._build_pylyrion_client().players.send_command(player_id, command)
         except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
             raise ProviderUnavailableError(str(err)) from err
+
+    async def _run_command_with_status_verify(
+        self,
+        player_id: str,
+        command: Callable[[], Awaitable[dict[str, Any]]],
+        expectation: Callable[[dict[str, Any]], bool] | None = None,
+        expected_state: str = "status update",
+    ) -> None:
+        """Run one player command and verify status expectation."""
+        baseline = self.get_last_status_seen_at(player_id)
+        await command()
+        await self.verify_status_expectation(
+            player_id,
+            baseline,
+            expectation=expectation,
+            expected_state=expected_state,
+        )
 
     def get_configured_host(self) -> str | None:
         """Return configured host from setup data."""
@@ -530,6 +663,39 @@ class LyrionPlayerProvider(PlayerProvider):
             return int(cast("int | str", raw_port))
         except TypeError, ValueError:
             return default
+
+    async def _post_status_stream_messages(
+        self,
+        messages: list[dict[str, object]],
+        timeout: int,
+    ) -> list[dict[str, object]]:
+        """POST stream messages and normalize response payload for pylyrion runtime."""
+        host = self.get_configured_host()
+        if not host:
+            raise ProviderUnavailableError("Lyrion host is not configured")
+        port = self.get_configured_port()
+        if port is None:
+            raise ProviderUnavailableError("Lyrion port is not configured")
+
+        url = build_lms_url(host, port, "/cometd")
+        try:
+            async with self.mass.http_session.post(
+                url,
+                json=messages,
+                timeout=ClientTimeout(total=timeout),
+            ) as response:
+                response.raise_for_status()
+                payload = await response.json()
+        except (ClientError, TimeoutError, ValueError) as err:
+            raise ProviderUnavailableError(
+                f"Status stream request to {host}:{port} failed: {err}"
+            ) from err
+
+        if isinstance(payload, dict):
+            return [payload]
+        if not isinstance(payload, list):
+            raise ProviderUnavailableError("Status stream response must be a JSON object or list")
+        return [message for message in payload if isinstance(message, dict)]
 
     async def _handle_get_stream_url(
         self,
@@ -628,3 +794,35 @@ class LyrionPlayerProvider(PlayerProvider):
                 "Lyrion dynamic player rediscovery failed: %s",
                 exception,
             )
+
+
+def _get_status_str(status: dict[str, Any], key: str) -> str | None:
+    """Read a status field as a non-empty string when available."""
+    value = status.get(key)
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return None
+    return str(value)
+
+
+def _get_status_int(status: dict[str, Any], key: str) -> int | None:
+    """Read a status field as integer when available."""
+    value = status.get(key)
+    if value is None:
+        return None
+    try:
+        return int(cast("int | str", value))
+    except TypeError, ValueError:
+        return None
+
+
+def _time_matches_target(status: dict[str, Any], target: int) -> bool:
+    """Return True when reported playback time is close to target seconds."""
+    value = status.get("time")
+    if value is None:
+        return False
+    try:
+        return abs(float(cast("int | float | str", value)) - float(target)) <= 1.0
+    except TypeError, ValueError:
+        return False
