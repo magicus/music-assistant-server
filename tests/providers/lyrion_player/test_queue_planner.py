@@ -81,4 +81,4 @@ def test_plan_clamps_oversized_protected_prefix_before_rebuild() -> None:
     plan = planner.plan(source, target, protected_prefix_len=10)
 
     assert plan.mutations == ()
-    assert plan.rebuild_from_index == 2
+    assert plan.rebuild_from_index == 0

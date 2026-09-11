@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -472,6 +472,8 @@ async def test_ma_volume_change_disables_lms_sync_volume_before_grouped_volume_c
         provider.mass.config = MagicMock()
         provider.mass.config.create_default_player_config = MagicMock()
         provider.mass.config.get_base_player_config = MagicMock(return_value=MagicMock())
+        provider.get_last_cometd_status_seen_at = MagicMock(return_value=0.0)
+        provider.verify_cometd_status_expectation = AsyncMock(return_value=True)
 
         client_by_id = {
             leader_id: rpc_a,

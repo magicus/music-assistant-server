@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from music_assistant_models.errors import ProviderUnavailableError
+from music_assistant_models.errors import MusicAssistantError, ProviderUnavailableError
 
 from music_assistant.providers.lyrion.lyrion_cometd import LyrionCometDEventStream
 from music_assistant.providers.lyrion_player.cometd_events import LmsPlayerPlaylistChangedEvent
@@ -468,3 +469,124 @@ async def test_post_rejects_non_object_and_non_list_payloads(body: Any) -> None:
 
     with pytest.raises(ProviderUnavailableError, match="JSON object or list"):
         await stream._post([], timeout=1)
+
+
+async def test_start_creates_listener_and_support_tasks() -> None:
+    """Starting stream should create listener/watchdog/expectation tasks."""
+    provider = _StubProvider(["player_a"])
+    provider.unloading = True
+    stream = LyrionCometDEventStream(cast("Any", provider), _noop_event_callback)
+
+    stream.start()
+
+    assert stream._task is not None
+    assert stream._watchdog_task is not None
+    assert stream._expectation_task is not None
+    await stream._task
+    await stream._watchdog_task
+    await stream._expectation_task
+
+
+async def test_start_reuses_running_listener_and_restarts_side_tasks() -> None:
+    """Starting again with active listener should only recreate side tasks when needed."""
+    provider = _StubProvider(["player_a"])
+    stream = LyrionCometDEventStream(cast("Any", provider), _noop_event_callback)
+    stream._task = asyncio.create_task(asyncio.sleep(5))
+    stream._watchdog_task = asyncio.create_task(asyncio.sleep(0))
+    await stream._watchdog_task
+    stream._expectation_task = asyncio.create_task(asyncio.sleep(0))
+    await stream._expectation_task
+    provider.unloading = True
+
+    stream.start()
+
+    assert stream._task is not None and not stream._task.done()
+    assert stream._watchdog_task is not None
+    assert stream._expectation_task is not None
+    stream._task.cancel()
+    with suppress(asyncio.CancelledError):
+        await stream._task
+
+
+async def test_stop_cancels_tasks_disconnects_and_resets_state() -> None:
+    """Stopping should cancel active tasks, disconnect session and clear state."""
+    provider = _StubProvider(["player_a"])
+    stream = LyrionCometDEventStream(cast("Any", provider), _noop_event_callback)
+    stream._task = asyncio.create_task(asyncio.sleep(5))
+    stream._watchdog_task = asyncio.create_task(asyncio.sleep(5))
+    stream._expectation_task = asyncio.create_task(asyncio.sleep(5))
+    stream._client_id = "cid"
+    stream._status_by_player["player_a"] = {"mode": "play"}
+    stream._bayeux.disconnect = AsyncMock(return_value=None)
+
+    await stream.stop()
+
+    stream._bayeux.disconnect.assert_awaited_once()
+    assert stream._task is None
+    assert stream._watchdog_task is None
+    assert stream._expectation_task is None
+    assert stream._client_id is None
+    assert not stream._status_by_player
+
+
+async def test_run_session_initializes_client_and_subscriptions() -> None:
+    """One session run should handshake, subscribe and start connect loop."""
+    provider = _StubProvider(["player_a", "player_b"])
+    stream = LyrionCometDEventStream(cast("Any", provider), _noop_event_callback)
+    stream._bayeux.open_session = AsyncMock(return_value="cid")
+    stream._bayeux.run_connect_loop = AsyncMock(return_value=None)
+    stream._subscribe_server_status = AsyncMock(return_value=None)
+
+    await stream._run_session()
+
+    assert stream._client_id == "cid"
+    assert stream._pending_player_ids == {"player_a", "player_b"}
+    stream._subscribe_server_status.assert_awaited_once()
+    stream._bayeux.run_connect_loop.assert_awaited_once()
+
+
+async def test_flush_pending_player_subscriptions_requeues_failures() -> None:
+    """Failed player subscription attempts should be put back into pending set."""
+    provider = _StubProvider(["player_a"])
+    stream = LyrionCometDEventStream(cast("Any", provider), _noop_event_callback)
+    stream._client_id = "cid"
+    stream._pending_player_ids = {"ok", "fail"}
+    stream._refresh_stale_player_subscriptions = AsyncMock(return_value=None)
+
+    async def _subscribe(player_id: str) -> None:
+        if player_id == "fail":
+            raise ProviderUnavailableError("down")
+
+    stream._subscribe_player_status = AsyncMock(side_effect=_subscribe)
+
+    await stream._flush_pending_player_subscriptions()
+
+    assert stream._pending_player_ids == {"fail"}
+
+
+async def test_next_expectation_delay_covers_idle_near_end_and_backoff() -> None:
+    """Expectation delay should adapt between idle and near-track-end timings."""
+    provider = _StubProvider(["player_a"])
+    stream = LyrionCometDEventStream(cast("Any", provider), _noop_event_callback)
+
+    idle = stream._next_expectation_delay()
+    assert idle > 0
+
+    now = asyncio.get_running_loop().time()
+    stream._track_end_expectations["player_a"] = SimpleNamespace(expected_transition_at=now + 0.1)
+    near_end = stream._next_expectation_delay()
+    assert near_end <= idle
+
+
+async def test_emit_event_logs_music_assistant_errors() -> None:
+    """Event emit should swallow MA errors and keep loop alive."""
+    provider = _StubProvider(["player_a"])
+
+    async def _raising_callback(_event: object) -> None:
+        raise MusicAssistantError("boom")
+
+    stream = LyrionCometDEventStream(cast("Any", provider), _raising_callback)
+
+    await stream._emit_event(SimpleNamespace(player_id="player_a"))
+
+    provider.logger.warning.assert_called_once()
