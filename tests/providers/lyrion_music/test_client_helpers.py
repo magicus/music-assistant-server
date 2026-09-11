@@ -192,6 +192,40 @@ async def test_get_all_playlists_and_genres_paging(monkeypatch: pytest.MonkeyPat
     assert await client.get_all_genres(provider) == [{"id": "g1", "name": "G1"}]
 
 
+async def test_search_and_entity_data_delegate_to_pylyrion(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Search and raw entity data helpers should use the pylyrion client facade."""
+    library = Mock()
+    library.search_entities = AsyncMock(
+        side_effect=[
+            [{"id": "a1", "artist": "Artist 1"}],
+            [{"id": "al1", "album": "Album 1"}],
+            [{"id": "t1", "title": "Track 1"}],
+        ]
+    )
+    library.get_entity_data = AsyncMock(
+        side_effect=[
+            {"id": "a1", "artist": "Artist 1"},
+            {"id": "al1", "album": "Album 1"},
+            {"id": "t1", "title": "Track 1"},
+        ]
+    )
+    monkeypatch.setattr(client, "_build_library_client", lambda _provider: library)
+
+    monkeypatch.setattr(client.parsers, "parse_artist", lambda _provider, row: row["id"])
+    monkeypatch.setattr(client.parsers, "parse_album", lambda _provider, row: row["id"])
+    monkeypatch.setattr(client.parsers, "parse_track", lambda _provider, row: row["id"])
+
+    provider = _provider()
+
+    assert await client.search_artists(provider, "artist", 5) == ["a1"]
+    assert await client.search_albums(provider, "album", 5) == ["al1"]
+    assert await client.search_tracks(provider, "track", 5) == ["t1"]
+
+    assert await client.get_artist_data(provider, "a1") == {"id": "a1", "artist": "Artist 1"}
+    assert await client.get_album_data(provider, "al1") == {"id": "al1", "album": "Album 1"}
+    assert await client.get_track_data(provider, "t1") == {"id": "t1", "title": "Track 1"}
+
+
 async def test_get_album_tracks_sorting_and_playlist_tracks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -83,3 +83,24 @@ async def test_library_client_id_search_and_entity_lookup() -> None:
     search_rows = await client.search_entities(ARTIST_SPEC, "ignored", 1)
     assert search_rows == [{"id": "a1"}]
 
+
+@pytest.mark.asyncio
+async def test_library_client_playlist_tracks_and_entity_data() -> None:
+    """Raw playlist track pages and entity lookups should return LMS rows."""
+    client = _build_library_client(
+        {
+            "result": {
+                "playlisttracks_loop": [{"id": "p1"}],
+                "artists_loop": [{"id": "a1", "artist": "Artist 1"}],
+                "count": "1",
+            }
+        }
+    )
+
+    playlist_page = await client.get_playlist_tracks_page("pl1")
+    artist_row = await client.get_entity_data(ARTIST_SPEC, "a1")
+
+    assert playlist_page.items == [{"id": "p1"}]
+    assert playlist_page.has_more is False
+    assert artist_row == {"id": "a1", "artist": "Artist 1"}
+
