@@ -559,15 +559,17 @@ def _build_library_session(provider: LyrionMusicProvider) -> LyrionSession:
     )
 
 
+def _build_library_client(provider: LyrionMusicProvider) -> LyrionLibraryClient:
+    """Create a pylyrion library client from the MA provider config."""
+    return LyrionLibraryClient(_build_library_session(provider))
+
+
 async def search_artists(provider: LyrionMusicProvider, query: str, limit: int) -> list[Artist]:
     """Search artists in LMS."""
-    result = await rpc_request(
-        provider,
-        player_id="",
-        command=["artists", 0, limit, ARTIST_TAGS, f"search:{query}"],
-    )
+    library = _build_library_client(provider)
+    result = await library.search_entities(PY_ARTIST_SPEC, query, limit)
     artists: list[Artist] = []
-    for raw_artist in cast("list[Mapping[str, object]]", result.get("artists_loop", [])):
+    for raw_artist in result:
         normalized_artist = _normalize_lms_row(raw_artist)
         if parsers.extract_item_id(normalized_artist) is None:
             continue
@@ -577,13 +579,10 @@ async def search_artists(provider: LyrionMusicProvider, query: str, limit: int) 
 
 async def search_albums(provider: LyrionMusicProvider, query: str, limit: int) -> list[Album]:
     """Search albums in LMS."""
-    result = await rpc_request(
-        provider,
-        player_id="",
-        command=["albums", 0, limit, ALBUM_TAGS, f"search:{query}"],
-    )
+    library = _build_library_client(provider)
+    result = await library.search_entities(PY_ALBUM_SPEC, query, limit)
     albums: list[Album] = []
-    for raw_album in cast("list[Mapping[str, object]]", result.get("albums_loop", [])):
+    for raw_album in result:
         normalized_album = _normalize_lms_row(raw_album)
         if parsers.extract_item_id(normalized_album) is None:
             continue
@@ -593,13 +592,10 @@ async def search_albums(provider: LyrionMusicProvider, query: str, limit: int) -
 
 async def search_tracks(provider: LyrionMusicProvider, query: str, limit: int) -> list[Track]:
     """Search tracks in LMS."""
-    result = await rpc_request(
-        provider,
-        player_id="",
-        command=["titles", 0, limit, TRACK_TAGS, f"search:{query}"],
-    )
+    library = _build_library_client(provider)
+    result = await library.search_entities(PY_TRACK_SPEC, query, limit)
     tracks: list[Track] = []
-    for raw_track in cast("list[Mapping[str, object]]", result.get("titles_loop", [])):
+    for raw_track in result:
         normalized_track = _normalize_lms_row(raw_track)
         if parsers.extract_item_id(normalized_track) is None:
             continue
@@ -609,17 +605,17 @@ async def search_tracks(provider: LyrionMusicProvider, query: str, limit: int) -
 
 async def get_artist_data(provider: LyrionMusicProvider, artist_id: str) -> Mapping[str, object]:
     """Get artist payload from LMS."""
-    return await _get_entity_data(provider, ARTIST_SPEC, artist_id)
+    return await _build_library_client(provider).get_entity_data(PY_ARTIST_SPEC, artist_id)
 
 
 async def get_album_data(provider: LyrionMusicProvider, album_id: str) -> Mapping[str, object]:
     """Get album payload from LMS."""
-    return await _get_entity_data(provider, ALBUM_SPEC, album_id)
+    return await _build_library_client(provider).get_entity_data(PY_ALBUM_SPEC, album_id)
 
 
 async def get_track_data(provider: LyrionMusicProvider, track_id: str) -> Mapping[str, object]:
     """Get track payload from LMS."""
-    return await _get_entity_data(provider, TRACK_SPEC, track_id)
+    return await _build_library_client(provider).get_entity_data(PY_TRACK_SPEC, track_id)
 
 
 async def _get_entity_data(

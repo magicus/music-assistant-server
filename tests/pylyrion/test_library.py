@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from pylyrion.library import LyrionLibraryClient
+from pylyrion.library import ARTIST_SPEC, LyrionLibraryClient
 from pylyrion.models import LyrionEndpoint
 from pylyrion.session import LyrionSession
 from tests.providers.lyrion.rpc_test_doubles import FakeResponse
@@ -61,3 +61,25 @@ async def test_library_client_pages_tracks_with_filter() -> None:
     called_payload = transport.post.call_args.kwargs["json"]
     assert called_url.endswith("/jsonrpc.js")
     assert called_payload["params"][1][-1] == "album_id:alb1"
+
+
+@pytest.mark.asyncio
+async def test_library_client_id_search_and_entity_lookup() -> None:
+    """Raw id discovery, search and entity lookup should round-trip LMS rows."""
+    body = {
+        "result": {
+            "artists_loop": [{"id": "a1"}],
+            "albums_loop": [{"id": "al1"}],
+            "titles_loop": [{"id": "t1"}],
+            "count": "1",
+        }
+    }
+    client = _build_library_client(body)
+
+    assert await client.get_artist_ids() == ["a1"]
+    assert await client.get_album_ids() == ["al1"]
+    assert await client.get_track_ids() == ["t1"]
+
+    search_rows = await client.search_entities(ARTIST_SPEC, "ignored", 1)
+    assert search_rows == [{"id": "a1"}]
+
