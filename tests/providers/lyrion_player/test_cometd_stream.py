@@ -204,3 +204,68 @@ async def test_playerstatus_playlist_change_detects_canonical_playlist_tracks_ke
     )
 
     assert any(isinstance(event, LmsPlayerPlaylistChangedEvent) for event in emitted_events)
+
+
+async def test_wait_for_player_status_update_observes_new_status() -> None:
+    """Status waiters should resolve once a fresher CometD status arrives."""
+    provider = _StubProvider(["player_a"])
+    stream = LyrionCometDEventStream(cast("Any", provider), _noop_event_callback)
+
+    baseline = stream.get_last_player_status_seen_at("player_a")
+    wait_task = asyncio.create_task(
+        stream.wait_for_player_status_update("player_a", baseline, timeout=1)
+    )
+    await asyncio.sleep(0)
+
+    await stream._handle_message(
+        {
+            "channel": "/abc/slim/playerstatus/player_a",
+            "data": {"mode": "play"},
+        }
+    )
+
+    assert await wait_task
+
+
+async def test_stale_playerstatus_is_resubscribed_and_cache_cleared() -> None:
+    """Stale CometD playerstatus should be dropped and marked for refresh."""
+    provider = _StubProvider(["player_a"])
+    stream = LyrionCometDEventStream(cast("Any", provider), _noop_event_callback)
+
+    await stream._handle_message(
+        {
+            "channel": "/abc/slim/playerstatus/player_a",
+            "data": {"mode": "play", "playlist_tracks": 1},
+        }
+    )
+    stream._status_seen_at["player_a"] = 0.0
+    stream._subscribed_player_ids.add("player_a")
+
+    await stream._refresh_stale_player_subscriptions()
+
+    assert "player_a" not in stream._subscribed_player_ids
+    assert "player_a" in stream._pending_player_ids
+    assert "player_a" not in stream._status_by_player
+
+
+async def test_session_reset_clears_status_cache() -> None:
+    """Reconnect resets should clear volatile playerstatus cache state."""
+    provider = _StubProvider(["player_a"])
+    stream = LyrionCometDEventStream(cast("Any", provider), _noop_event_callback)
+
+    await stream._handle_message(
+        {
+            "channel": "/abc/slim/playerstatus/player_a",
+            "data": {"mode": "play"},
+        }
+    )
+    stream._pending_player_ids.add("player_a")
+    stream._subscribed_player_ids.add("player_a")
+
+    stream._reset_session_state()
+
+    assert stream._client_id is None
+    assert not stream._pending_player_ids
+    assert not stream._subscribed_player_ids
+    assert not stream._status_by_player
+    assert not stream._status_seen_at

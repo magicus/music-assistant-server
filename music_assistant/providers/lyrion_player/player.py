@@ -24,6 +24,7 @@ from music_assistant.helpers.util import is_valid_mac_address
 from music_assistant.models.player import Player, PlayerMedia
 
 from .constants import (
+    COMETD_COMMAND_STATUS_VERIFY_TIMEOUT,
     CONF_FALLBACK_POLLING,
     CONF_FALLBACK_POLLING_INTERVAL,
     DEFAULT_FALLBACK_POLLING_INTERVAL,
@@ -163,15 +164,18 @@ class LyrionPlayer(Player):
 
     async def play(self) -> None:
         """Resume playback."""
+        baseline = self.provider.get_last_cometd_status_seen_at(self.player_id)
         try:
             await self.provider.send_player_command(self.player_id, ["play"])
         except ProviderUnavailableError as err:
             raise PlayerCommandFailed(f"play failed: {err}") from err
         self._attr_playback_state = PlaybackState.PLAYING
         self.update_state()
+        await self._verify_cometd_status_update(baseline)
 
     async def pause(self) -> None:
         """Pause playback."""
+        baseline = self.provider.get_last_cometd_status_seen_at(self.player_id)
         try:
             await self.provider.send_player_command(
                 self.player_id,
@@ -181,9 +185,11 @@ class LyrionPlayer(Player):
             raise PlayerCommandFailed(f"pause failed: {err}") from err
         self._attr_playback_state = PlaybackState.PAUSED
         self.update_state()
+        await self._verify_cometd_status_update(baseline)
 
     async def stop(self) -> None:
         """Stop playback."""
+        baseline = self.provider.get_last_cometd_status_seen_at(self.player_id)
         try:
             await self.provider.send_player_command(self.player_id, ["stop"])
         except ProviderUnavailableError as err:
@@ -191,6 +197,7 @@ class LyrionPlayer(Player):
         self._attr_playback_state = PlaybackState.IDLE
         self._attr_current_media = None
         self.update_state()
+        await self._verify_cometd_status_update(baseline)
 
     async def power(self, powered: bool) -> None:
         """
@@ -240,6 +247,7 @@ class LyrionPlayer(Player):
 
     async def next_track(self) -> None:
         """Skip to the next track on the active LMS queue/source."""
+        baseline = self.provider.get_last_cometd_status_seen_at(self.player_id)
         try:
             await self.provider.send_player_command(
                 self.player_id,
@@ -247,9 +255,11 @@ class LyrionPlayer(Player):
             )
         except ProviderUnavailableError as err:
             raise PlayerCommandFailed(f"next_track failed: {err}") from err
+        await self._verify_cometd_status_update(baseline)
 
     async def previous_track(self) -> None:
         """Skip to the previous track on the active LMS queue/source."""
+        baseline = self.provider.get_last_cometd_status_seen_at(self.player_id)
         try:
             await self.provider.send_player_command(
                 self.player_id,
@@ -257,10 +267,12 @@ class LyrionPlayer(Player):
             )
         except ProviderUnavailableError as err:
             raise PlayerCommandFailed(f"previous_track failed: {err}") from err
+        await self._verify_cometd_status_update(baseline)
 
     async def seek(self, position: int) -> None:
         """Seek playback position in seconds on the active source."""
         target = max(0, int(position))
+        baseline = self.provider.get_last_cometd_status_seen_at(self.player_id)
         try:
             await self.provider.send_player_command(
                 self.player_id,
@@ -271,6 +283,7 @@ class LyrionPlayer(Player):
         self._attr_elapsed_time = float(target)
         self._attr_elapsed_time_last_updated = time.time()
         self.update_state()
+        await self._verify_cometd_status_update(baseline)
 
     async def set_members(
         self,
@@ -325,6 +338,32 @@ class LyrionPlayer(Player):
         """
         self._apply_player_metadata(player_data)
         self.update_state()
+
+    async def _verify_cometd_status_update(self, baseline: float | None) -> None:
+        """Poll LMS when CometD does not confirm a recent command quickly."""
+        if await self.provider.wait_for_cometd_status_update(
+            self.player_id,
+            baseline,
+            COMETD_COMMAND_STATUS_VERIFY_TIMEOUT,
+        ):
+            return
+
+        self.provider.logger.warning(
+            "No CometD status update for %s within %ss; polling LMS",
+            self.player_id,
+            COMETD_COMMAND_STATUS_VERIFY_TIMEOUT,
+        )
+        try:
+            status = await self.provider.get_player_status(self.player_id)
+        except ProviderUnavailableError as err:
+            self.provider.logger.warning(
+                "Fallback status poll failed for %s: %s",
+                self.player_id,
+                err,
+            )
+            return
+
+        self.provider.apply_status_update(self, status)
 
     async def _on_ma_queue_items_updated(self, event: MassEvent) -> None:
         """

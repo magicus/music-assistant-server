@@ -24,6 +24,7 @@ from music_assistant.providers.lyrion.setup_flow import validate_lms_endpoint
 
 from .cometd_event_adapter import LyrionCometDEventAdapter
 from .constants import (
+    COMETD_COMMAND_STATUS_VERIFY_TIMEOUT,
     CONF_FALLBACK_POLLING,
     CONF_FALLBACK_POLLING_INTERVAL,
     CONF_LMS_HOST,
@@ -229,6 +230,23 @@ class LyrionPlayerProvider(PlayerProvider):
         :param status: LMS player status payload.
         """
         self._cometd_adapter.apply_status(player, status)
+
+    def get_last_cometd_status_seen_at(self, player_id: str) -> float | None:
+        """Return the last CometD status timestamp for one player."""
+        return self._cometd_stream.get_last_player_status_seen_at(player_id)
+
+    async def wait_for_cometd_status_update(
+        self,
+        player_id: str,
+        since: float | None,
+        timeout: float = COMETD_COMMAND_STATUS_VERIFY_TIMEOUT,
+    ) -> bool:
+        """Wait for a newer CometD status update for one player."""
+        return await self._cometd_stream.wait_for_player_status_update(
+            player_id,
+            since,
+            timeout,
+        )
 
     async def send_player_command(
         self,

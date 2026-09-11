@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, cast
@@ -13,10 +14,12 @@ from music_assistant_models.errors import ProviderUnavailableError
 from .bayeux_client import BayeuxClient
 from .constants import (
     COMETD_CONNECT_TIMEOUT,
+    COMETD_PLAYERSTATUS_SUBSCRIBE_INTERVAL,
     COMETD_PLAYERSTATUS_TAGS,
     COMETD_RETRY_DELAY,
     COMETD_SERVERSTATUS_BATCH_SIZE,
     COMETD_SERVERSTATUS_SUBSCRIBE_INTERVAL,
+    COMETD_STATUS_STALENESS_FACTOR,
     RPC_TIMEOUT,
 )
 
@@ -49,6 +52,8 @@ class LyrionCometDEventStream:
         self._subscribed_player_ids: set[str] = set()
         self._pending_player_ids: set[str] = set()
         self._status_by_player: dict[str, StatusPayload] = {}
+        self._status_seen_at: dict[str, float] = {}
+        self._status_wait_events: dict[str, asyncio.Event] = {}
         self._known_server_player_ids: set[str] | None = None
         self._known_server_player_count: int | None = None
 
@@ -70,12 +75,7 @@ class LyrionCometDEventStream:
             with suppress(ProviderUnavailableError):
                 await self._bayeux.disconnect(self._client_id, RPC_TIMEOUT)
 
-        self._client_id = None
-        self._subscribed_player_ids.clear()
-        self._pending_player_ids.clear()
-        self._status_by_player.clear()
-        self._known_server_player_ids = None
-        self._known_server_player_count = None
+        self._reset_session_state()
 
     def mark_player_seen(self, player_id: str) -> None:
         """
@@ -84,6 +84,7 @@ class LyrionCometDEventStream:
         :param player_id: LMS player id.
         """
         self._pending_player_ids.add(player_id)
+        self._touch_player_status_activity(player_id)
 
     def mark_player_removed(self, player_id: str) -> None:
         """
@@ -94,6 +95,44 @@ class LyrionCometDEventStream:
         self._subscribed_player_ids.discard(player_id)
         self._pending_player_ids.discard(player_id)
         self._status_by_player.pop(player_id, None)
+        self._status_seen_at.pop(player_id, None)
+        self._status_wait_events.pop(player_id, None)
+
+    def get_last_player_status_seen_at(self, player_id: str) -> float | None:
+        """Return the last time CometD updated one player's status."""
+        return self._status_seen_at.get(player_id)
+
+    async def wait_for_player_status_update(
+        self,
+        player_id: str,
+        since: float | None,
+        timeout: float,
+    ) -> bool:
+        """
+        Wait for a newer CometD status update for one player.
+
+        :param player_id: LMS player id.
+        :param since: Baseline timestamp to compare against.
+        :param timeout: Maximum wait time in seconds.
+        :return: True when a newer status arrived in time.
+        """
+        baseline = since or 0.0
+        if self._status_seen_at.get(player_id, 0.0) > baseline:
+            return True
+
+        event = self._status_wait_events.setdefault(player_id, asyncio.Event())
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return self._status_seen_at.get(player_id, 0.0) > baseline
+            try:
+                await asyncio.wait_for(event.wait(), timeout=remaining)
+            except TimeoutError:
+                return self._status_seen_at.get(player_id, 0.0) > baseline
+            event.clear()
+            if self._status_seen_at.get(player_id, 0.0) > baseline:
+                return True
 
     async def _listener_loop(self) -> None:
         """Keep one CometD session alive and reconnect on failures."""
@@ -106,8 +145,7 @@ class LyrionCometDEventStream:
                     err,
                 )
 
-            self._client_id = None
-            self._subscribed_player_ids.clear()
+            self._reset_session_state()
             if self.provider.unloading:
                 return  # type: ignore[unreachable]
             await asyncio.sleep(COMETD_RETRY_DELAY)
@@ -137,6 +175,8 @@ class LyrionCometDEventStream:
         """Subscribe playerstatus streams for pending players."""
         if self._client_id is None or not self._pending_player_ids:
             return
+
+        await self._refresh_stale_player_subscriptions()
 
         pending = sorted(self._pending_player_ids)
         self._pending_player_ids.clear()
@@ -180,6 +220,7 @@ class LyrionCometDEventStream:
         )
 
         self._subscribed_player_ids.add(player_id)
+        self._touch_player_status_activity(player_id)
         for message in response[1:]:
             await self._handle_message(message)
 
@@ -229,6 +270,45 @@ class LyrionCometDEventStream:
             if isinstance(data, dict):
                 self._handle_server_status(data)
             return
+
+    async def _refresh_stale_player_subscriptions(self) -> None:
+        """Resubscribe players whose status has gone stale."""
+        stale_after = COMETD_PLAYERSTATUS_SUBSCRIBE_INTERVAL * COMETD_STATUS_STALENESS_FACTOR
+        now = time.monotonic()
+        stale_player_ids = [
+            player_id
+            for player_id in sorted(self._subscribed_player_ids)
+            if now - self._status_seen_at.get(player_id, 0.0) > stale_after
+        ]
+        if not stale_player_ids:
+            return
+
+        self.provider.logger.warning(
+            "CometD playerstatus went stale for %s; resubscribing",
+            ", ".join(stale_player_ids),
+        )
+        for player_id in stale_player_ids:
+            self._subscribed_player_ids.discard(player_id)
+            self._status_by_player.pop(player_id, None)
+            self._pending_player_ids.add(player_id)
+            self._touch_player_status_activity(player_id)
+
+    def _reset_session_state(self) -> None:
+        """Clear volatile CometD session state after reconnect or stop."""
+        self._client_id = None
+        self._subscribed_player_ids.clear()
+        self._pending_player_ids.clear()
+        self._status_by_player.clear()
+        self._status_seen_at.clear()
+        self._status_wait_events.clear()
+        self._known_server_player_ids = None
+        self._known_server_player_count = None
+
+    def _touch_player_status_activity(self, player_id: str) -> None:
+        """Record fresh activity for one player and wake status waiters."""
+        self._status_seen_at[player_id] = time.monotonic()
+        if event := self._status_wait_events.get(player_id):
+            event.set()
 
     def _handle_server_status(self, payload: dict[str, Any]) -> None:
         """Detect server roster changes and trigger provider rediscovery."""
@@ -338,6 +418,7 @@ class LyrionCometDEventStream:
         merged = dict(previous or {})
         merged.update(partial)
         self._status_by_player[player_id] = merged
+        self._touch_player_status_activity(player_id)
 
         is_initial = previous is None
         await self._event_callback(
