@@ -5,9 +5,9 @@ from __future__ import annotations
 from unittest.mock import AsyncMock
 
 import pytest
-from pylyrion.errors import LyrionRequestError
 
 from music_assistant.providers.lyrion.bayeux_client import BayeuxClient
+from pylyrion.errors import LyrionRequestError
 
 
 @pytest.mark.asyncio

@@ -10,7 +10,17 @@ from typing import TYPE_CHECKING
 from aiohttp import ClientError, ClientTimeout
 from music_assistant_models.errors import MusicAssistantError, ProviderUnavailableError
 
-from ..client import build_lms_url
+from music_assistant.providers.lyrion.client import build_lms_url
+from music_assistant.providers.lyrion_player.cometd_events import (
+    LmsPlayerPlaybackChangedEvent,
+    LmsPlayerPlaylistChangedEvent,
+    LmsPlayerPowerChangedEvent,
+    LmsPlayerRepeatChangedEvent,
+    LmsPlayerSeekedEvent,
+    LmsPlayerShuffleChangedEvent,
+    LmsPlayerStatusUpdatedEvent,
+    LmsPlayerVolumeChangedEvent,
+)
 from pylyrion.cometd.bayeux_client import BayeuxClient
 from pylyrion.cometd.constants import (
     COMETD_COMMAND_STATUS_BACKOFF,
@@ -265,7 +275,7 @@ class LyrionCometDEventStream(_CometDStatusMixin, _CometDRecoveryMixin):
                 continue
             try:
                 await self._subscribe_player_status(player_id)
-            except (ProviderUnavailableError, LyrionRequestError):
+            except ProviderUnavailableError, LyrionRequestError:
                 failed.append(player_id)
 
         for player_id in failed:
@@ -356,17 +366,6 @@ class LyrionCometDEventStream(_CometDStatusMixin, _CometDRecoveryMixin):
         partial: StatusPayload,
     ) -> None:
         """Merge one playerstatus payload, compute diffs, and emit events."""
-        from music_assistant.providers.lyrion_player.cometd_events import (
-            LmsPlayerPlaybackChangedEvent,
-            LmsPlayerPlaylistChangedEvent,
-            LmsPlayerPowerChangedEvent,
-            LmsPlayerRepeatChangedEvent,
-            LmsPlayerSeekedEvent,
-            LmsPlayerShuffleChangedEvent,
-            LmsPlayerStatusUpdatedEvent,
-            LmsPlayerVolumeChangedEvent,
-        )
-
         if _is_invalid_player_payload(partial):
             self._status_by_player.pop(player_id, None)
             self.mark_player_removed(player_id)

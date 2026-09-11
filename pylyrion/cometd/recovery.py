@@ -17,11 +17,11 @@ from .constants import (
 )
 from .helpers import (
     StatusPayload,
-    _TrackEndExpectation,
     _extract_current_track_id,
     _get_float,
     _get_int,
     _get_mode,
+    _TrackEndExpectation,
 )
 
 
@@ -123,7 +123,7 @@ class _CometDRecoveryMixin:
         try:
             baseline = self.get_last_player_status_seen_at(player_id)
 
-            def _expectation(status: StatusPayload) -> bool:
+            def _expectation(_status: StatusPayload) -> bool:
                 expectation_obj = self._track_end_expectations.get(player_id)
                 if not isinstance(expectation_obj, _TrackEndExpectation):
                     return True
@@ -258,14 +258,11 @@ class _CometDRecoveryMixin:
             return True
 
         current_timestamp = _get_float(status, "playlist_timestamp")
-        if (
+        return (
             expectation.baseline_playlist_timestamp is not None
             and current_timestamp is not None
             and current_timestamp != expectation.baseline_playlist_timestamp
-        ):
-            return True
-
-        return False
+        )
 
     @staticmethod
     def _requires_activity_expectation(status: StatusPayload) -> bool:
