@@ -18,12 +18,20 @@ from music_assistant.providers.lyrion.client import (
 )
 
 from . import parsers
-from .constants import ARTWORK_VALIDATION_TIMEOUT, CONF_ARTWORK_CACHE_BUSTER, RPC_TIMEOUT
+from .constants import (
+    ARTWORK_VALIDATION_CACHE_TTL,
+    ARTWORK_VALIDATION_TIMEOUT,
+    CONF_ARTWORK_CACHE_BUSTER,
+    RPC_TIMEOUT,
+)
 
 if TYPE_CHECKING:
     from music_assistant_models.media_items import Album, Artist
 
     from music_assistant.providers.lyrion_music.provider import LyrionMusicProvider
+
+
+CACHE_CATEGORY_ARTWORK_PROBE = "lyrion_artwork_probe"
 
 
 async def resolve_image(provider: LyrionMusicProvider, path: str) -> str | bytes:
@@ -209,17 +217,37 @@ async def fetch_remote_image_if_ok(provider: LyrionMusicProvider, url: str) -> b
 
 async def probe_remote_image(provider: LyrionMusicProvider, url: str) -> bool:
     """Check if a remote image endpoint is reachable without downloading payload bytes."""
+    cache_key = f"probe::{url}"
+    if (
+        cached := await provider.mass.cache.get(
+            cache_key,
+            provider=provider.instance_id,
+            category=CACHE_CATEGORY_ARTWORK_PROBE,
+        )
+    ) is not None:
+        return bool(cached)
+
     try:
         async with provider.mass.http_session.get(
             url,
             timeout=ClientTimeout(total=ARTWORK_VALIDATION_TIMEOUT),
         ) as response:
             if response.status != 200:
-                return False
-            content_type = response.headers.get("Content-Type", "")
-            return "image/" in content_type.lower()
+                result = False
+            else:
+                content_type = response.headers.get("Content-Type", "")
+                result = "image/" in content_type.lower()
     except TimeoutError, ClientError:
-        return False
+        result = False
+
+    await provider.mass.cache.set(
+        cache_key,
+        result,
+        provider=provider.instance_id,
+        category=CACHE_CATEGORY_ARTWORK_PROBE,
+        expiration=ARTWORK_VALIDATION_CACHE_TTL,
+    )
+    return result
 
 
 def get_thumb_path(item: Artist | Album) -> str | None:

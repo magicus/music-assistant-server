@@ -213,13 +213,16 @@ def _extract_loop_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
 def _wait_for_port(host: str, port: int, timeout_s: float = 120.0) -> None:
     """Wait until TCP port becomes reachable."""
     end = time.time() + timeout_s
+    last_error: OSError | None = None
     while time.time() < end:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.settimeout(1.0)
-            if sock.connect_ex((host, port)) == 0:
+        try:
+            with socket.create_connection((host, port), timeout=1.0):
                 return
+        except OSError as err:
+            last_error = err
         time.sleep(1.0)
-    msg = f"Timeout waiting for {host}:{port}"
+    details = f" ({last_error})" if last_error else ""
+    msg = f"Timeout waiting for {host}:{port}{details}"
     raise TimeoutError(msg)
 
 
@@ -370,12 +373,13 @@ def _write_server_prefs(config_dir: Path) -> None:
     )
 
 
-def _docker_env() -> dict[str, str]:
+def _docker_env(*, lms_http_port: int = 9000) -> dict[str, str]:
     """Return docker compose env for LMS test run."""
     env = os.environ.copy()
     env.setdefault("TZ", "UTC")
     env.setdefault("PUID", str(os.getuid()))
     env.setdefault("PGID", str(os.getgid()))
+    env["LMS_HTTP_PORT"] = str(lms_http_port)
     env["LMS_CONFIG_DIR"] = str(LMS_CONFIG_DIR)
     env["LMS_MUSIC_DIR"] = str(LMS_MUSIC_DIR)
     return env
@@ -422,6 +426,10 @@ def _container_unhealthy_state(compose_ps_output: str) -> bool:
 def _bring_up_lms(base_url: str) -> None:
     """Start LMS container and wait until serverstatus works."""
     compose_cmd = _resolve_compose_cmd()
+    parsed = urlparse(base_url)
+    host = str(parsed.hostname)
+    port = int(parsed.port) if parsed.port else 9000
+    compose_env = _docker_env(lms_http_port=port)
     _progress("starting LMS docker container")
     compose_up_cmd = [
         *compose_cmd,
@@ -437,7 +445,7 @@ def _bring_up_lms(base_url: str) -> None:
         _run_with_retries(
             compose_up_cmd,
             cwd=REPO_ROOT,
-            env=_docker_env(),
+            env=compose_env,
             timeout_s=120.0,
         )
         _progress("container start command returned")
@@ -454,9 +462,6 @@ def _bring_up_lms(base_url: str) -> None:
         ).strip()
         raise LiveLmsError(msg) from err
 
-    parsed = urlparse(base_url)
-    host = str(parsed.hostname)
-    port = int(parsed.port) if parsed.port else 9000
     _progress(f"waiting for TCP endpoint {host}:{port}")
     _wait_for_port(host, port)
 
@@ -612,7 +617,11 @@ def lyrion_live_lms_endpoint(pytestconfig: pytest.Config) -> Generator[LiveLmsEn
     endpoint = LiveLmsEndpoint(
         host=parsed.hostname,
         port=parsed.port,
-        base_url=f"{parsed.scheme}://{parsed.hostname}:{parsed.port}",
+        base_url=(
+            f"{parsed.scheme}://[{parsed.hostname}]:{parsed.port}"
+            if ":" in parsed.hostname
+            else f"{parsed.scheme}://{parsed.hostname}:{parsed.port}"
+        ),
     )
 
     try:

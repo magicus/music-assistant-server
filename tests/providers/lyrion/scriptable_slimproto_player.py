@@ -85,6 +85,7 @@ class ScriptableSlimProtoPlayer:
         self._mac_address = bytes.fromhex(live_mac.replace(":", ""))
         self._slimproto_writer: tuple[asyncio.StreamReader, asyncio.StreamWriter] | None = None
         self._last_ir_send_time: float = 0.0
+        self._ir_button_codes = dict(self._IR_BUTTON_CODES)
         self._server_state_listener: Callable[[str, dict[str, Any]], None] | None = None
         if self.endpoint.fake_server is not None:
             self._server_state_listener = self._on_server_state_changed
@@ -198,7 +199,7 @@ class ScriptableSlimProtoPlayer:
 
     async def press_ir_button(self, button: str) -> None:
         """Send one named IR button using the built-in symbolic mapping."""
-        ir_code = self._IR_BUTTON_CODES.get(button)
+        ir_code = self._ir_button_codes.get(button)
         if ir_code is None:
             msg = f"Unsupported slimproto IR button: {button}"
             raise ValueError(msg)
@@ -210,7 +211,7 @@ class ScriptableSlimProtoPlayer:
 
     def register_ir_button(self, button: str, ir_code: int) -> None:
         """Register or override one named IR button mapping for a test scenario."""
-        self._IR_BUTTON_CODES[button] = ir_code
+        self._ir_button_codes[button] = ir_code
 
     def is_playing(self) -> bool:
         """Return whether this fake player currently interprets itself as playing."""

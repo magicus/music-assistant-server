@@ -20,6 +20,7 @@
   },
   "errors": {
     "host_required": "Please enter a Lyrion hostname or IP address.",
+    "host_unresolvable": "Unable to resolve {0}, make sure the address is resolvable.",
     "invalid_port": "Port must be a number between 1 and 65535.",
     "endpoint_unreachable": "Could not connect to this endpoint. Check host, port, and that Lyrion is running.",
     "endpoint_not_lyrion": "Connected, but this is not a valid Lyrion JSON-RPC endpoint.",

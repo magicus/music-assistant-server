@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from typing import Any, Self
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from music_assistant_models.errors import ProviderUnavailableError
@@ -47,6 +47,8 @@ def _provider(
 
     provider.get_setup_value = Mock(side_effect=_get_setup_value)
     provider.mass.http_session.get = Mock()
+    provider.mass.cache.get = AsyncMock(return_value=None)
+    provider.mass.cache.set = AsyncMock(return_value=None)
     return provider
 
 
