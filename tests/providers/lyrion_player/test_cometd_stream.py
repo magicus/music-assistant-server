@@ -13,6 +13,7 @@ from music_assistant_models.errors import ProviderUnavailableError
 from music_assistant.providers.lyrion.lyrion_cometd import LyrionCometDEventStream
 from music_assistant.providers.lyrion_player.cometd_events import LmsPlayerPlaylistChangedEvent
 from music_assistant.providers.lyrion_player.provider import LyrionPlayerProvider
+from tests.providers.lyrion.fake_lms_server import FakeLmsServer
 from tests.providers.lyrion.rpc_test_doubles import FakeResponse
 
 
@@ -388,6 +389,42 @@ async def test_active_state_timeout_triggers_implicit_recovery() -> None:
     await stream._run_expectation_tick()
 
     assert calls == [("player_a", "active-state timeout")]
+
+
+async def test_verify_player_status_expectation_falls_back_to_polling_with_fake_lms(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fallback polling should recover state when CometD stays silent."""
+    provider = _StubProvider(["player_a"])
+    stream = LyrionCometDEventStream(cast("Any", provider), _noop_event_callback)
+    fake_server = FakeLmsServer()
+    await fake_server.connect_player("player_a", "Kitchen", "test")
+
+    polls = 0
+
+    async def _get_player_status(player_id: str) -> dict[str, Any]:
+        nonlocal polls
+        polls += 1
+        if polls == 2:
+            fake_server.set_player_mode(player_id, "play")
+        return await fake_server.handle_jsonrpc_command(player_id, ["status", "-", 1])
+
+    provider.get_player_status = AsyncMock(side_effect=_get_player_status)
+    monkeypatch.setattr(
+        stream,
+        "wait_for_player_status_update",
+        AsyncMock(return_value=False),
+    )
+
+    assert await stream.verify_player_status_expectation(
+        "player_a",
+        baseline=None,
+        expectation=lambda status: status.get("mode") == "play",
+        expected_state="play",
+    )
+    assert polls == 2
+    assert stream.get_player_status_snapshot("player_a") is not None
+    assert stream.get_player_status_snapshot("player_a")["mode"] == "play"
 
 
 @pytest.mark.parametrize("body", [None, 1, "oops"])
