@@ -418,42 +418,6 @@ class LyrionPlayerProvider(PlayerProvider):
             expected_state,
         )
 
-    async def play_player_with_verify(self, player_id: str) -> None:
-        """Resume playback and verify mode transition to play."""
-        await self.lyrion_server.play_player_with_verify(player_id)
-
-    async def pause_player_with_verify(self, player_id: str) -> None:
-        """Pause playback and verify mode transition to pause."""
-        await self.lyrion_server.pause_player_with_verify(player_id)
-
-    async def stop_player_with_verify(self, player_id: str) -> None:
-        """Stop playback and verify mode transition to stop."""
-        await self.lyrion_server.stop_player_with_verify(player_id)
-
-    async def set_player_power_with_verify(self, player_id: str, powered: bool) -> None:
-        """Set power and verify power status."""
-        await self.lyrion_server.set_player_power_with_verify(player_id, powered)
-
-    async def set_player_volume_with_verify(self, player_id: str, volume_level: int) -> None:
-        """Set volume and verify mixer volume."""
-        await self.lyrion_server.set_player_volume_with_verify(player_id, volume_level)
-
-    async def set_player_muted_with_verify(self, player_id: str, muted: bool) -> None:
-        """Set mute and verify mixer muting status."""
-        await self.lyrion_server.set_player_muted_with_verify(player_id, muted)
-
-    async def next_player_track_with_verify(self, player_id: str) -> None:
-        """Skip to next track and verify queue index transition."""
-        await self.lyrion_server.next_player_track_with_verify(player_id)
-
-    async def previous_player_track_with_verify(self, player_id: str) -> None:
-        """Skip to previous track and verify queue index transition."""
-        await self.lyrion_server.previous_player_track_with_verify(player_id)
-
-    async def seek_player_with_verify(self, player_id: str, position: int) -> None:
-        """Seek playback and verify time progression near target."""
-        await self.lyrion_server.seek_player_with_verify(player_id, position)
-
     async def send_player_command(
         self,
         player_id: str,
