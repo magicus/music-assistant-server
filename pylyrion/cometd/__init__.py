@@ -27,7 +27,6 @@ from .player_status_events import (
 )
 from .recovery import _CometDRecoveryMixin
 from .status import _CometDStatusMixin
-from .status_stream import PlayerStatusStream
 from .stream_core import CometDEventStreamCore
 
 __all__ = [
@@ -41,7 +40,6 @@ __all__ = [
     "PlayerRepeatChanged",
     "PlayerSeeked",
     "PlayerShuffleChanged",
-    "PlayerStatusStream",
     "PlayerStatusUpdated",
     "PlayerVolumeChanged",
     "StatusPayload",

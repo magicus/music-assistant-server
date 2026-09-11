@@ -22,10 +22,10 @@ from music_assistant.providers.lyrion.client import build_lms_url, rpc_request
 from music_assistant.providers.lyrion.constants import STATUS_COMMAND_VERIFY_TIMEOUT
 from music_assistant.providers.lyrion.setup_flow import validate_lms_endpoint
 from pylyrion.client import LyrionClient
-from pylyrion.cometd import PlayerStatusStream
 from pylyrion.errors import LyrionProtocolError, LyrionRequestError, LyrionTimeoutError
 from pylyrion.models import LyrionEndpoint
 from pylyrion.session import LyrionSession
+from pylyrion.status_stream import PlayerStatusStream
 
 from .constants import (
     CONF_FALLBACK_POLLING,
