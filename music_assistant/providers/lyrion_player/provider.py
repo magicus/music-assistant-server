@@ -23,7 +23,15 @@ from music_assistant.providers.lyrion.lyrion_cometd import LyrionCometDEventStre
 from music_assistant.providers.lyrion.setup_flow import validate_lms_endpoint
 
 from .cometd_event_adapter import LyrionCometDEventAdapter
-from .constants import CONF_LMS_HOST, CONF_LMS_PORT, DEFAULT_LMS_PORT, PLAYERS_BATCH_SIZE
+from .constants import (
+    CONF_FALLBACK_POLLING,
+    CONF_FALLBACK_POLLING_INTERVAL,
+    CONF_LMS_HOST,
+    CONF_LMS_PORT,
+    DEFAULT_FALLBACK_POLLING_INTERVAL,
+    DEFAULT_LMS_PORT,
+    PLAYERS_BATCH_SIZE,
+)
 from .player import LyrionPlayer
 
 
@@ -62,6 +70,21 @@ class LyrionPlayerProvider(PlayerProvider):
                 required=False,
                 read_only=True,
                 value=configured_port,
+            ),
+            ConfigEntry(
+                key=CONF_FALLBACK_POLLING,
+                type=ConfigEntryType.BOOLEAN,
+                required=False,
+                default_value=False,
+                advanced=True,
+            ),
+            ConfigEntry(
+                key=CONF_FALLBACK_POLLING_INTERVAL,
+                type=ConfigEntryType.INTEGER,
+                required=False,
+                default_value=DEFAULT_FALLBACK_POLLING_INTERVAL,
+                range=(5, 300),
+                advanced=True,
             ),
         )
 

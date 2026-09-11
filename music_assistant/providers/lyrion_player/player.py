@@ -23,7 +23,12 @@ from music_assistant_models.player import DeviceInfo
 from music_assistant.helpers.util import is_valid_mac_address
 from music_assistant.models.player import Player, PlayerMedia
 
-from .constants import PLAYER_SUPPORTED_FEATURES
+from .constants import (
+    CONF_FALLBACK_POLLING,
+    CONF_FALLBACK_POLLING_INTERVAL,
+    DEFAULT_FALLBACK_POLLING_INTERVAL,
+    PLAYER_SUPPORTED_FEATURES,
+)
 from .queue import LyrionQueueSync
 
 if TYPE_CHECKING:
@@ -73,13 +78,25 @@ class LyrionPlayer(Player):
 
     @property
     def needs_poll(self) -> bool:
-        """Return False because runtime sync is primarily CometD-driven."""
-        return False
+        """Return whether MA should periodically poll this player for state."""
+        return bool(
+            self.provider.get_config_value(
+                CONF_FALLBACK_POLLING,
+                False,
+                return_type=bool,
+            )
+        )
 
     @property
     def poll_interval(self) -> int:
         """Return state poll interval in seconds."""
-        return 5 if self._attr_playback_state == PlaybackState.PLAYING else 20
+        return int(
+            self.provider.get_config_value(
+                CONF_FALLBACK_POLLING_INTERVAL,
+                DEFAULT_FALLBACK_POLLING_INTERVAL,
+                return_type=int,
+            )
+        )
 
     async def poll(self) -> None:
         """Poll runtime status from LMS when explicitly invoked."""

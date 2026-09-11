@@ -39,6 +39,26 @@ def player(mock_provider: MagicMock) -> LyrionPlayer:
     return LyrionPlayer(mock_provider, "test_player", {})
 
 
+def test_fallback_polling_setting_controls_needs_poll_and_interval(
+    player: LyrionPlayer, mock_provider: MagicMock
+) -> None:
+    """Provider fallback polling should be a shared toggle for all Lyrion players."""
+    mock_provider.get_config_value.side_effect = lambda key, default=None, **_kwargs: {
+        "fallback_polling": True,
+        "fallback_polling_interval": 17,
+    }.get(key, default)
+
+    assert player.needs_poll is True
+    assert player.poll_interval == 17
+
+    mock_provider.get_config_value.side_effect = lambda key, default=None, **_kwargs: {
+        "fallback_polling": False,
+        "fallback_polling_interval": 23,
+    }.get(key, default)
+
+    assert player.needs_poll is False
+
+
 @pytest.fixture
 def player_provider() -> MagicMock:
     """Return a provider stub for route-level tests."""

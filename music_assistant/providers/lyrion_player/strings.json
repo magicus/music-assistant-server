@@ -7,6 +7,14 @@
     "port": {
       "label": "Lyrion JSON-RPC port",
       "description": "Port to reach Lyrion control interface, typically 9000"
+    },
+    "fallback_polling": {
+      "label": "Use fallback polling",
+      "description": "Also poll player state periodically in case CometD updates are delayed or missed"
+    },
+    "fallback_polling_interval": {
+      "label": "Fallback polling interval",
+      "description": "How often to poll player state when fallback polling is enabled, in seconds"
     }
   },
   "errors": {
