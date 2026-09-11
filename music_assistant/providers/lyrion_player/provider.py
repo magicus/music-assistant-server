@@ -18,7 +18,7 @@ from music_assistant_models.errors import (
 )
 
 from music_assistant.models.player_provider import PlayerProvider
-from music_assistant.providers.lyrion.client import build_lms_url, rpc_request
+from music_assistant.providers.lyrion.client import build_lms_url
 from music_assistant.providers.lyrion.constants import STATUS_COMMAND_VERIFY_TIMEOUT
 from music_assistant.providers.lyrion.setup_flow import validate_lms_endpoint
 from pylyrion.client import LyrionClient
@@ -178,14 +178,7 @@ class LyrionPlayerProvider(PlayerProvider):
 
         offset = 0
         while True:
-            result = await self._rpc_request(
-                player_id="",
-                command=["players", offset, PLAYERS_BATCH_SIZE],
-            )
-            players = cast(
-                "list[dict[str, Any]]",
-                result.get("players_loop", []),
-            )
+            players = await self.lyrion_server.get_players_page(offset, PLAYERS_BATCH_SIZE)
             if not players:
                 break
 
@@ -579,14 +572,6 @@ class LyrionPlayerProvider(PlayerProvider):
             raise web.HTTPNotFound(reason="Unable to resolve stream URL") from err
 
         raise web.HTTPFound(location=stream_url)
-
-    async def _rpc_request(
-        self,
-        player_id: str,
-        command: list[Any],
-    ) -> dict[str, Any]:
-        """Execute one LMS JSON-RPC request via the shared Lyrion transport."""
-        return await rpc_request(self, player_id=player_id, command=command)
 
     def _build_pylyrion_client(self) -> LyrionClient:
         """Build a pylyrion client from current MA provider config."""

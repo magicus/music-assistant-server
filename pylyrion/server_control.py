@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import Any, cast
+from typing import Any, TypeVar, cast
 
 from pylyrion.errors import LyrionProtocolError, LyrionRequestError, LyrionTimeoutError
 from pylyrion.player import LyrionPlayerClient
 from pylyrion.status_stream import PlayerStatusStream
+
+ResultType = TypeVar("ResultType")
 
 
 class LyrionServerControl:
@@ -34,6 +36,10 @@ class LyrionServerControl:
     async def get_player_status(self, player_id: str) -> dict[str, Any]:
         """Return runtime status for one player."""
         return await self._run_player_call(lambda: self._players.get_status(player_id))
+
+    async def get_players_page(self, offset: int, limit: int) -> list[dict[str, Any]]:
+        """Return one paged LMS player listing."""
+        return await self._run_player_call(lambda: self._players.get_players_page(offset, limit))
 
     async def play_player(self, player_id: str) -> dict[str, Any]:
         """Resume playback for one player."""
@@ -413,14 +419,14 @@ class LyrionServerControl:
 
     async def _run_player_call(
         self,
-        callback: Callable[[], Awaitable[dict[str, object]]],
-    ) -> dict[str, Any]:
+        callback: Callable[[], Awaitable[ResultType]],
+    ) -> ResultType:
         """Run one player-client call and normalize error mapping."""
         try:
             result = await callback()
         except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
             raise self._unavailable_error_factory(err) from err
-        return cast("dict[str, Any]", result)
+        return result
 
 
 def _get_status_str(status: dict[str, Any], key: str) -> str | None:

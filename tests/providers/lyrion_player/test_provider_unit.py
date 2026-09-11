@@ -150,15 +150,13 @@ async def test_discover_players_registers_new_and_unloads_missing() -> None:
     known_gone_player = SimpleNamespace(player_id="gone")
     players.iter_players = MagicMock(return_value=[known_gone_player])
 
-    provider._rpc_request = AsyncMock(
+    provider.lyrion_server.get_players_page = AsyncMock(
         side_effect=[
-            {
-                "players_loop": [
-                    {"playerid": "new-1", "name": "Kitchen", "model": "Squeeze"},
-                    {"playerid": "new-2", "name": "Office", "model": "Squeeze"},
-                ]
-            },
-            {"players_loop": []},
+            [
+                {"playerid": "new-1", "name": "Kitchen", "model": "Squeeze"},
+                {"playerid": "new-2", "name": "Office", "model": "Squeeze"},
+            ],
+            [],
         ]
     )
 
@@ -371,20 +369,6 @@ async def test_handle_get_stream_url_rejects_foreign_provider_player() -> None:
 
 
 @pytest.mark.asyncio
-async def test_rpc_request_wrapper_calls_shared_client() -> None:
-    """Provider RPC wrapper should call shared transport helper."""
-    provider = _build_provider_stub()
-    with patch(
-        "music_assistant.providers.lyrion_player.provider.rpc_request",
-        new=AsyncMock(return_value={"ok": True}),
-    ) as rpc:
-        result = await provider._rpc_request("p1", ["status", "-", 1])
-
-    assert result == {"ok": True}
-    rpc.assert_awaited_once_with(provider, player_id="p1", command=["status", "-", 1])
-
-
-@pytest.mark.asyncio
 async def test_run_discover_players_loop_handles_retrigger_and_unloading() -> None:
     """Discovery loop should repeat once on retrigger and skip when unloading."""
     provider = _build_provider_stub()
@@ -453,15 +437,13 @@ async def test_discover_players_handles_missing_ids_existing_players_and_paging(
     provider.mass.players.get_player = MagicMock(
         side_effect=lambda player_id: existing if player_id == "existing" else None
     )
-    provider._rpc_request = AsyncMock(
+    provider.lyrion_server.get_players_page = AsyncMock(
         side_effect=[
-            {
-                "players_loop": [
-                    {},
-                    {"playerid": "existing", "name": "Kitchen", "model": "x"},
-                ]
-            },
-            {"players_loop": []},
+            [
+                {},
+                {"playerid": "existing", "name": "Kitchen", "model": "x"},
+            ],
+            [],
         ]
     )
 
@@ -646,14 +628,11 @@ def test_handle_discover_players_done_ignores_cancelled_task() -> None:
 async def test_discover_players_breaks_immediately_when_lms_returns_no_players() -> None:
     """Discovery loop should stop when first page has no players_loop entries."""
     provider = _build_provider_stub()
-    provider._rpc_request = AsyncMock(return_value={"players_loop": []})
+    provider.lyrion_server.get_players_page = AsyncMock(return_value=[])
 
     await provider.discover_players()
 
-    provider._rpc_request.assert_awaited_once_with(
-        player_id="",
-        command=["players", 0, PLAYERS_BATCH_SIZE],
-    )
+    provider.lyrion_server.get_players_page.assert_awaited_once_with(0, PLAYERS_BATCH_SIZE)
 
 
 @pytest.mark.asyncio
@@ -664,14 +643,9 @@ async def test_discover_players_advances_offset_on_full_page() -> None:
         {"playerid": f"p{idx}", "name": f"P{idx}", "model": "Squeeze"}
         for idx in range(PLAYERS_BATCH_SIZE)
     ]
-    provider._rpc_request = AsyncMock(
-        side_effect=[
-            {"players_loop": first_page},
-            {"players_loop": []},
-        ]
-    )
+    provider.lyrion_server.get_players_page = AsyncMock(side_effect=[first_page, []])
 
     await provider.discover_players()
 
-    assert provider._rpc_request.await_count == 2
-    assert provider._rpc_request.await_args_list[1].kwargs["command"][1] == PLAYERS_BATCH_SIZE
+    assert provider.lyrion_server.get_players_page.await_count == 2
+    assert provider.lyrion_server.get_players_page.await_args_list[1].args[0] == PLAYERS_BATCH_SIZE

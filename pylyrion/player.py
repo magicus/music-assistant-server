@@ -20,6 +20,14 @@ class LyrionPlayerClient:
         result = await self._session.request(player_id, ["status", "-", 1])
         return dict(result)
 
+    async def get_players_page(self, offset: int, limit: int) -> list[dict[str, object]]:
+        """Return one paged LMS player listing."""
+        result = await self._session.request("", ["players", offset, limit])
+        players_loop = result.get("players_loop")
+        if not isinstance(players_loop, list):
+            return []
+        return [player for player in players_loop if isinstance(player, dict)]
+
     async def send_command(
         self,
         player_id: str,
