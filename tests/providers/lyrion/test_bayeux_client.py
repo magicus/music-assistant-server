@@ -5,7 +5,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock
 
 import pytest
-from music_assistant_models.errors import ProviderUnavailableError
+from pylyrion.errors import LyrionRequestError
 
 from music_assistant.providers.lyrion.bayeux_client import BayeuxClient
 
@@ -42,7 +42,7 @@ async def test_handshake_rejects_empty_unsuccessful_or_missing_client_id() -> No
         [{"successful": True, "clientId": ""}],
     ):
         client = BayeuxClient(AsyncMock(return_value=response))
-        with pytest.raises(ProviderUnavailableError):
+        with pytest.raises(LyrionRequestError):
             await client.handshake(timeout=5)
 
 
@@ -50,11 +50,11 @@ async def test_handshake_rejects_empty_unsuccessful_or_missing_client_id() -> No
 async def test_subscribe_meta_and_publish_validate_successful_responses() -> None:
     """Meta subscribe and publish should reject unsuccessful/empty responses."""
     client = BayeuxClient(AsyncMock(return_value=[]))
-    with pytest.raises(ProviderUnavailableError):
+    with pytest.raises(LyrionRequestError):
         await client.subscribe_meta("cid", "/cid/**", timeout=5)
 
     client = BayeuxClient(AsyncMock(return_value=[{"successful": False}]))
-    with pytest.raises(ProviderUnavailableError):
+    with pytest.raises(LyrionRequestError):
         await client.publish("/slim/subscribe", "cid", {"k": "v"}, timeout=5)
 
 

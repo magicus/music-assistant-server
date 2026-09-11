@@ -43,3 +43,8 @@
 - URL queue add fallback moved from MA adapter into pylyrion as a named player operation (`add_url_to_queue`) to keep MA queue sync transport-thin.
 	- Current split: pylyrion owns LMS metadata-command fallback behavior; MA adapter passes through queue metadata fields.
 	- Future option: introduce a dedicated pylyrion queue facade once larger queue domain pieces leave MA.
+
+- CometD extraction focus moved to a larger chunk: Bayeux client plus CometD helper/recovery/status layers moved into `pylyrion/cometd`.
+	- Chosen now: keep `music_assistant/providers/lyrion/cometd/stream.py` in MA temporarily because it emits MA event classes directly, while importing its protocol internals from `pylyrion`.
+	- Alternative A: move the stream class as-is and let pylyrion depend on MA event models (rejected due MA leakage).
+	- Alternative B: fully move stream to pylyrion with a neutral event callback contract and a thin MA event-adapter wrapper (target for next bigger chunk).

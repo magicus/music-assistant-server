@@ -10,9 +10,9 @@ from typing import TYPE_CHECKING
 from aiohttp import ClientError, ClientTimeout
 from music_assistant_models.errors import MusicAssistantError, ProviderUnavailableError
 
-from ..bayeux_client import BayeuxClient
 from ..client import build_lms_url
-from ..constants import (
+from pylyrion.cometd.bayeux_client import BayeuxClient
+from pylyrion.cometd.constants import (
     COMETD_COMMAND_STATUS_BACKOFF,
     COMETD_CONNECT_TIMEOUT,
     COMETD_PLAYERSTATUS_SUBSCRIBE_INTERVAL,
@@ -23,7 +23,7 @@ from ..constants import (
     COMETD_STATUS_WATCHDOG_INTERVAL,
     RPC_TIMEOUT,
 )
-from .helpers import (
+from pylyrion.cometd.helpers import (
     LmsPlayerEventCallback,
     StatusPayload,
     _get_float,
@@ -33,8 +33,9 @@ from .helpers import (
     _is_invalid_player_payload,
     _same_active_track,
 )
-from .recovery import _CometDRecoveryMixin
-from .status import _CometDStatusMixin
+from pylyrion.cometd.recovery import _CometDRecoveryMixin
+from pylyrion.cometd.status import _CometDStatusMixin
+from pylyrion.errors import LyrionRequestError
 
 if TYPE_CHECKING:
     from music_assistant.providers.lyrion_player.provider import LyrionPlayerProvider
@@ -108,7 +109,7 @@ class LyrionCometDEventStream(_CometDStatusMixin, _CometDRecoveryMixin):
             self._expectation_task = None
 
         if self._client_id is not None:
-            with suppress(ProviderUnavailableError):
+            with suppress(ProviderUnavailableError, LyrionRequestError):
                 await self._bayeux.disconnect(self._client_id, RPC_TIMEOUT)
 
         self._reset_session_state()
@@ -197,7 +198,7 @@ class LyrionCometDEventStream(_CometDStatusMixin, _CometDRecoveryMixin):
                 return
             try:
                 await self._run_session()
-            except ProviderUnavailableError as err:
+            except (ProviderUnavailableError, LyrionRequestError) as err:
                 self.provider.logger.debug(
                     "CometD listener cycle failed: %s",
                     err,
@@ -264,7 +265,7 @@ class LyrionCometDEventStream(_CometDStatusMixin, _CometDRecoveryMixin):
                 continue
             try:
                 await self._subscribe_player_status(player_id)
-            except ProviderUnavailableError:
+            except (ProviderUnavailableError, LyrionRequestError):
                 failed.append(player_id)
 
         for player_id in failed:
