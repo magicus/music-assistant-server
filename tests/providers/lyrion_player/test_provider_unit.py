@@ -488,6 +488,9 @@ async def test_transport_adapter_methods_use_pylyrion_client() -> None:
     player_client.players.pause = AsyncMock(return_value={})
     player_client.players.stop = AsyncMock(return_value={})
     player_client.players.set_power = AsyncMock(return_value={})
+    player_client.players.sync_to = AsyncMock(return_value={})
+    player_client.players.unsync = AsyncMock(return_value={})
+    player_client.players.get_queue_status = AsyncMock(return_value={})
 
     with patch(
         "music_assistant.providers.lyrion_player.provider.LyrionClient",
@@ -497,11 +500,21 @@ async def test_transport_adapter_methods_use_pylyrion_client() -> None:
         await provider.pause_player("p1")
         await provider.stop_player("p1")
         await provider.set_player_power("p1", True)
+        await provider.sync_player_to("p2", "p1")
+        await provider.unsync_player("p2")
+        await provider.get_player_queue_status("p1", limit=123)
 
     player_client.players.play.assert_awaited_once_with("p1")
     player_client.players.pause.assert_awaited_once_with("p1")
     player_client.players.stop.assert_awaited_once_with("p1")
     player_client.players.set_power.assert_awaited_once_with("p1", True)
+    player_client.players.sync_to.assert_awaited_once_with("p2", "p1")
+    player_client.players.unsync.assert_awaited_once_with("p2")
+    player_client.players.get_queue_status.assert_awaited_once_with(
+        "p1",
+        offset=0,
+        limit=123,
+    )
 
 
 @pytest.mark.asyncio

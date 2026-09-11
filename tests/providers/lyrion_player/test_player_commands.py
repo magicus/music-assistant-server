@@ -40,6 +40,9 @@ def mock_provider() -> MagicMock:
     provider.pause_player = AsyncMock()
     provider.stop_player = AsyncMock()
     provider.set_player_power = AsyncMock()
+    provider.sync_player_to = AsyncMock()
+    provider.unsync_player = AsyncMock()
+    provider.get_player_queue_status = AsyncMock(return_value={"mode": "play"})
     provider.get_last_cometd_status_seen_at = MagicMock(return_value=0.0)
     provider.get_cached_cometd_status = MagicMock(return_value={"playlist_cur_index": 0})
     provider.wait_for_cometd_status_update = AsyncMock(return_value=True)
@@ -403,14 +406,8 @@ async def test_set_members_dispatches_sync_commands(
         player_ids_to_remove=["member_a"],
     )
 
-    assert mock_provider.send_player_command.await_args_list[0].args == (
-        "member_a",
-        ["sync", "-"],
-    )
-    assert mock_provider.send_player_command.await_args_list[1].args == (
-        "member_b",
-        ["sync", "test_player"],
-    )
+    mock_provider.unsync_player.assert_awaited_once_with("member_a")
+    mock_provider.sync_player_to.assert_awaited_once_with("member_b", "test_player")
     assert player.group_members == ["test_player", "member_b"]
 
 
@@ -437,7 +434,7 @@ async def test_set_members_wraps_provider_unavailable(
     player: LyrionPlayer, mock_provider: MagicMock
 ) -> None:
     """Provider failures while changing sync members are wrapped."""
-    mock_provider.send_player_command.side_effect = ProviderUnavailableError("offline")
+    mock_provider.sync_player_to.side_effect = ProviderUnavailableError("offline")
 
     with pytest.raises(PlayerCommandFailed, match="set_members failed"):
         await player.set_members(player_ids_to_add=["member_a"])

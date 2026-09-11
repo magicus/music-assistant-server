@@ -43,3 +43,20 @@ class LyrionPlayerClient:
     async def set_power(self, player_id: str, powered: bool) -> dict[str, object]:
         """Set power state for one player."""
         return await self.send_command(player_id, ["power", 1 if powered else 0])
+
+    async def unsync(self, player_id: str) -> dict[str, object]:
+        """Remove one player from its current LMS sync group."""
+        return await self.send_command(player_id, ["sync", "-"])
+
+    async def sync_to(self, player_id: str, leader_player_id: str) -> dict[str, object]:
+        """Join one player to another LMS sync leader."""
+        return await self.send_command(player_id, ["sync", leader_player_id])
+
+    async def get_queue_status(
+        self,
+        player_id: str,
+        offset: int = 0,
+        limit: int = 500,
+    ) -> dict[str, object]:
+        """Return LMS status payload with queue rows for one player."""
+        return await self.send_command(player_id, ["status", offset, limit])

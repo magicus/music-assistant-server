@@ -24,6 +24,7 @@ def _build_queue_sync() -> tuple[LyrionQueueSync, Any]:
     """Create queue-sync instance with lightweight stubs."""
     provider = SimpleNamespace(
         send_player_command=AsyncMock(),
+        get_player_queue_status=AsyncMock(),
         build_stream_redirect_url=MagicMock(return_value="http://redirect/item"),
     )
     player = SimpleNamespace(
@@ -99,7 +100,9 @@ async def test_collect_ma_snapshot_uses_queue_state_and_entries() -> None:
 async def test_collect_lms_snapshot_returns_none_on_provider_unavailable() -> None:
     """LMS snapshot collection should gracefully handle temporary provider outages."""
     queue_sync, player = _build_queue_sync()
-    player.provider.send_player_command = AsyncMock(side_effect=ProviderUnavailableError("down"))
+    player.provider.get_player_queue_status = AsyncMock(
+        side_effect=ProviderUnavailableError("down")
+    )
 
     assert await queue_sync._collect_lms_snapshot() is None
 
@@ -853,7 +856,7 @@ async def test_collect_lms_snapshot_parses_status_on_success() -> None:
     """LMS snapshot collection should parse status payload on successful command."""
     queue_sync, player = _build_queue_sync()
     status = {"playlist_loop": []}
-    player.provider.send_player_command = AsyncMock(return_value=status)
+    player.provider.get_player_queue_status = AsyncMock(return_value=status)
     expected = _LmsQueueSnapshot((), 0, 0, 0, "stop")
     queue_sync._parse_lms_queue_state = Mock(return_value=expected)
 

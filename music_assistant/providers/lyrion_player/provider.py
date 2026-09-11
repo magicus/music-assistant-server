@@ -250,6 +250,44 @@ class LyrionPlayerProvider(PlayerProvider):
         except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
             raise ProviderUnavailableError(str(err)) from err
 
+    async def sync_player_to(
+        self,
+        player_id: str,
+        leader_player_id: str,
+    ) -> dict[str, Any]:
+        """Join one player to an LMS sync leader via pylyrion."""
+        try:
+            return await self._build_pylyrion_client().players.sync_to(
+                player_id,
+                leader_player_id,
+            )
+        except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
+            raise ProviderUnavailableError(str(err)) from err
+
+    async def unsync_player(self, player_id: str) -> dict[str, Any]:
+        """Remove one player from LMS sync grouping via pylyrion."""
+        try:
+            return await self._build_pylyrion_client().players.unsync(player_id)
+        except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
+            raise ProviderUnavailableError(str(err)) from err
+
+    async def get_player_queue_status(
+        self,
+        player_id: str,
+        *,
+        offset: int = 0,
+        limit: int,
+    ) -> dict[str, Any]:
+        """Return queue-inclusive LMS status via pylyrion."""
+        try:
+            return await self._build_pylyrion_client().players.get_queue_status(
+                player_id,
+                offset=offset,
+                limit=limit,
+            )
+        except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
+            raise ProviderUnavailableError(str(err)) from err
+
     def apply_status_update(
         self,
         player: LyrionPlayer,

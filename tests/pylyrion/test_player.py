@@ -71,9 +71,15 @@ async def test_player_client_transport_methods_dispatch_expected_commands() -> N
     await client.pause("player1")
     await client.stop("player1")
     await client.set_power("player1", True)
+    await client.unsync("player1")
+    await client.sync_to("player1", "leader1")
+    await client.get_queue_status("player1", offset=0, limit=33)
 
     calls = [call.kwargs["json"]["params"] for call in transport.post.call_args_list]
     assert calls[0] == ["player1", ["play"]]
     assert calls[1] == ["player1", ["pause", 1]]
     assert calls[2] == ["player1", ["stop"]]
     assert calls[3] == ["player1", ["power", 1]]
+    assert calls[4] == ["player1", ["sync", "-"]]
+    assert calls[5] == ["player1", ["sync", "leader1"]]
+    assert calls[6] == ["player1", ["status", 0, 33]]

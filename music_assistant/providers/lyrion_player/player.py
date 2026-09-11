@@ -373,14 +373,14 @@ class LyrionPlayer(Player):
                     continue
                 if member_id not in current_members:
                     continue
-                await self.provider.send_player_command(member_id, ["sync", "-"])
+                await self.provider.unsync_player(member_id)
                 touched_members.add(member_id)
                 current_members.pop(member_id, None)
 
             for member_id in dict.fromkeys(player_ids_to_add or []):
                 if member_id == self.player_id or member_id in current_members:
                     continue
-                await self.provider.send_player_command(member_id, ["sync", self.player_id])
+                await self.provider.sync_player_to(member_id, self.player_id)
                 touched_members.add(member_id)
                 current_members[member_id] = None
         except ProviderUnavailableError as err:

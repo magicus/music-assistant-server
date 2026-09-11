@@ -468,9 +468,10 @@ class LyrionQueueSync:
     async def _collect_lms_snapshot(self) -> _LmsQueueSnapshot | None:
         """Return one normalized LMS queue snapshot for this player."""
         try:
-            status = await self.player.provider.send_player_command(
+            status = await self.player.provider.get_player_queue_status(
                 self.player.player_id,
-                ["status", 0, MAX_SYNC_QUEUE_ITEMS],
+                offset=0,
+                limit=MAX_SYNC_QUEUE_ITEMS,
             )
         except ProviderUnavailableError:
             return None

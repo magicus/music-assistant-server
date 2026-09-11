@@ -22,3 +22,8 @@
 	- Chosen now: create a fresh pylyrion client per call to keep lifecycle coupling low and avoid hidden stale-session state while APIs are still moving.
 	- Alternative A: cache one client on provider load for lower call overhead.
 	- Alternative B: cache lazily with explicit invalidation on provider reload.
+
+- Whether queue-status reads and sync-group commands should continue as raw command arrays in MA queue/player code or become named pylyrion operations.
+	- Chosen now: expose them as named pylyrion player operations (`get_queue_status`, `sync_to`, `unsync`) and keep MA as a mapping adapter.
+	- Alternative A: keep raw command arrays in MA for now and only move transport mechanics.
+	- Alternative B: hide queue-status behind a future pylyrion queue domain object once more queue semantics move out of MA.
