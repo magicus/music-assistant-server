@@ -1,4 +1,4 @@
-"""Lyrion client helpers for RPC, paging and raw item retrieval."""
+"""Lyrion client helpers for paging, sync progress and MA model mapping."""
 
 from __future__ import annotations
 
@@ -20,7 +20,6 @@ from pylyrion.library import ALBUM_SPEC as PY_ALBUM_SPEC
 from pylyrion.library import ARTIST_SPEC as PY_ARTIST_SPEC
 from pylyrion.library import TRACK_SPEC as PY_TRACK_SPEC
 from pylyrion.library import LyrionLibraryClient
-from pylyrion.library import normalize_row as _normalize_lms_row
 from pylyrion.models import LyrionEndpoint
 from pylyrion.session import LyrionSession
 
@@ -109,9 +108,9 @@ async def get_artists_page(
         limit,
     )
     artists: list[Artist] = []
-    for raw_artist in page.items:
+    for artist_row in page.items:
         try:
-            artists.append(parsers.parse_artist(provider, _normalize_lms_row(raw_artist)))
+            artists.append(parsers.parse_artist(provider, artist_row))
         except MediaNotFoundError:
             continue
     return artists, page.has_more
@@ -131,9 +130,9 @@ async def get_albums_page(
         filter_value=filter_value,
     )
     albums: list[Album] = []
-    for raw_album in page.items:
+    for album_row in page.items:
         try:
-            albums.append(parsers.parse_album(provider, _normalize_lms_row(raw_album)))
+            albums.append(parsers.parse_album(provider, album_row))
         except MediaNotFoundError:
             continue
     return albums, page.has_more
@@ -153,9 +152,9 @@ async def get_tracks_page(
         filter_value=filter_value,
     )
     tracks: list[Track] = []
-    for raw_track in page.items:
+    for track_row in page.items:
         try:
-            tracks.append(parsers.parse_track(provider, _normalize_lms_row(raw_track)))
+            tracks.append(parsers.parse_track(provider, track_row))
         except MediaNotFoundError:
             continue
     return tracks, page.has_more
@@ -174,17 +173,14 @@ async def get_playlists_page(
         limit,
     )
     playlists: list[dict[str, str]] = []
-    for raw_playlist in page.items:
-        normalized_playlist = _normalize_lms_row(raw_playlist)
+    for playlist_row in page.items:
         playlist_id = parsers.extract_item_id(
-            normalized_playlist,
+            playlist_row,
             id_keys=("id", "playlist_id"),
         )
         if playlist_id is None:
             continue
-        playlist_name = (
-            normalized_playlist.get("playlist") or normalized_playlist.get("name") or playlist_id
-        )
+        playlist_name = playlist_row.get("playlist") or playlist_row.get("name") or playlist_id
         playlists.append({"id": playlist_id, "name": playlist_name})
     return playlists, page.has_more
 
@@ -202,15 +198,14 @@ async def get_genres_page(
         limit,
     )
     genres: list[dict[str, str]] = []
-    for raw_genre in page.items:
-        normalized_genre = _normalize_lms_row(raw_genre)
+    for genre_row in page.items:
         genre_id = parsers.extract_item_id(
-            normalized_genre,
+            genre_row,
             id_keys=("id", "genre_id"),
         )
         if genre_id is None:
             continue
-        genre_name = normalized_genre.get("genre") or normalized_genre.get("name") or genre_id
+        genre_name = genre_row.get("genre") or genre_row.get("name") or genre_id
         genres.append({"id": genre_id, "name": genre_name})
     return genres, page.has_more
 
@@ -273,23 +268,21 @@ async def get_playlist_tracks_page(
         limit=limit,
     )
     tracks: list[Track] = []
-    for raw_track in page.items:
-        normalized_track = _normalize_lms_row(raw_track)
-        if parsers.extract_item_id(normalized_track, id_keys=("id", "track_id")) is None:
+    for track_row in page.items:
+        if parsers.extract_item_id(track_row, id_keys=("id", "track_id")) is None:
             continue
-        tracks.append(parsers.parse_track(provider, normalized_track))
+        tracks.append(parsers.parse_track(provider, track_row))
     return tracks, page.has_more
 
 
 async def get_playlist_tracks(provider: LyrionMusicProvider, playlist_id: str) -> list[Track]:
     """Return all tracks for a playlist id."""
-    raw_tracks = await _build_library_client(provider).get_playlist_tracks(playlist_id)
+    track_rows = await _build_library_client(provider).get_playlist_tracks(playlist_id)
     tracks: list[Track] = []
-    for raw_track in raw_tracks:
-        normalized_track = _normalize_lms_row(raw_track)
-        if parsers.extract_item_id(normalized_track, id_keys=("id", "track_id")) is None:
+    for track_row in track_rows:
+        if parsers.extract_item_id(track_row, id_keys=("id", "track_id")) is None:
             continue
-        tracks.append(parsers.parse_track(provider, normalized_track))
+        tracks.append(parsers.parse_track(provider, track_row))
     return tracks
 
 
@@ -398,11 +391,10 @@ async def search_artists(provider: LyrionMusicProvider, query: str, limit: int) 
     library = _build_library_client(provider)
     result = await library.search_entities(PY_ARTIST_SPEC, query, limit)
     artists: list[Artist] = []
-    for raw_artist in result:
-        normalized_artist = _normalize_lms_row(raw_artist)
-        if parsers.extract_item_id(normalized_artist) is None:
+    for artist_row in result:
+        if parsers.extract_item_id(artist_row) is None:
             continue
-        artists.append(parsers.parse_artist(provider, normalized_artist))
+        artists.append(parsers.parse_artist(provider, artist_row))
     return artists
 
 
@@ -411,11 +403,10 @@ async def search_albums(provider: LyrionMusicProvider, query: str, limit: int) -
     library = _build_library_client(provider)
     result = await library.search_entities(PY_ALBUM_SPEC, query, limit)
     albums: list[Album] = []
-    for raw_album in result:
-        normalized_album = _normalize_lms_row(raw_album)
-        if parsers.extract_item_id(normalized_album) is None:
+    for album_row in result:
+        if parsers.extract_item_id(album_row) is None:
             continue
-        albums.append(parsers.parse_album(provider, normalized_album))
+        albums.append(parsers.parse_album(provider, album_row))
     return albums
 
 
@@ -424,27 +415,26 @@ async def search_tracks(provider: LyrionMusicProvider, query: str, limit: int) -
     library = _build_library_client(provider)
     result = await library.search_entities(PY_TRACK_SPEC, query, limit)
     tracks: list[Track] = []
-    for raw_track in result:
-        normalized_track = _normalize_lms_row(raw_track)
-        if parsers.extract_item_id(normalized_track) is None:
+    for track_row in result:
+        if parsers.extract_item_id(track_row) is None:
             continue
-        tracks.append(parsers.parse_track(provider, normalized_track))
+        tracks.append(parsers.parse_track(provider, track_row))
     return tracks
 
 
 async def get_artist_data(provider: LyrionMusicProvider, artist_id: str) -> Mapping[str, object]:
     """Get artist payload from LMS."""
-    return await _build_library_client(provider).get_entity_data(PY_ARTIST_SPEC, artist_id)
+    return await _build_library_client(provider).get_entity_row(PY_ARTIST_SPEC, artist_id)
 
 
 async def get_album_data(provider: LyrionMusicProvider, album_id: str) -> Mapping[str, object]:
     """Get album payload from LMS."""
-    return await _build_library_client(provider).get_entity_data(PY_ALBUM_SPEC, album_id)
+    return await _build_library_client(provider).get_entity_row(PY_ALBUM_SPEC, album_id)
 
 
 async def get_track_data(provider: LyrionMusicProvider, track_id: str) -> Mapping[str, object]:
     """Get track payload from LMS."""
-    return await _build_library_client(provider).get_entity_data(PY_TRACK_SPEC, track_id)
+    return await _build_library_client(provider).get_entity_row(PY_TRACK_SPEC, track_id)
 
 
 async def _get_entity_data(
@@ -452,10 +442,10 @@ async def _get_entity_data(
     spec: LmsEntitySpec,
     item_id: str,
 ) -> Mapping[str, str]:
-    """Fetch one raw entity payload by id using the shared lookup flow."""
+    """Fetch one normalized entity row by id using the shared lookup flow."""
     py_spec = _to_py_entity_spec(spec)
     try:
-        raw_item = await _build_library_client(provider).get_entity_data(py_spec, item_id)
+        row = await _build_library_client(provider).get_entity_row(py_spec, item_id)
     except LyrionRequestError as err:
         message = str(err)
         if "not found" in message.lower():
@@ -463,7 +453,7 @@ async def _get_entity_data(
         raise ProviderUnavailableError(message) from err
     except (LyrionProtocolError, LyrionTimeoutError) as err:
         raise ProviderUnavailableError(str(err)) from err
-    return _normalize_lms_row(raw_item)
+    return dict(row)
 
 
 def _to_py_entity_spec(spec: LmsEntitySpec):
@@ -479,23 +469,23 @@ async def _fetch_worker(
     provider: LyrionMusicProvider,
     spec: LmsEntitySpec,
     ordered_ids: list[str],
-    raw_queue: asyncio.Queue[Mapping[str, str] | object],
+    row_queue: asyncio.Queue[Mapping[str, str] | object],
     stop_sentinel: object,
     error_box: list[Exception],
 ) -> None:
     try:
-        async for raw_item in _iter_raw_entities(provider, spec, ordered_ids):
-            await raw_queue.put(raw_item)
+        async for row in _iter_entity_rows(provider, spec, ordered_ids):
+            await row_queue.put(row)
     except Exception as err:
         error_box.append(err)
     finally:
-        await raw_queue.put(stop_sentinel)
+        await row_queue.put(stop_sentinel)
 
 
 async def _decode_worker(
     provider: LyrionMusicProvider,
     spec: LmsEntitySpec,
-    raw_queue: asyncio.Queue[Mapping[str, str] | object],
+    row_queue: asyncio.Queue[Mapping[str, str] | object],
     decoded_queue: asyncio.Queue[Artist | Album | Track | object],
     stop_sentinel: object,
     artwork_worker_count: int,
@@ -503,7 +493,7 @@ async def _decode_worker(
 ) -> None:
     try:
         while True:
-            payload = await raw_queue.get()
+            payload = await row_queue.get()
             if payload is stop_sentinel:
                 break
             decoded = await _decode_entity(provider, spec, cast("Mapping[str, str]", payload))
@@ -553,7 +543,7 @@ async def _iter_entities(
         yield entity
         return
 
-    raw_queue: asyncio.Queue[Mapping[str, str] | object] = asyncio.Queue(maxsize=2)
+    row_queue: asyncio.Queue[Mapping[str, str] | object] = asyncio.Queue(maxsize=2)
     decoded_queue: asyncio.Queue[Artist | Album | Track | object] = asyncio.Queue(maxsize=2)
     output_queue: asyncio.Queue[Artist | Album | Track | object] = asyncio.Queue(maxsize=2)
     stop_sentinel = object()
@@ -572,7 +562,7 @@ async def _iter_entities(
                 provider,
                 spec,
                 ordered_ids,
-                raw_queue,
+                row_queue,
                 stop_sentinel,
                 error_box,
             )
@@ -581,7 +571,7 @@ async def _iter_entities(
             _decode_worker(
                 provider,
                 spec,
-                raw_queue,
+                row_queue,
                 decoded_queue,
                 stop_sentinel,
                 artwork_worker_count,
@@ -627,22 +617,22 @@ async def _iter_entities(
 async def _decode_entity(
     provider: LyrionMusicProvider,
     spec: LmsEntitySpec,
-    raw_item: Mapping[str, str],
+    entity_row: Mapping[str, str],
 ) -> Artist | Album | Track:
-    """Decode one raw LMS item into its MA model."""
+    """Decode one normalized LMS row into its MA model."""
     if spec.key == "artist":
-        return parsers.parse_artist(provider, raw_item)
+        return parsers.parse_artist(provider, entity_row)
     if spec.key == "album":
-        return parsers.parse_album(provider, raw_item)
-    return parsers.parse_track(provider, raw_item)
+        return parsers.parse_album(provider, entity_row)
+    return parsers.parse_track(provider, entity_row)
 
 
-async def _iter_raw_entities(
+async def _iter_entity_rows(
     provider: LyrionMusicProvider,
     spec: LmsEntitySpec,
     item_ids: list[str],
 ) -> AsyncGenerator[Mapping[str, str]]:
-    """Yield raw LMS entities in request order via the pylyrion lookup flow."""
+    """Yield normalized LMS rows in request order via pylyrion lookup."""
     ordered_ids = _normalize_lookup_ids(provider, spec, item_ids)
     total_items = len(ordered_ids)
     if total_items == 0:
@@ -659,12 +649,11 @@ async def _iter_raw_entities(
 
     try:
         index = 0
-        async for raw_item in _build_library_client(provider).iter_raw_entities(
+        async for row in _build_library_client(provider).iter_entity_rows(
             _to_py_entity_spec(spec),
             ordered_ids,
         ):
             index += 1
-            normalized_item = _normalize_lms_row(raw_item)
             if _should_report_lookup_progress():
                 fetch_text = f"Fetching {spec.key}s from Lyrion: {index}/{total_items}"
                 _update_weighted_sync_progress(
@@ -677,10 +666,10 @@ async def _iter_raw_entities(
             _log_lookup_response(
                 provider,
                 spec,
-                normalized_item,
+                row,
                 requested_id=requested_id,
             )
-            yield normalized_item
+            yield row
     except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
         raise ProviderUnavailableError(str(err)) from err
 

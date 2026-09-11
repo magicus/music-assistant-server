@@ -223,7 +223,7 @@ async def test_search_and_entity_data_delegate_to_pylyrion(monkeypatch: pytest.M
             [{"id": "t1", "title": "Track 1"}],
         ]
     )
-    library.get_entity_data = AsyncMock(
+    library.get_entity_row = AsyncMock(
         side_effect=[
             {"id": "a1", "artist": "Artist 1"},
             {"id": "al1", "album": "Album 1"},
@@ -305,19 +305,19 @@ def test_normalize_lookup_ids() -> None:
     assert normalized == ["a", "b"]
 
 
-async def test_iter_raw_entities_delegates_to_pylyrion_and_reports_progress(
+async def test_iter_entity_rows_delegates_to_pylyrion_and_reports_progress(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Raw entity iteration should delegate to pylyrion and keep MA progress updates."""
+    """Entity-row iteration should delegate to pylyrion and keep MA progress updates."""
     provider = _provider()
     captured_args: list[tuple[Any, list[str]]] = []
 
-    async def _iter_raw(spec: Any, ids: list[str]):
+    async def _iter_rows(spec: Any, ids: list[str]):
         captured_args.append((spec, ids))
         for item_id in ids:
             yield {"id": item_id, "album": item_id}
 
-    library = SimpleNamespace(iter_raw_entities=_iter_raw)
+    library = SimpleNamespace(iter_entity_rows=_iter_rows)
     monkeypatch.setattr(client, "_build_library_client", lambda _provider: library)
 
     progress_calls: list[tuple[int, int, str | None]] = []
@@ -330,10 +330,7 @@ async def test_iter_raw_entities_delegates_to_pylyrion_and_reports_progress(
 
     item_ids = ["id1", "id1", "id2"]
 
-    yielded = [
-        raw_item
-        async for raw_item in client._iter_raw_entities(provider, client.ALBUM_SPEC, item_ids)
-    ]
+    yielded = [row async for row in client._iter_entity_rows(provider, client.ALBUM_SPEC, item_ids)]
 
     assert [item["id"] for item in yielded] == ["id1", "id2"]
     assert captured_args == [(client.PY_ALBUM_SPEC, ["id1", "id2"])]
@@ -346,7 +343,7 @@ async def test_get_entity_data_and_iter_entities_fast_paths(
 ) -> None:
     """Single-item and empty-id paths should work without pipeline workers."""
     library = Mock()
-    library.get_entity_data = AsyncMock(return_value={"id": "42"})
+    library.get_entity_row = AsyncMock(return_value={"id": "42"})
 
     async def _raw(_provider: Any, _spec: Any, _ids: list[str]):
         yield {"id": "42"}
@@ -355,7 +352,7 @@ async def test_get_entity_data_and_iter_entities_fast_paths(
         return "decoded"
 
     monkeypatch.setattr(client, "_build_library_client", lambda _provider: library)
-    monkeypatch.setattr(client, "_iter_raw_entities", _raw)
+    monkeypatch.setattr(client, "_iter_entity_rows", _raw)
     monkeypatch.setattr(client, "_decode_entity", _decode)
 
     provider = _provider()
@@ -372,7 +369,7 @@ async def test_get_entity_data_and_iter_entities_fast_paths(
 async def test_get_entity_data_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
     """Missing entity should raise MediaNotFoundError."""
     library = Mock()
-    library.get_entity_data = AsyncMock(side_effect=LyrionRequestError("Track not found: missing"))
+    library.get_entity_row = AsyncMock(side_effect=LyrionRequestError("Track not found: missing"))
     monkeypatch.setattr(client, "_build_library_client", lambda _provider: library)
 
     with pytest.raises(MediaNotFoundError):

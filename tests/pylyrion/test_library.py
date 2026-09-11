@@ -103,7 +103,7 @@ async def test_library_client_playlist_tracks_and_entity_data() -> None:
     genres = await client.get_all_genres()
     playlist_page = await client.get_playlist_tracks_page("pl1")
     playlist_tracks = await client.get_playlist_tracks("pl1")
-    artist_row = await client.get_entity_data(ARTIST_SPEC, "a1")
+    artist_row = await client.get_entity_row(ARTIST_SPEC, "a1")
 
     assert playlists == [{"id": "pl1", "name": "Mix"}]
     assert genres == [{"id": "g1", "name": "Rock"}]

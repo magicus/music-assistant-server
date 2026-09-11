@@ -1,4 +1,4 @@
-"""Raw library browsing helpers for pylyrion."""
+"""Library browsing helpers for pylyrion."""
 
 from __future__ import annotations
 
@@ -28,9 +28,9 @@ class LyrionEntitySpec:
 
 @dataclass(frozen=True, slots=True)
 class LyrionPage:
-    """Return one raw LMS page plus pagination metadata."""
+    """Return one normalized LMS page plus pagination metadata."""
 
-    items: list[Mapping[str, object]]
+    items: list[Mapping[str, str]]
     has_more: bool
 
 
@@ -93,12 +93,13 @@ async def get_entity_page(
         "list[Mapping[str, object]]",
         result.get(spec.loop_key, []),
     )
+    items = [normalize_row(raw_item) for raw_item in raw_items]
     count = normalize_lms_text_value(result.get("count"))
     if count is not None and count.isdigit() and int(count) > 0:
         has_more = offset + len(raw_items) < int(count)
     else:
         has_more = len(raw_items) >= limit
-    return LyrionPage(items=raw_items, has_more=has_more)
+    return LyrionPage(items=items, has_more=has_more)
 
 
 async def get_simple_browse_page(
@@ -114,12 +115,13 @@ async def get_simple_browse_page(
         "list[Mapping[str, object]]",
         result.get(loop_key, []),
     )
+    items = [normalize_row(raw_item) for raw_item in raw_items]
     count = normalize_lms_text_value(result.get("count"))
     if count is not None and count.isdigit() and int(count) > 0:
         has_more = offset + len(raw_items) < int(count)
     else:
         has_more = len(raw_items) >= limit
-    return LyrionPage(items=raw_items, has_more=has_more)
+    return LyrionPage(items=items, has_more=has_more)
 
 
 async def get_entity_ids(
@@ -169,14 +171,14 @@ async def get_entity_ids(
     return ids
 
 
-async def get_entity_data(
+async def get_entity_row(
     session: LyrionSession,
     spec: LyrionEntitySpec,
     item_id: str,
-) -> Mapping[str, object]:
-    """Fetch one raw entity payload by id using the shared lookup flow."""
-    async for raw_item in iter_raw_entities(session, spec, [item_id]):
-        return raw_item
+) -> Mapping[str, str]:
+    """Fetch one normalized entity payload by id using the shared lookup flow."""
+    async for row in iter_entity_rows(session, spec, [item_id]):
+        return row
     raise LyrionRequestError(f"Lyrion {spec.key.title()} not found: {item_id}")
 
 
@@ -202,24 +204,25 @@ async def get_playlist_tracks_page(
         "list[Mapping[str, object]]",
         result.get("playlisttracks_loop", []),
     )
-    tracks_page = LyrionPage(items=raw_items, has_more=False)
+    items = [normalize_row(raw_item) for raw_item in raw_items]
+    tracks_page = LyrionPage(items=items, has_more=False)
     expected_total = _extract_browse_total_count(result)
     if expected_total is not None:
         tracks_page = LyrionPage(
-            items=raw_items,
+            items=items,
             has_more=offset + len(raw_items) < expected_total,
         )
     else:
-        tracks_page = LyrionPage(items=raw_items, has_more=len(raw_items) >= limit)
+        tracks_page = LyrionPage(items=items, has_more=len(raw_items) >= limit)
     return tracks_page
 
 
-async def iter_raw_entities(
+async def iter_entity_rows(
     session: LyrionSession,
     spec: LyrionEntitySpec,
     item_ids: list[str],
 ) -> AsyncGenerator[Mapping[str, str]]:
-    """Yield raw LMS entities in request order, with optional batch fallback."""
+    """Yield normalized LMS rows in request order, with optional batch fallback."""
     total_items = len(item_ids)
     if len(item_ids) == 1:
         item_id = item_ids[0]
@@ -259,8 +262,8 @@ async def search_entities(
     spec: LyrionEntitySpec,
     query: str,
     limit: int,
-) -> list[Mapping[str, object]]:
-    """Search LMS for one entity type and return raw rows."""
+) -> list[Mapping[str, str]]:
+    """Search LMS for one entity type and return normalized rows."""
     result = await session.request(
         "",
         [spec.command, 0, limit, spec.tags, f"search:{query}"],
@@ -333,7 +336,7 @@ def _chunked(item_ids: list[str], chunk_size: int) -> list[list[str]]:
 
 
 class LyrionLibraryClient:
-    """Expose raw Lyrion library browse operations."""
+    """Expose Lyrion library browse operations."""
 
     def __init__(self, session: LyrionSession) -> None:
         self._session = session
@@ -513,9 +516,9 @@ class LyrionLibraryClient:
         """Return one paged playlist track response using LMS playlists/tracks."""
         return await get_playlist_tracks_page(self._session, playlist_id, offset, limit)
 
-    async def get_playlist_tracks(self, playlist_id: str) -> list[Mapping[str, object]]:
-        """Return all raw playlist track rows for one playlist id."""
-        tracks: list[Mapping[str, object]] = []
+    async def get_playlist_tracks(self, playlist_id: str) -> list[Mapping[str, str]]:
+        """Return all normalized playlist track rows for one playlist id."""
+        tracks: list[Mapping[str, str]] = []
         offset = 0
         while True:
             page = await self.get_playlist_tracks_page(
@@ -530,21 +533,21 @@ class LyrionLibraryClient:
             offset += DEFAULT_BROWSE_PAGE_SIZE
         return tracks
 
-    async def iter_raw_entities(
+    async def iter_entity_rows(
         self, spec: LyrionEntitySpec, item_ids: list[str]
     ) -> AsyncGenerator[Mapping[str, str]]:
-        """Yield raw LMS entities in request order."""
-        async for raw_item in iter_raw_entities(self._session, spec, item_ids):
-            yield raw_item
+        """Yield normalized LMS rows in request order."""
+        async for row in iter_entity_rows(self._session, spec, item_ids):
+            yield row
 
-    async def get_entity_data(self, spec: LyrionEntitySpec, item_id: str) -> Mapping[str, object]:
-        """Fetch one raw entity payload by id."""
-        return await get_entity_data(self._session, spec, item_id)
+    async def get_entity_row(self, spec: LyrionEntitySpec, item_id: str) -> Mapping[str, str]:
+        """Fetch one normalized entity payload by id."""
+        return await get_entity_row(self._session, spec, item_id)
 
     async def search_entities(
         self, spec: LyrionEntitySpec, query: str, limit: int
-    ) -> list[Mapping[str, object]]:
-        """Search one LMS entity type and return raw rows."""
+    ) -> list[Mapping[str, str]]:
+        """Search one LMS entity type and return normalized rows."""
         return await search_entities(self._session, spec, query, limit)
 
 
@@ -558,12 +561,12 @@ __all__ = [
     "LyrionEntitySpec",
     "LyrionLibraryClient",
     "LyrionPage",
-    "get_entity_data",
     "get_entity_ids",
     "get_entity_page",
+    "get_entity_row",
     "get_playlist_tracks_page",
     "get_simple_browse_page",
-    "iter_raw_entities",
+    "iter_entity_rows",
     "normalize_row",
     "search_entities",
 ]
