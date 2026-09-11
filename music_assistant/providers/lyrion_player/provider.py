@@ -235,6 +235,10 @@ class LyrionPlayerProvider(PlayerProvider):
         """Return the last CometD status timestamp for one player."""
         return self._cometd_stream.get_last_player_status_seen_at(player_id)
 
+    def get_cached_cometd_status(self, player_id: str) -> dict[str, Any] | None:
+        """Return the cached CometD status snapshot for one player."""
+        return self._cometd_stream.get_player_status_snapshot(player_id)
+
     async def wait_for_cometd_status_update(
         self,
         player_id: str,

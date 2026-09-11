@@ -10,6 +10,7 @@ Queue sync must therefore handle mixed queues explicitly in both directions.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, cast
 
 from music_assistant_models.enums import EventType, IdentifierType, PlaybackState
@@ -24,6 +25,8 @@ from music_assistant.helpers.util import is_valid_mac_address
 from music_assistant.models.player import Player, PlayerMedia
 
 from .constants import (
+    COMETD_COMMAND_STATUS_BACKOFF,
+    COMETD_COMMAND_STATUS_POLL_ATTEMPTS,
     COMETD_COMMAND_STATUS_VERIFY_TIMEOUT,
     CONF_FALLBACK_POLLING,
     CONF_FALLBACK_POLLING_INTERVAL,
@@ -113,6 +116,7 @@ class LyrionPlayer(Player):
 
         :param media: The media item to play.
         """
+        baseline = self.provider.get_last_cometd_status_seen_at(self.player_id)
         # If this media originates from a Lyrion music provider instance
         # on the same LMS, load by track_id in LMS so native clients show
         # regular queue metadata/items.
@@ -120,6 +124,11 @@ class LyrionPlayer(Player):
             self._attr_current_media = media
             self._attr_playback_state = PlaybackState.PLAYING
             self.update_state()
+            await self._verify_cometd_status_update(
+                baseline,
+                expectation=lambda status: _get_status_str(status, "mode") == "play",
+                expected_state="mode=play",
+            )
             return
 
         stream_url = await self.mass.streams.resolve_stream_url(
@@ -136,6 +145,11 @@ class LyrionPlayer(Player):
         self._attr_current_media = media
         self._attr_playback_state = PlaybackState.PLAYING
         self.update_state()
+        await self._verify_cometd_status_update(
+            baseline,
+            expectation=lambda status: _get_status_str(status, "mode") == "play",
+            expected_state="mode=play",
+        )
 
     async def enqueue_next_media(self, media: PlayerMedia) -> None:
         """
@@ -143,11 +157,13 @@ class LyrionPlayer(Player):
 
         :param media: The media item to enqueue.
         """
+        baseline = self.provider.get_last_cometd_status_seen_at(self.player_id)
         if await self._queue_sync.try_play_lyrion_track_id(
             media,
             command="add",
         ):
             await self._queue_sync.sync_ma_queue_to_lms()
+            await self._verify_cometd_status_update(baseline)
             return
 
         stream_url = await self.mass.streams.resolve_stream_url(
@@ -161,6 +177,7 @@ class LyrionPlayer(Player):
             )
         except ProviderUnavailableError as err:
             raise PlayerCommandFailed(f"enqueue_next_media failed: {err}") from err
+        await self._verify_cometd_status_update(baseline)
 
     async def play(self) -> None:
         """Resume playback."""
@@ -171,7 +188,11 @@ class LyrionPlayer(Player):
             raise PlayerCommandFailed(f"play failed: {err}") from err
         self._attr_playback_state = PlaybackState.PLAYING
         self.update_state()
-        await self._verify_cometd_status_update(baseline)
+        await self._verify_cometd_status_update(
+            baseline,
+            expectation=lambda status: _get_status_str(status, "mode") == "play",
+            expected_state="mode=play",
+        )
 
     async def pause(self) -> None:
         """Pause playback."""
@@ -185,7 +206,11 @@ class LyrionPlayer(Player):
             raise PlayerCommandFailed(f"pause failed: {err}") from err
         self._attr_playback_state = PlaybackState.PAUSED
         self.update_state()
-        await self._verify_cometd_status_update(baseline)
+        await self._verify_cometd_status_update(
+            baseline,
+            expectation=lambda status: _get_status_str(status, "mode") == "pause",
+            expected_state="mode=pause",
+        )
 
     async def stop(self) -> None:
         """Stop playback."""
@@ -197,7 +222,11 @@ class LyrionPlayer(Player):
         self._attr_playback_state = PlaybackState.IDLE
         self._attr_current_media = None
         self.update_state()
-        await self._verify_cometd_status_update(baseline)
+        await self._verify_cometd_status_update(
+            baseline,
+            expectation=lambda status: _get_status_str(status, "mode") == "stop",
+            expected_state="mode=stop",
+        )
 
     async def power(self, powered: bool) -> None:
         """
@@ -205,6 +234,7 @@ class LyrionPlayer(Player):
 
         :param powered: True to power on, False to power off.
         """
+        baseline = self.provider.get_last_cometd_status_seen_at(self.player_id)
         try:
             await self.provider.send_player_command(
                 self.player_id,
@@ -214,6 +244,11 @@ class LyrionPlayer(Player):
             raise PlayerCommandFailed(f"power failed: {err}") from err
         self._attr_powered = powered
         self.update_state()
+        await self._verify_cometd_status_update(
+            baseline,
+            expectation=lambda status: _get_status_int(status, "power") == (1 if powered else 0),
+            expected_state=f"power={1 if powered else 0}",
+        )
 
     async def volume_set(self, volume_level: int) -> None:
         """
@@ -221,6 +256,7 @@ class LyrionPlayer(Player):
 
         :param volume_level: Volume level from 0 to 100.
         """
+        baseline = self.provider.get_last_cometd_status_seen_at(self.player_id)
         try:
             await self._ensure_sync_volume_disabled()
             await self.provider.send_player_command(
@@ -231,9 +267,16 @@ class LyrionPlayer(Player):
             raise PlayerCommandFailed(f"volume_set failed: {err}") from err
         self._attr_volume_level = max(0, min(100, volume_level))
         self.update_state()
+        target = max(0, min(100, int(volume_level)))
+        await self._verify_cometd_status_update(
+            baseline,
+            expectation=lambda status: _get_status_int(status, "mixer volume") == target,
+            expected_state=f"mixer volume={target}",
+        )
 
     async def volume_mute(self, muted: bool) -> None:
         """Mute or unmute playback volume."""
+        baseline = self.provider.get_last_cometd_status_seen_at(self.player_id)
         try:
             await self._ensure_sync_volume_disabled()
             await self.provider.send_player_command(
@@ -244,9 +287,18 @@ class LyrionPlayer(Player):
             raise PlayerCommandFailed(f"volume_mute failed: {err}") from err
         self._attr_volume_muted = muted
         self.update_state()
+        await self._verify_cometd_status_update(
+            baseline,
+            expectation=lambda status: (
+                _get_status_int(status, "mixer muting") == (1 if muted else 0)
+            ),
+            expected_state=f"mixer muting={1 if muted else 0}",
+        )
 
     async def next_track(self) -> None:
         """Skip to the next track on the active LMS queue/source."""
+        previous = self.provider.get_cached_cometd_status(self.player_id)
+        previous_index = _get_status_int(previous or {}, "playlist_cur_index")
         baseline = self.provider.get_last_cometd_status_seen_at(self.player_id)
         try:
             await self.provider.send_player_command(
@@ -255,10 +307,21 @@ class LyrionPlayer(Player):
             )
         except ProviderUnavailableError as err:
             raise PlayerCommandFailed(f"next_track failed: {err}") from err
-        await self._verify_cometd_status_update(baseline)
+        if previous_index is None:
+            await self._verify_cometd_status_update(baseline)
+            return
+        await self._verify_cometd_status_update(
+            baseline,
+            expectation=lambda status: (
+                _get_status_int(status, "playlist_cur_index") not in (None, previous_index)
+            ),
+            expected_state="playlist_cur_index changed",
+        )
 
     async def previous_track(self) -> None:
         """Skip to the previous track on the active LMS queue/source."""
+        previous = self.provider.get_cached_cometd_status(self.player_id)
+        previous_index = _get_status_int(previous or {}, "playlist_cur_index")
         baseline = self.provider.get_last_cometd_status_seen_at(self.player_id)
         try:
             await self.provider.send_player_command(
@@ -267,7 +330,16 @@ class LyrionPlayer(Player):
             )
         except ProviderUnavailableError as err:
             raise PlayerCommandFailed(f"previous_track failed: {err}") from err
-        await self._verify_cometd_status_update(baseline)
+        if previous_index is None:
+            await self._verify_cometd_status_update(baseline)
+            return
+        await self._verify_cometd_status_update(
+            baseline,
+            expectation=lambda status: (
+                _get_status_int(status, "playlist_cur_index") not in (None, previous_index)
+            ),
+            expected_state="playlist_cur_index changed",
+        )
 
     async def seek(self, position: int) -> None:
         """Seek playback position in seconds on the active source."""
@@ -283,7 +355,11 @@ class LyrionPlayer(Player):
         self._attr_elapsed_time = float(target)
         self._attr_elapsed_time_last_updated = time.time()
         self.update_state()
-        await self._verify_cometd_status_update(baseline)
+        await self._verify_cometd_status_update(
+            baseline,
+            expectation=lambda status: _time_matches_target(status, target),
+            expected_state=f"time~={target}",
+        )
 
     async def set_members(
         self,
@@ -291,6 +367,7 @@ class LyrionPlayer(Player):
         player_ids_to_remove: list[str] | None = None,
     ) -> None:
         """Apply member changes through LMS native sync commands."""
+        baseline = self.provider.get_last_cometd_status_seen_at(self.player_id)
         if self.synced_to:
             raise InvalidCommand("Player is synced, cannot set members")
         if not player_ids_to_add and not player_ids_to_remove:
@@ -326,6 +403,12 @@ class LyrionPlayer(Player):
             if member := self.mass.players.get_player(member_id):
                 member.update_state()
 
+        await self._verify_cometd_status_update(
+            baseline,
+            expectation=lambda status: _group_members_match_leader(status, self.player_id),
+            expected_state="group topology updated",
+        )
+
     async def sync_queue_from_lms(self) -> None:
         """Refresh MA queue mirror from LMS queue state via JSON-RPC."""
         await self._queue_sync.sync_lms_queue_to_ma()
@@ -339,31 +422,65 @@ class LyrionPlayer(Player):
         self._apply_player_metadata(player_data)
         self.update_state()
 
-    async def _verify_cometd_status_update(self, baseline: float | None) -> None:
-        """Poll LMS when CometD does not confirm a recent command quickly."""
+    async def _verify_cometd_status_update(
+        self,
+        baseline: float | None,
+        expectation: Callable[[dict[str, Any]], bool] | None = None,
+        expected_state: str = "status update",
+    ) -> None:
+        """Wait for expected status and poll LMS retries if CometD stays silent."""
         if await self.provider.wait_for_cometd_status_update(
             self.player_id,
             baseline,
             COMETD_COMMAND_STATUS_VERIFY_TIMEOUT,
         ):
-            return
+            cached_status = self.provider.get_cached_cometd_status(self.player_id)
+            if expectation is None:
+                return
+            if cached_status is not None and expectation(cached_status):
+                return
 
         self.provider.logger.warning(
-            "No CometD status update for %s within %ss; polling LMS",
+            "No CometD confirmation for %s (%s) within %ss; polling LMS up to %s times",
             self.player_id,
+            expected_state,
             COMETD_COMMAND_STATUS_VERIFY_TIMEOUT,
+            COMETD_COMMAND_STATUS_POLL_ATTEMPTS,
         )
-        try:
-            status = await self.provider.get_player_status(self.player_id)
-        except ProviderUnavailableError as err:
-            self.provider.logger.warning(
-                "Fallback status poll failed for %s: %s",
-                self.player_id,
-                err,
-            )
-            return
 
-        self.provider.apply_status_update(self, status)
+        for attempt, wait_seconds in enumerate(COMETD_COMMAND_STATUS_BACKOFF):
+            if await self.provider.wait_for_cometd_status_update(
+                self.player_id,
+                baseline,
+                wait_seconds,
+            ):
+                cached_status = self.provider.get_cached_cometd_status(self.player_id)
+                if expectation is None:
+                    return
+                if cached_status is not None and expectation(cached_status):
+                    return
+
+            try:
+                status = await self.provider.get_player_status(self.player_id)
+            except ProviderUnavailableError as err:
+                self.provider.logger.warning(
+                    "Fallback status poll %s/%s failed for %s: %s",
+                    attempt + 1,
+                    COMETD_COMMAND_STATUS_POLL_ATTEMPTS,
+                    self.player_id,
+                    err,
+                )
+            else:
+                self.provider.apply_status_update(self, status)
+                if expectation is None or expectation(status):
+                    return
+
+        self.provider.logger.warning(
+            "No CometD status confirmation for %s (%s) after %s fallback polls",
+            self.player_id,
+            expected_state,
+            COMETD_COMMAND_STATUS_POLL_ATTEMPTS,
+        )
 
     async def _on_ma_queue_items_updated(self, event: MassEvent) -> None:
         """
@@ -424,3 +541,49 @@ class LyrionPlayer(Player):
                 IdentifierType.MAC_ADDRESS,
                 self.player_id,
             )
+
+
+def _get_status_str(status: dict[str, Any], key: str) -> str | None:
+    """Read a status field as a non-empty string when available."""
+    value = status.get(key)
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return None
+    return str(value)
+
+
+def _get_status_int(status: dict[str, Any], key: str) -> int | None:
+    """Read a status field as integer when available."""
+    value = status.get(key)
+    if value is None:
+        return None
+    try:
+        return int(cast("int | str", value))
+    except TypeError, ValueError:
+        return None
+
+
+def _time_matches_target(status: dict[str, Any], target: int) -> bool:
+    """Return True when reported playback time is close to target seconds."""
+    value = status.get("time")
+    if value is None:
+        return False
+    try:
+        return abs(float(cast("int | float | str", value)) - float(target)) <= 1.0
+    except TypeError, ValueError:
+        return False
+
+
+def _group_members_match_leader(status: dict[str, Any], player_id: str) -> bool:
+    """Return True when status reflects the player as group leader/member."""
+    sync_master = _get_status_str(status, "sync_master")
+    if sync_master and sync_master not in ("-", player_id):
+        return True
+
+    sync_slaves = _get_status_str(status, "sync_slaves")
+    if sync_slaves:
+        members = [part.strip() for part in sync_slaves.split(",") if part.strip()]
+        return player_id in members or bool(members)
+
+    return sync_master == player_id

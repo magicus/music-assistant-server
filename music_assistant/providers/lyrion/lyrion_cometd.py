@@ -115,6 +115,13 @@ class LyrionCometDEventStream:
         """Return the last time CometD updated one player's status."""
         return self._status_seen_at.get(player_id)
 
+    def get_player_status_snapshot(self, player_id: str) -> StatusPayload | None:
+        """Return a shallow copy of the latest merged player status."""
+        status = self._status_by_player.get(player_id)
+        if status is None:
+            return None
+        return dict(status)
+
     async def wait_for_player_status_update(
         self,
         player_id: str,
