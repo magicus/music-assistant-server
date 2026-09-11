@@ -310,7 +310,10 @@ class LyrionPlayerProvider(PlayerProvider):
         :param player_id: LMS player id.
         :param command: LMS command list.
         """
-        return await self._rpc_request(player_id=player_id, command=command)
+        try:
+            return await self._build_pylyrion_client().players.send_command(player_id, command)
+        except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
+            raise ProviderUnavailableError(str(err)) from err
 
     def get_configured_host(self) -> str | None:
         """Return configured host from setup data."""

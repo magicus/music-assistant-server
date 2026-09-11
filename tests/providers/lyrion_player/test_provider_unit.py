@@ -299,14 +299,20 @@ async def test_provider_cometd_wrapper_methods_delegate_to_stream() -> None:
 
 @pytest.mark.asyncio
 async def test_provider_command_and_remove_delegate() -> None:
-    """remove_player and send_player_command should use provider internals directly."""
+    """remove_player and send_player_command should delegate via pylyrion."""
     provider = _build_provider_stub()
     players = cast("Any", provider.mass.players)
-    provider._rpc_request = AsyncMock(return_value={"ok": True})
+    player_client = AsyncMock()
+    player_client.players.send_command = AsyncMock(return_value={"ok": True})
 
-    result = await provider.send_player_command("p1", ["stop"])
+    with patch(
+        "music_assistant.providers.lyrion_player.provider.LyrionClient",
+        return_value=player_client,
+    ):
+        result = await provider.send_player_command("p1", ["stop"])
+
     assert result == {"ok": True}
-    provider._rpc_request.assert_awaited_once_with(player_id="p1", command=["stop"])
+    player_client.players.send_command.assert_awaited_once_with("p1", ["stop"])
 
     await provider.remove_player("p1")
     players.unregister.assert_awaited_once_with("p1", True)
