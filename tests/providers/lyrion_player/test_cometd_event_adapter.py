@@ -31,6 +31,7 @@ def _build_provider_and_players() -> tuple[MagicMock, LyrionPlayer, LyrionPlayer
     provider.mass.config = MagicMock()
     provider.mass.config.create_default_player_config = MagicMock()
     provider.mass.config.get_base_player_config = MagicMock(return_value=MagicMock())
+    provider.lyrion_server = provider
 
     player_by_id: dict[str, LyrionPlayer] = {}
 

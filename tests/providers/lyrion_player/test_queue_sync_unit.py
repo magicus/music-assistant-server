@@ -39,6 +39,7 @@ def _build_queue_sync() -> tuple[LyrionQueueSync, Any]:
     player = SimpleNamespace(
         player_id="player-1",
         provider=provider,
+        lyrion_server=provider,
         logger=MagicMock(),
         mass=SimpleNamespace(
             player_queues=SimpleNamespace(

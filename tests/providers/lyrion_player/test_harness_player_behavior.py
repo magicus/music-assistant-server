@@ -494,6 +494,8 @@ async def test_ma_volume_change_disables_lms_sync_volume_before_grouped_volume_c
         provider.send_player_command = _send_player_command
         provider.set_player_sync_volume = _set_player_sync_volume
         provider.set_player_volume_with_verify = _set_player_volume_with_verify
+        provider.player_set_volume = _set_player_volume_with_verify
+        provider.lyrion_server = provider
 
         leader_player = LyrionPlayer(
             provider,

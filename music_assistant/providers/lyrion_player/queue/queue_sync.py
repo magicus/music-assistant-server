@@ -110,7 +110,7 @@ class LyrionQueueSync:
             self.player.player_id,
             media,
         )
-        await self.player.provider.play_player_url(
+        await self.player.lyrion_server.play_player_url(
             self.player.player_id,
             stream_url,
         )
@@ -131,7 +131,7 @@ class LyrionQueueSync:
             self.player.player_id,
             media,
         )
-        await self.player.provider.append_player_url(
+        await self.player.lyrion_server.append_player_url(
             self.player.player_id,
             stream_url,
         )
@@ -285,14 +285,14 @@ class LyrionQueueSync:
             return False
 
         try:
-            await self.player.provider.add_player_track_id_to_queue(
+            await self.player.lyrion_server.add_player_track_id_to_queue(
                 self.player.player_id,
                 item_id,
                 command=command,
             )
             if command == "load":
                 # Ensure play_media always starts transport immediately.
-                await self.player.provider.play_player(self.player.player_id)
+                await self.player.lyrion_server.play_player(self.player.player_id)
         except ProviderUnavailableError as err:
             self.player.logger.warning(
                 ("Native LMS queue %s failed for track_id %s, fall back to URL: %s"),
@@ -507,7 +507,7 @@ class LyrionQueueSync:
     async def _collect_lms_snapshot(self) -> _LmsQueueSnapshot | None:
         """Return one normalized LMS queue snapshot for this player."""
         try:
-            status = await self.player.provider.get_player_queue_status(
+            status = await self.player.lyrion_server.get_player_queue_status(
                 self.player.player_id,
                 offset=0,
                 limit=MAX_SYNC_QUEUE_ITEMS,
@@ -526,7 +526,7 @@ class LyrionQueueSync:
             return
         if ma_snapshot.current_index == lms_snapshot.current_index:
             return
-        await self.player.provider.set_player_queue_index(
+        await self.player.lyrion_server.set_player_queue_index(
             self.player.player_id,
             ma_snapshot.current_index,
         )
@@ -539,14 +539,14 @@ class LyrionQueueSync:
         """Apply repeat/shuffle alignment from MA to LMS."""
         repeat_target = self._ma_repeat_to_lms(ma_snapshot.repeat_mode)
         if repeat_target != lms_snapshot.repeat_mode:
-            await self.player.provider.set_player_repeat_mode(
+            await self.player.lyrion_server.set_player_repeat_mode(
                 self.player.player_id,
                 repeat_target,
             )
 
         shuffle_target = 1 if ma_snapshot.shuffle_enabled else 0
         if shuffle_target != lms_snapshot.shuffle_mode:
-            await self.player.provider.set_player_shuffle_mode(
+            await self.player.lyrion_server.set_player_shuffle_mode(
                 self.player.player_id,
                 shuffle_target,
             )
@@ -581,7 +581,7 @@ class LyrionQueueSync:
     ) -> None:
         """Rebuild LMS queue from the given index onward."""
         if rebuild_from_index <= 0:
-            await self.player.provider.clear_player_queue(self.player.player_id)
+            await self.player.lyrion_server.clear_player_queue(self.player.player_id)
             for entry in source_entries:
                 await self._append_lms_entry(entry)
             return
@@ -617,7 +617,7 @@ class LyrionQueueSync:
     async def _append_lms_entry(self, entry: _LmsMirrorEntry) -> None:
         """Append one queue entry on LMS."""
         if entry.kind == "track_id":
-            await self.player.provider.add_player_track_id_to_queue(
+            await self.player.lyrion_server.add_player_track_id_to_queue(
                 self.player.player_id,
                 entry.value,
             )
@@ -626,7 +626,7 @@ class LyrionQueueSync:
 
     async def _move_lms_index(self, from_index: int, to_index: int) -> None:
         """Move one LMS queue entry by index."""
-        await self.player.provider.move_player_queue_item(
+        await self.player.lyrion_server.move_player_queue_item(
             self.player.player_id,
             from_index,
             to_index,
@@ -634,7 +634,7 @@ class LyrionQueueSync:
 
     async def _delete_lms_index(self, index: int) -> None:
         """Delete one LMS queue entry by index."""
-        await self.player.provider.delete_player_queue_item(
+        await self.player.lyrion_server.delete_player_queue_item(
             self.player.player_id,
             index,
         )
@@ -703,7 +703,7 @@ class LyrionQueueSync:
 
     async def _add_url_entry_to_lms(self, entry: _LmsMirrorEntry) -> None:
         """Add one URL entry to LMS with optional display metadata."""
-        await self.player.provider.add_player_url_to_queue(
+        await self.player.lyrion_server.add_player_url_to_queue(
             self.player.player_id,
             entry.value,
             title=entry.title,

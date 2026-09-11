@@ -44,6 +44,10 @@ def mock_provider() -> MagicMock:
     provider.pause_player_with_verify = AsyncMock()
     provider.stop_player_with_verify = AsyncMock()
     provider.set_player_power_with_verify = AsyncMock()
+    provider.player_play = provider.play_player_with_verify
+    provider.player_pause = provider.pause_player_with_verify
+    provider.player_stop = provider.stop_player_with_verify
+    provider.player_set_power = provider.set_player_power_with_verify
     provider.sync_player_to = AsyncMock()
     provider.unsync_player = AsyncMock()
     provider.next_player_track = AsyncMock()
@@ -56,6 +60,11 @@ def mock_provider() -> MagicMock:
     provider.seek_player_with_verify = AsyncMock()
     provider.set_player_volume_with_verify = AsyncMock()
     provider.set_player_muted_with_verify = AsyncMock()
+    provider.player_next_track = provider.next_player_track_with_verify
+    provider.player_previous_track = provider.previous_player_track_with_verify
+    provider.player_seek = provider.seek_player_with_verify
+    provider.player_set_volume = provider.set_player_volume_with_verify
+    provider.player_set_muted = provider.set_player_muted_with_verify
     provider.set_player_sync_volume = AsyncMock()
     provider.play_player_url = AsyncMock()
     provider.append_player_url = AsyncMock()
@@ -66,6 +75,7 @@ def mock_provider() -> MagicMock:
     provider.verify_status_expectation = AsyncMock(return_value=True)
     provider.get_player_status = AsyncMock(return_value={"mode": "play"})
     provider.apply_status_update = MagicMock()
+    provider.lyrion_server = provider
     return provider
 
 

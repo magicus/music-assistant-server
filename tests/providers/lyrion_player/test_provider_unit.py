@@ -18,6 +18,7 @@ from music_assistant.providers.lyrion_player.provider import (
     LyrionPlayerProvider,
 )
 from pylyrion.errors import LyrionTimeoutError
+from pylyrion.server_control import LyrionServerControl
 
 
 def _build_provider_stub() -> LyrionPlayerProvider:
@@ -66,6 +67,11 @@ def _build_provider_stub() -> LyrionPlayerProvider:
         get_player_status_snapshot=MagicMock(return_value={"mode": "play"}),
         wait_for_player_status_update=AsyncMock(return_value=True),
         verify_player_status_expectation=AsyncMock(return_value=True),
+    )
+    provider.lyrion_server = LyrionServerControl(
+        get_players_client=provider._build_pylyrion_player_client,
+        status_stream=provider._status_stream,
+        unavailable_error_factory=lambda err: ProviderUnavailableError(str(err)),
     )
     provider.get_setup_value = MagicMock(
         side_effect=lambda key, default=None: {
