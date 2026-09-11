@@ -8,7 +8,7 @@ from unittest.mock import Mock
 from music_assistant_models.enums import MediaType
 from music_assistant_models.media_items import Album, ItemMapping, UniqueList
 
-from music_assistant.providers.lyrion_music import artwork, parsers
+from music_assistant.providers.lyrion_music import artwork, client, parsers
 
 
 def test_to_lms_stream_url_brackets_ipv6_host() -> None:
@@ -41,8 +41,10 @@ def test_extract_track_artists_fallback_unknown_artist(lyrion_provider: Any) -> 
 
 
 def test_extract_values_and_ids_normalize_non_string_payloads() -> None:
-    """Parser helpers should normalize LMS scalars before splitting or extracting ids."""
-    assert parsers.extract_item_id({"id": 123}) == "123"
+    """The client boundary should normalize LMS scalars before parser helpers run."""
+    normalized = client._normalize_lms_row({"id": 123, "tracknum": 7, "name": "  Foo  "})
+    assert normalized == {"id": "123", "tracknum": "7", "name": "Foo"}
+    assert parsers.extract_item_id({"id": "123"}) == "123"
     assert parsers.extract_first_list_value("123") == "123"
     assert parsers.split_lms_values("a, b", split_mode="name") == ["a", "b"]
     assert parsers.split_lms_values("1,2,3", split_mode="id") == ["1", "2", "3"]

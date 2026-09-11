@@ -112,7 +112,7 @@ async def get_artists_page(
     artists: list[Artist] = []
     for raw_artist in raw_artists:
         try:
-            artists.append(parsers.parse_artist(provider, raw_artist))
+            artists.append(parsers.parse_artist(provider, _normalize_lms_row(raw_artist)))
         except MediaNotFoundError:
             continue
     return artists, has_more
@@ -135,7 +135,7 @@ async def get_albums_page(
     albums: list[Album] = []
     for raw_album in raw_albums:
         try:
-            albums.append(parsers.parse_album(provider, raw_album))
+            albums.append(parsers.parse_album(provider, _normalize_lms_row(raw_album)))
         except MediaNotFoundError:
             continue
     return albums, has_more
@@ -158,7 +158,7 @@ async def get_tracks_page(
     tracks: list[Track] = []
     for raw_track in raw_tracks:
         try:
-            tracks.append(parsers.parse_track(provider, raw_track))
+            tracks.append(parsers.parse_track(provider, _normalize_lms_row(raw_track)))
         except MediaNotFoundError:
             continue
     return tracks, has_more
@@ -179,15 +179,12 @@ async def get_playlists_page(
     )
     playlists: list[dict[str, str]] = []
     for raw_playlist in raw_playlists:
-        playlist_id = parsers.extract_item_id(raw_playlist, id_keys=("id", "playlist_id"))
-        if playlist_id is None:
-            continue
-        playlist_name = (
-            normalize_lms_text_value(raw_playlist.get("playlist"))
-            or normalize_lms_text_value(raw_playlist.get("name"))
-            or playlist_id
-        )
-        playlists.append({"id": playlist_id, "name": playlist_name})
+        if playlist := _normalize_named_browse_item(
+            raw_playlist,
+            id_keys=("id", "playlist_id"),
+            name_keys=("playlist", "name"),
+        ):
+            playlists.append(playlist)
     return playlists, has_more
 
 
@@ -206,19 +203,47 @@ async def get_genres_page(
     )
     genres: list[dict[str, str]] = []
     for raw_genre in raw_genres:
-        genre_id = parsers.extract_item_id(raw_genre, id_keys=("id", "genre_id"))
-        if genre_id is None:
-            continue
-        genre_name = (
-            normalize_lms_text_value(raw_genre.get("genre"))
-            or normalize_lms_text_value(raw_genre.get("name"))
-            or genre_id
-        )
-        genres.append({"id": genre_id, "name": genre_name})
+        if genre := _normalize_named_browse_item(
+            raw_genre,
+            id_keys=("id", "genre_id"),
+            name_keys=("genre", "name"),
+        ):
+            genres.append(genre)
     return genres, has_more
 
 
-async def iter_library_artists(provider: LyrionMusicProvider) -> AsyncGenerator[Artist]:
+def _normalize_named_browse_item(
+    raw_item: Mapping[str, object],
+    *,
+    id_keys: tuple[str, ...],
+    name_keys: tuple[str, ...],
+) -> dict[str, str] | None:
+    """Normalize a raw LMS browse row into a cooked id/name pair."""
+    normalized_item = _normalize_lms_row(raw_item)
+    item_id = parsers.extract_item_id(normalized_item, id_keys=id_keys)
+    if item_id is None:
+        return None
+
+    for key in name_keys:
+        name = normalized_item.get(key)
+        if name:
+            return {"id": item_id, "name": name}
+
+    return {"id": item_id, "name": item_id}
+
+
+def _normalize_lms_row(raw_item: Mapping[str, object]) -> dict[str, str]:
+    """Normalize one LMS payload row into a string-only mapping."""
+    normalized_item: dict[str, str] = {}
+    for key, value in raw_item.items():
+        if normalized_value := normalize_lms_text_value(value):
+            normalized_item[key] = normalized_value
+    return normalized_item
+
+
+async def iter_library_artists(
+    provider: LyrionMusicProvider,
+) -> AsyncGenerator[Artist]:
     """Yield artists from LMS incrementally for library sync."""
     async for artist in _iter_entities(
         provider,
@@ -254,7 +279,9 @@ async def iter_library_tracks(
         yield cast("Track", track)
 
 
-async def get_all_playlists(provider: LyrionMusicProvider) -> list[dict[str, str]]:
+async def get_all_playlists(
+    provider: LyrionMusicProvider,
+) -> list[dict[str, str]]:
     """Return all playlists from LMS as id/name pairs."""
     playlists: list[dict[str, str]] = []
     offset = 0
@@ -294,9 +321,10 @@ async def get_playlist_tracks_page(
     )
     tracks: list[Track] = []
     for raw_track in raw_items:
-        if parsers.extract_item_id(raw_track, id_keys=("id", "track_id")) is None:
+        normalized_track = _normalize_lms_row(raw_track)
+        if parsers.extract_item_id(normalized_track, id_keys=("id", "track_id")) is None:
             continue
-        tracks.append(parsers.parse_track(provider, raw_track))
+        tracks.append(parsers.parse_track(provider, normalized_track))
 
     expected_total = _extract_browse_total_count(result)
     if expected_total is not None:
@@ -374,7 +402,12 @@ async def _get_browse_ids(
     page_index = 0
     while True:
         page_index += 1
-        command: list[Any] = [spec.command, offset, BROWSE_PAGE_SIZE, spec.tags]
+        command: list[Any] = [
+            spec.command,
+            offset,
+            BROWSE_PAGE_SIZE,
+            spec.tags,
+        ]
         if filter_value:
             command.append(filter_value)
         provider.logger.debug(
@@ -401,7 +434,8 @@ async def _get_browse_ids(
             break
         ids_before_page = len(ids)
         for raw_item in raw_items:
-            if (item_id := parsers.extract_item_id(raw_item, id_keys=spec.id_keys)) is None:
+            normalized_item = _normalize_lms_row(raw_item)
+            if (item_id := parsers.extract_item_id(normalized_item, id_keys=spec.id_keys)) is None:
                 continue
             if item_id in seen:
                 continue
@@ -454,7 +488,9 @@ def _extract_browse_total_count(result: Mapping[str, object]) -> int | None:
     return parsed if parsed > 0 else None
 
 
-async def get_all_genres(provider: LyrionMusicProvider) -> list[dict[str, str]]:
+async def get_all_genres(
+    provider: LyrionMusicProvider,
+) -> list[dict[str, str]]:
     """Return all genres from LMS as id/name pairs."""
     genres: list[dict[str, str]] = []
     offset = 0
@@ -525,9 +561,10 @@ async def search_artists(provider: LyrionMusicProvider, query: str, limit: int) 
     )
     artists: list[Artist] = []
     for raw_artist in cast("list[Mapping[str, object]]", result.get("artists_loop", [])):
-        if parsers.extract_item_id(raw_artist) is None:
+        normalized_artist = _normalize_lms_row(raw_artist)
+        if parsers.extract_item_id(normalized_artist) is None:
             continue
-        artists.append(parsers.parse_artist(provider, raw_artist))
+        artists.append(parsers.parse_artist(provider, normalized_artist))
     return artists
 
 
@@ -540,9 +577,10 @@ async def search_albums(provider: LyrionMusicProvider, query: str, limit: int) -
     )
     albums: list[Album] = []
     for raw_album in cast("list[Mapping[str, object]]", result.get("albums_loop", [])):
-        if parsers.extract_item_id(raw_album) is None:
+        normalized_album = _normalize_lms_row(raw_album)
+        if parsers.extract_item_id(normalized_album) is None:
             continue
-        albums.append(parsers.parse_album(provider, raw_album))
+        albums.append(parsers.parse_album(provider, normalized_album))
     return albums
 
 
@@ -555,9 +593,10 @@ async def search_tracks(provider: LyrionMusicProvider, query: str, limit: int) -
     )
     tracks: list[Track] = []
     for raw_track in cast("list[Mapping[str, object]]", result.get("titles_loop", [])):
-        if parsers.extract_item_id(raw_track) is None:
+        normalized_track = _normalize_lms_row(raw_track)
+        if parsers.extract_item_id(normalized_track) is None:
             continue
-        tracks.append(parsers.parse_track(provider, raw_track))
+        tracks.append(parsers.parse_track(provider, normalized_track))
     return tracks
 
 
@@ -580,7 +619,7 @@ async def _get_entity_data(
     provider: LyrionMusicProvider,
     spec: LmsEntitySpec,
     item_id: str,
-) -> Mapping[str, object]:
+) -> Mapping[str, str]:
     """Fetch one raw entity payload by id using the shared lookup flow."""
     async for raw_item in _iter_raw_entities(provider, spec, [item_id]):
         return raw_item
@@ -591,7 +630,7 @@ async def _fetch_worker(
     provider: LyrionMusicProvider,
     spec: LmsEntitySpec,
     ordered_ids: list[str],
-    raw_queue: asyncio.Queue[Mapping[str, object] | object],
+    raw_queue: asyncio.Queue[Mapping[str, str] | object],
     stop_sentinel: object,
     error_box: list[Exception],
 ) -> None:
@@ -607,7 +646,7 @@ async def _fetch_worker(
 async def _decode_worker(
     provider: LyrionMusicProvider,
     spec: LmsEntitySpec,
-    raw_queue: asyncio.Queue[Mapping[str, object] | object],
+    raw_queue: asyncio.Queue[Mapping[str, str] | object],
     decoded_queue: asyncio.Queue[Artist | Album | Track | object],
     stop_sentinel: object,
     artwork_worker_count: int,
@@ -618,7 +657,7 @@ async def _decode_worker(
             payload = await raw_queue.get()
             if payload is stop_sentinel:
                 break
-            decoded = await _decode_entity(provider, spec, cast("Mapping[str, object]", payload))
+            decoded = await _decode_entity(provider, spec, cast("Mapping[str, str]", payload))
             await decoded_queue.put(decoded)
     except Exception as err:
         error_box.append(err)
@@ -665,7 +704,7 @@ async def _iter_entities(
         yield entity
         return
 
-    raw_queue: asyncio.Queue[Mapping[str, object] | object] = asyncio.Queue(maxsize=2)
+    raw_queue: asyncio.Queue[Mapping[str, str] | object] = asyncio.Queue(maxsize=2)
     decoded_queue: asyncio.Queue[Artist | Album | Track | object] = asyncio.Queue(maxsize=2)
     output_queue: asyncio.Queue[Artist | Album | Track | object] = asyncio.Queue(maxsize=2)
     stop_sentinel = object()
@@ -680,7 +719,14 @@ async def _iter_entities(
 
     tasks = [
         asyncio.create_task(
-            _fetch_worker(provider, spec, ordered_ids, raw_queue, stop_sentinel, error_box)
+            _fetch_worker(
+                provider,
+                spec,
+                ordered_ids,
+                raw_queue,
+                stop_sentinel,
+                error_box,
+            )
         ),
         asyncio.create_task(
             _decode_worker(
@@ -732,7 +778,7 @@ async def _iter_entities(
 async def _decode_entity(
     provider: LyrionMusicProvider,
     spec: LmsEntitySpec,
-    raw_item: Mapping[str, object],
+    raw_item: Mapping[str, str],
 ) -> Artist | Album | Track:
     """Decode one raw LMS item into its MA model."""
     if spec.key == "artist":
@@ -746,7 +792,7 @@ async def _iter_raw_entities(
     provider: LyrionMusicProvider,
     spec: LmsEntitySpec,
     item_ids: list[str],
-) -> AsyncGenerator[Mapping[str, object]]:
+) -> AsyncGenerator[Mapping[str, str]]:
     """Yield raw LMS entities in request order, with optional batch fallback."""
     total_items = len(item_ids)
     if len(item_ids) == 1:
@@ -754,7 +800,9 @@ async def _iter_raw_entities(
         _log_lookup_request(provider, spec, item_id, item_index=1, total_items=total_items)
         request_started = monotonic()
         result = await rpc_request(
-            provider, player_id="", command=_create_lookup_command(spec, item_ids)
+            provider,
+            player_id="",
+            command=_create_lookup_command(spec, item_ids),
         )
         request_elapsed_ms = (monotonic() - request_started) * 1000
         for raw_item in _split_lookup_reply(spec, result, item_ids):
@@ -923,7 +971,7 @@ def _log_lookup_request(
 def _log_lookup_response(
     provider: LyrionMusicProvider,
     spec: LmsEntitySpec,
-    raw_item: Mapping[str, object],
+    raw_item: Mapping[str, str],
     requested_id: str | None = None,
     request_elapsed_ms: float | None = None,
 ) -> None:
@@ -932,23 +980,11 @@ def _log_lookup_response(
     if response_id is None:
         response_id = "unknown"
     if spec.key == "artist":
-        name = (
-            normalize_lms_text_value(raw_item.get("artist"))
-            or normalize_lms_text_value(raw_item.get("name"))
-            or response_id
-        )
+        name = raw_item.get("artist") or raw_item.get("name") or response_id
     elif spec.key == "album":
-        name = (
-            normalize_lms_text_value(raw_item.get("album"))
-            or normalize_lms_text_value(raw_item.get("title"))
-            or response_id
-        )
+        name = raw_item.get("album") or raw_item.get("title") or response_id
     else:
-        name = (
-            normalize_lms_text_value(raw_item.get("title"))
-            or normalize_lms_text_value(raw_item.get("track"))
-            or response_id
-        )
+        name = raw_item.get("title") or raw_item.get("track") or response_id
     timing_str = ""
     if request_elapsed_ms is not None:
         timing_str = f" (rpc: {request_elapsed_ms:.1f} ms)"
@@ -989,15 +1025,16 @@ def _split_lookup_reply(
     spec: LmsEntitySpec,
     result: Mapping[str, object],
     expected_ids: list[str],
-) -> list[Mapping[str, object]]:
+) -> list[Mapping[str, str]]:
     """Map LMS lookup replies back to request order and validate misses."""
     raw_items = cast("list[Mapping[str, object]]", result.get(spec.loop_key, []))
-    items_by_id: dict[str, Mapping[str, object]] = {}
+    items_by_id: dict[str, Mapping[str, str]] = {}
     for raw_item in raw_items:
-        item_id = parsers.extract_item_id(raw_item, id_keys=spec.id_keys)
+        normalized_item = _normalize_lms_row(raw_item)
+        item_id = parsers.extract_item_id(normalized_item, id_keys=spec.id_keys)
         if item_id is None or item_id in items_by_id:
             continue
-        items_by_id[item_id] = raw_item
+        items_by_id[item_id] = normalized_item
 
     missing_ids = [item_id for item_id in expected_ids if item_id not in items_by_id]
     if missing_ids:
@@ -1025,7 +1062,9 @@ def _normalize_lookup_ids(
     return ordered_ids
 
 
-def _get_disabled_batch_lookup_keys(provider: LyrionMusicProvider) -> set[EntityKey]:
+def _get_disabled_batch_lookup_keys(
+    provider: LyrionMusicProvider,
+) -> set[EntityKey]:
     """Return entity keys whose batch lookup has been disabled at runtime."""
     return cast("set[EntityKey]", provider._disabled_batch_lookup_keys)
 

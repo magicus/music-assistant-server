@@ -24,7 +24,6 @@ from music_assistant.providers.lyrion.client import (
     build_lms_url,
     get_configured_host,
     get_configured_port,
-    normalize_lms_text_value,
 )
 
 from . import artwork
@@ -34,16 +33,12 @@ if TYPE_CHECKING:
     from music_assistant.providers.lyrion_music.provider import LyrionMusicProvider
 
 
-def parse_artist(provider: LyrionMusicProvider, raw_artist: Mapping[str, object]) -> Artist:
+def parse_artist(provider: LyrionMusicProvider, row: Mapping[str, str]) -> Artist:
     """Parse LMS artist payload into an MA Artist model."""
-    artist_id = extract_item_id(raw_artist)
+    artist_id = extract_item_id(row)
     if artist_id is None:
         raise MediaNotFoundError("Artist payload without id")
-    name = (
-        normalize_lms_text_value(raw_artist.get("artist"))
-        or normalize_lms_text_value(raw_artist.get("name"))
-        or artist_id
-    )
+    name = row.get("artist") or row.get("name") or artist_id
     artist = Artist(
         item_id=artist_id,
         provider=provider.instance_id,
@@ -54,13 +49,13 @@ def parse_artist(provider: LyrionMusicProvider, raw_artist: Mapping[str, object]
                 provider_domain=provider.domain,
                 provider_instance=provider.instance_id,
                 details=_serialize_mapping_details(
-                    raw_artist,
+                    row,
                     keys=("portraitid", "artwork_url", "artwork", "icon"),
                 ),
             )
         },
     )
-    if artwork_url := artwork.extract_artist_artwork_url(provider, raw_artist):
+    if artwork_url := artwork.extract_artist_artwork_url(provider, row):
         artist.metadata.add_image(
             MediaItemImage(
                 type=ImageType.THUMB,
@@ -72,20 +67,16 @@ def parse_artist(provider: LyrionMusicProvider, raw_artist: Mapping[str, object]
     return artist
 
 
-def parse_album(provider: LyrionMusicProvider, raw_album: Mapping[str, object]) -> Album:
+def parse_album(provider: LyrionMusicProvider, row: Mapping[str, str]) -> Album:
     """Parse LMS album payload into an MA Album model."""
-    album_id = extract_item_id(raw_album)
+    album_id = extract_item_id(row)
     if album_id is None:
         raise MediaNotFoundError("Album payload without id")
-    name = (
-        normalize_lms_text_value(raw_album.get("album"))
-        or normalize_lms_text_value(raw_album.get("title"))
-        or album_id
-    )
+    name = row.get("album") or row.get("title") or album_id
 
     artists: UniqueList[Artist | ItemMapping] = UniqueList()
     artist_name, artist_id = extract_artist_ref(
-        raw_album,
+        row,
         preferred_name_keys=(
             "albumartist",
             "album_artist",
@@ -125,13 +116,13 @@ def parse_album(provider: LyrionMusicProvider, raw_album: Mapping[str, object]) 
                 provider_domain=provider.domain,
                 provider_instance=provider.instance_id,
                 details=_serialize_mapping_details(
-                    raw_album,
+                    row,
                     keys=("coverid", "artwork_track_id", "artwork_url", "artwork", "icon"),
                 ),
             )
         },
     )
-    if artwork_url := artwork.extract_artwork_url(provider, raw_album, fallback_id=album_id):
+    if artwork_url := artwork.extract_artwork_url(provider, row, fallback_id=album_id):
         album.metadata.add_image(
             MediaItemImage(
                 type=ImageType.THUMB,
@@ -143,21 +134,17 @@ def parse_album(provider: LyrionMusicProvider, raw_album: Mapping[str, object]) 
     return album
 
 
-def parse_track(provider: LyrionMusicProvider, raw_track: Mapping[str, object]) -> Track:
+def parse_track(provider: LyrionMusicProvider, row: Mapping[str, str]) -> Track:
     """Parse LMS track payload into an MA Track model."""
-    track_id = extract_item_id(raw_track)
+    track_id = extract_item_id(row)
     if track_id is None:
         raise MediaNotFoundError("Track payload without id")
 
-    title = (
-        normalize_lms_text_value(raw_track.get("title"))
-        or normalize_lms_text_value(raw_track.get("track"))
-        or track_id
-    )
-    artists = extract_track_artists(provider, raw_track)
+    title = row.get("title") or row.get("track") or track_id
+    artists = extract_track_artists(provider, row)
 
-    album_id = extract_item_id(raw_track, id_keys=("album_id", "albumid"))
-    album_name = normalize_lms_text_value(raw_track.get("album"))
+    album_id = extract_item_id(row, id_keys=("album_id", "albumid"))
+    album_name = row.get("album")
     album_mapping: ItemMapping | None = None
     if album_name:
         album_mapping = ItemMapping(
@@ -168,16 +155,16 @@ def parse_track(provider: LyrionMusicProvider, raw_track: Mapping[str, object]) 
         )
 
     duration: int | None = None
-    raw_duration = normalize_lms_text_value(raw_track.get("duration"))
+    raw_duration = row.get("duration")
     if raw_duration is not None:
         try:
             duration = int(float(raw_duration))
         except TypeError, ValueError:
             duration = None
 
-    track_number = parse_int(normalize_lms_text_value(raw_track.get("tracknum")), default=0)
+    track_number = parse_int(row.get("tracknum"), default=0)
     disc_number = parse_int(
-        normalize_lms_text_value(raw_track.get("disc") or raw_track.get("discnum")),
+        row.get("disc") or row.get("discnum"),
         default=0,
     )
 
@@ -198,7 +185,7 @@ def parse_track(provider: LyrionMusicProvider, raw_track: Mapping[str, object]) 
             )
         },
     )
-    if artwork_url := artwork.extract_artwork_url(provider, raw_track, fallback_id=album_id):
+    if artwork_url := artwork.extract_artwork_url(provider, row, fallback_id=album_id):
         track.metadata.add_image(
             MediaItemImage(
                 type=ImageType.THUMB,
@@ -211,7 +198,7 @@ def parse_track(provider: LyrionMusicProvider, raw_track: Mapping[str, object]) 
 
 
 def extract_track_artists(
-    provider: LyrionMusicProvider, raw_track: Mapping[str, object]
+    provider: LyrionMusicProvider, row: Mapping[str, str]
 ) -> UniqueList[Artist | ItemMapping]:
     """Extract track artists using LMS role precedence."""
     role_groups: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
@@ -233,8 +220,8 @@ def extract_track_artists(
     )
 
     for name_keys, id_keys in role_groups:
-        names = extract_values_for_keys(raw_track, name_keys, split_mode="name")
-        ids = extract_values_for_keys(raw_track, id_keys, split_mode="id")
+        names = extract_values_for_keys(row, name_keys, split_mode="name")
+        ids = extract_values_for_keys(row, id_keys, split_mode="id")
         if not names and not ids:
             continue
 
@@ -270,10 +257,10 @@ def extract_track_artists(
     )
 
 
-def parse_playlist(provider: LyrionMusicProvider, raw_playlist: Mapping[str, object]) -> Playlist:
+def parse_playlist(provider: LyrionMusicProvider, row: Mapping[str, str]) -> Playlist:
     """Parse LMS playlist payload into an MA Playlist model."""
-    playlist_id = normalize_lms_text_value(raw_playlist.get("id"))
-    playlist_name = normalize_lms_text_value(raw_playlist.get("name"))
+    playlist_id = row.get("id")
+    playlist_name = row.get("name")
     if playlist_id is None or playlist_name is None:
         raise MediaNotFoundError("Playlist payload without id or name")
     return Playlist(
@@ -292,12 +279,12 @@ def parse_playlist(provider: LyrionMusicProvider, raw_playlist: Mapping[str, obj
 
 
 def extract_item_id(
-    raw: Mapping[str, object],
+    row: Mapping[str, str],
     id_keys: tuple[str, ...] = ("id", "track_id", "album_id", "artist_id"),
 ) -> str | None:
     """Extract the first available id field from a raw LMS payload."""
     for key in id_keys:
-        value = normalize_lms_text_value(raw.get(key))
+        value = row.get(key)
         if value is None:
             continue
         value_str = value.split(",", 1)[0].strip()
@@ -322,7 +309,7 @@ def to_lms_stream_url(provider: LyrionMusicProvider, track_id: str, raw_url: str
 
 
 def extract_artist_ref(
-    raw: Mapping[str, object],
+    row: Mapping[str, str],
     preferred_name_keys: tuple[str, ...] = (
         "artist",
         "albumartist",
@@ -343,7 +330,7 @@ def extract_artist_ref(
     """Extract artist display name and provider id from LMS payload."""
     artist_name: str | None = None
     for key in preferred_name_keys:
-        value = normalize_lms_text_value(raw.get(key))
+        value = row.get(key)
         if value is None:
             continue
         candidate = extract_first_list_value(value)
@@ -351,7 +338,7 @@ def extract_artist_ref(
             artist_name = candidate
             break
 
-    artist_id = extract_item_id(raw, id_keys=preferred_id_keys)
+    artist_id = extract_item_id(row, id_keys=preferred_id_keys)
     if artist_name is None and artist_id is not None:
         artist_name = artist_id
     return artist_name, artist_id
@@ -366,11 +353,11 @@ def extract_first_list_value(value: str) -> str | None:
 
 
 def extract_values_for_keys(
-    raw: Mapping[str, object], keys: tuple[str, ...], split_mode: Literal["id", "name"]
+    row: Mapping[str, str], keys: tuple[str, ...], split_mode: Literal["id", "name"]
 ) -> list[str]:
     """Extract scalar or list values from the first populated key."""
     for key in keys:
-        value = normalize_lms_text_value(raw.get(key))
+        value = row.get(key)
         if value is None:
             continue
         if values := split_lms_values(value, split_mode=split_mode):
@@ -414,11 +401,11 @@ def parse_int(value: str | None, default: int = 0) -> int:
         return default
 
 
-def _serialize_mapping_details(raw: Mapping[str, object], keys: tuple[str, ...]) -> str | None:
+def _serialize_mapping_details(row: Mapping[str, str], keys: tuple[str, ...]) -> str | None:
     """Serialize selected LMS payload fields for later provider-local reuse."""
     details: dict[str, str] = {}
     for key in keys:
-        value = normalize_lms_text_value(raw.get(key))
+        value = row.get(key)
         if value is None:
             continue
         details[key] = value

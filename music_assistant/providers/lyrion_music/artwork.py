@@ -16,7 +16,6 @@ from music_assistant.providers.lyrion.client import (
     build_lms_url,
     get_configured_host,
     get_configured_port,
-    normalize_lms_text_value,
 )
 
 from . import parsers
@@ -55,14 +54,14 @@ async def resolve_image(provider: LyrionMusicProvider, path: str) -> str | bytes
     return path
 
 
-async def build_artist(provider: LyrionMusicProvider, raw_artist: Mapping[str, object]) -> Artist:
+async def build_artist(provider: LyrionMusicProvider, row: Mapping[str, str]) -> Artist:
     """Build artist model from LMS payload and validate artwork URL."""
-    return parsers.parse_artist(provider, raw_artist)
+    return parsers.parse_artist(provider, row)
 
 
-async def build_album(provider: LyrionMusicProvider, raw_album: Mapping[str, object]) -> Album:
+async def build_album(provider: LyrionMusicProvider, row: Mapping[str, str]) -> Album:
     """Build album model from LMS payload and validate artwork URL."""
-    return parsers.parse_album(provider, raw_album)
+    return parsers.parse_album(provider, row)
 
 
 async def ensure_preferred_artwork_size(
@@ -99,12 +98,12 @@ async def ensure_preferred_artwork_size(
 
 def extract_artwork_url(
     provider: LyrionMusicProvider,
-    raw: Mapping[str, object],
+    row: Mapping[str, str],
     fallback_id: str | None = None,
 ) -> str | None:
     """Extract an artwork URL from known LMS payload fields."""
     for key in ("artwork_url", "artwork", "icon"):
-        if (value := normalize_lms_text_value(raw.get(key))) is None:
+        if (value := row.get(key)) is None:
             continue
         if value.startswith(("http://", "https://")):
             return append_artwork_cache_buster(provider, value)
@@ -114,11 +113,7 @@ def extract_artwork_url(
                 to_lms_absolute_url(provider, value),
             )
 
-    cover_id = (
-        normalize_lms_text_value(raw.get("coverid"))
-        or normalize_lms_text_value(raw.get("artwork_track_id"))
-        or fallback_id
-    )
+    cover_id = row.get("coverid") or row.get("artwork_track_id") or fallback_id
     if cover_id is None:
         return None
     encoded_cover_id = quote(cover_id, safe="")
@@ -128,11 +123,9 @@ def extract_artwork_url(
     )
 
 
-def extract_artist_artwork_url(
-    provider: LyrionMusicProvider, raw: Mapping[str, object]
-) -> str | None:
+def extract_artist_artwork_url(provider: LyrionMusicProvider, row: Mapping[str, str]) -> str | None:
     """Extract artist artwork URL from known LMS artist fields."""
-    portrait_id = normalize_lms_text_value(raw.get("portraitid"))
+    portrait_id = row.get("portraitid")
     if portrait_id is not None:
         encoded_id = quote(portrait_id, safe="")
         return append_artwork_cache_buster(
@@ -144,7 +137,7 @@ def extract_artist_artwork_url(
         )
 
     for key in ("artwork_url", "artwork", "icon"):
-        value = normalize_lms_text_value(raw.get(key))
+        value = row.get(key)
         if value is None:
             continue
         value = normalize_artist_artwork_path(value)
@@ -157,7 +150,7 @@ def extract_artist_artwork_url(
             )
 
     artist_id = parsers.extract_item_id(
-        raw,
+        row,
         id_keys=("id", "artist_id", "contributor_id"),
     )
     if artist_id:
