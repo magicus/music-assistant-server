@@ -6,6 +6,6 @@
   "description": "Play music from a Lyrion Media Server (LMS) library",
   "codeowners": ["@magicus"],
   "requirements": [],
-  "documentation": "https://github.com/magicus/music-assistant-server",
+  "documentation": "",
   "multi_instance": true
 }

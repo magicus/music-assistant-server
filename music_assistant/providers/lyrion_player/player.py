@@ -315,7 +315,7 @@ class LyrionPlayer(Player):
 
         :param event: Queue items updated event.
         """
-        if event.object_id != self.player_id or self._queue_sync.syncing_from_lms_queue:
+        if event.object_id != self.player_id:
             return
         await self._queue_sync.sync_ma_queue_to_lms()
 
@@ -325,7 +325,7 @@ class LyrionPlayer(Player):
 
         :param event: Queue updated event.
         """
-        if event.object_id != self.player_id or self._queue_sync.syncing_from_lms_queue:
+        if event.object_id != self.player_id:
             return
         await self._queue_sync.sync_ma_queue_to_lms(sync_items=False)
 

@@ -6,6 +6,7 @@ import time
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from aiohttp import web
 from music_assistant_models.enums import PlayerFeature
 from music_assistant_models.errors import (
     InvalidCommand,
@@ -14,6 +15,7 @@ from music_assistant_models.errors import (
 )
 
 from music_assistant.providers.lyrion_player.player import LyrionPlayer
+from music_assistant.providers.lyrion_player.provider import LyrionPlayerProvider
 
 
 @pytest.fixture
@@ -35,6 +37,22 @@ def mock_provider() -> MagicMock:
 def player(mock_provider: MagicMock) -> LyrionPlayer:
     """Return a LyrionPlayer instance backed by a mocked provider."""
     return LyrionPlayer(mock_provider, "test_player", {})
+
+
+@pytest.fixture
+def player_provider() -> MagicMock:
+    """Return a provider stub for route-level tests."""
+    provider = MagicMock()
+    provider.instance_id = "lyrion_player"
+    provider.logger = MagicMock()
+    provider.mass = MagicMock()
+    provider.mass.players = MagicMock()
+    provider.mass.player_queues = MagicMock()
+    provider.mass.streams = MagicMock()
+    provider.mass.streams.resolve_stream_url = AsyncMock()
+    provider.mass.player_queues.player_media_from_queue_item = AsyncMock()
+    provider.mass.players.get_player = MagicMock()
+    return provider
 
 
 @pytest.mark.asyncio
@@ -242,3 +260,23 @@ async def test_set_members_wraps_provider_unavailable(
 
     with pytest.raises(PlayerCommandFailed, match="set_members failed"):
         await player.set_members(player_ids_to_add=["member_a"])
+
+
+@pytest.mark.asyncio
+async def test_get_stream_url_rejects_queue_id_mismatch(player_provider: MagicMock) -> None:
+    """The redirect endpoint only accepts the player queue for the player."""
+    request = MagicMock()
+    request.query = {
+        "player_id": "player_1",
+        "queue_id": "queue_2",
+        "queue_item_id": "item_1",
+    }
+
+    request_player = MagicMock(spec=LyrionPlayer)
+    request_player.provider = player_provider
+    player_provider.mass.players.get_player.return_value = request_player
+
+    with pytest.raises(web.HTTPBadRequest, match="queue_id must match player_id"):
+        await LyrionPlayerProvider._handle_get_stream_url(player_provider, request)
+
+    player_provider.mass.player_queues.get_item.assert_not_called()

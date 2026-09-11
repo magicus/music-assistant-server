@@ -14,6 +14,7 @@ from music_assistant.providers.lyrion_player.queue.queue_sync import (
     LyrionQueueSync,
     _LmsMirrorEntry,
     _LmsQueueSnapshot,
+    _MaQueueSnapshot,
 )
 
 
@@ -139,3 +140,68 @@ async def test_apply_lms_modes_maps_album_shuffle_to_ma_enabled() -> None:
 
     player_queues.set_repeat.assert_not_awaited()
     player_queues.set_shuffle.assert_awaited_once_with("test-player", True)
+
+
+@pytest.mark.asyncio
+async def test_sync_ma_queue_to_lms_reruns_once_when_pending_request_arrives() -> None:
+    """A queue update that arrives during sync should trigger one follow-up MA->LMS pass."""
+    entries = (_LmsMirrorEntry(kind="url", value="http://queue.local/track-a.mp3"),)
+    ma_snapshot = _MaQueueSnapshot(
+        entries=entries,
+        current_index=0,
+        shuffle_enabled=False,
+        repeat_mode=RepeatMode.OFF,
+        protected_prefix_len=0,
+    )
+    lms_snapshot = _LmsQueueSnapshot(
+        entries=entries,
+        current_index=0,
+        shuffle_mode=0,
+        repeat_mode=0,
+        playback_mode="stop",
+    )
+
+    queue_sync = object.__new__(LyrionQueueSync)
+    queue_sync.player = cast(
+        "Any",
+        SimpleNamespace(
+            player_id="test-player",
+            provider=SimpleNamespace(),
+            logger=Mock(),
+        ),
+    )
+    queue_sync._syncing_from_lms_queue = False
+    queue_sync._syncing_to_lms_queue = False
+    queue_sync._ma_queue_sync_pending = False
+    queue_sync._ma_queue_sync_pending_sync_items = False
+    queue_sync._lms_queue_sync_pending = False
+    queue_sync._ma_model = None
+    queue_sync._lms_model = lms_snapshot
+    queue_sync._lms_shuffle_mode_raw = 0
+    queue_sync._identity_map = {}
+    queue_sync._media_mapper = Mock()
+    queue_sync._collect_ma_snapshot = AsyncMock(return_value=ma_snapshot)
+    queue_sync._collect_lms_snapshot = AsyncMock(return_value=lms_snapshot)
+    queue_sync._within_sync_limits = Mock(return_value=True)
+    queue_sync._sync_ma_items_to_lms = AsyncMock()
+    queue_sync._sync_ma_modes_to_lms = AsyncMock()
+
+    position_calls = 0
+
+    async def _sync_position(
+        first_snapshot: _MaQueueSnapshot, second_snapshot: _LmsQueueSnapshot
+    ) -> None:
+        nonlocal position_calls
+        del first_snapshot, second_snapshot
+        position_calls += 1
+        if position_calls == 1:
+            await queue_sync.sync_ma_queue_to_lms(sync_items=True)
+
+    queue_sync._sync_ma_position_to_lms = AsyncMock(side_effect=_sync_position)
+
+    await queue_sync.sync_ma_queue_to_lms(sync_items=False)
+
+    assert queue_sync._collect_ma_snapshot.await_count == 2
+    assert queue_sync._sync_ma_items_to_lms.await_count == 1
+    assert queue_sync._sync_ma_position_to_lms.await_count == 2
+    assert queue_sync._sync_ma_modes_to_lms.await_count == 2

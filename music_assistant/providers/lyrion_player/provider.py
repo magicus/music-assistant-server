@@ -284,6 +284,9 @@ class LyrionPlayerProvider(PlayerProvider):
         ):
             raise web.HTTPNotFound(reason=f"Unknown Lyrion player: {player_id}")
 
+        if queue_id != player_id:
+            raise web.HTTPBadRequest(reason="queue_id must match player_id")
+
         queue_item = self.mass.player_queues.get_item(queue_id, queue_item_id)
         if queue_item is None:
             raise web.HTTPNotFound(reason=f"Unknown queue item: {queue_item_id}")

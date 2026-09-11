@@ -368,7 +368,7 @@ async def _sync_library_entities(provider: LyrionMusicProvider, spec: SyncSpec) 
                 )
 
             await asyncio.sleep(0)
-        except Exception as err:
+        except (MediaNotFoundError, ProviderUnavailableError, ValueError) as err:
             provider._handle_sync_item_failure(spec.media_type, prov_item.uri, err)
             provider._protect_failed_sync_item(
                 spec.media_type, prov_item.item_id, db_id, cur_db_ids
@@ -378,7 +378,7 @@ async def _sync_library_entities(provider: LyrionMusicProvider, spec: SyncSpec) 
         if spec.post_item_sync is not None:
             try:
                 await spec.post_item_sync(provider, prov_item)
-            except Exception as err:
+            except (MediaNotFoundError, ProviderUnavailableError, ValueError) as err:
                 provider._handle_sync_item_failure(spec.media_type, prov_item.uri, err)
 
     return cur_db_ids

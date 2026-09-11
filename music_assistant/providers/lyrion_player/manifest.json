@@ -6,6 +6,6 @@
   "description": "Control and play music on Lyrion Media Server (LMS) players",
   "codeowners": ["@magicus"],
   "requirements": [],
-  "documentation": "https://github.com/magicus/music-assistant-server",
+  "documentation": "",
   "multi_instance": true
 }

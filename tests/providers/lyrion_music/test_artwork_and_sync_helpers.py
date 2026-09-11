@@ -268,7 +268,7 @@ async def test_sync_library_entities_handles_item_failures() -> None:
 
     controller = Mock()
     controller.get_library_item_sync_details = AsyncMock(return_value=None)
-    controller.add_item_to_library = AsyncMock(side_effect=RuntimeError("boom"))
+    controller.add_item_to_library = AsyncMock(side_effect=ValueError("boom"))
 
     provider = Mock()
     provider.logger = Mock()
@@ -555,7 +555,7 @@ async def test_sync_library_entities_post_sync_failure_is_reported() -> None:
     provider._protect_failed_sync_item = Mock()
 
     async def _post_fail(_provider: Any, _item: Any) -> None:
-        raise RuntimeError("post-fail")
+        raise ValueError("post-fail")
 
     spec = sync.SyncSpec(
         media_type=MediaType.TRACK,
