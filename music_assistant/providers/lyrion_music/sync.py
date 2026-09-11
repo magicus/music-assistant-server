@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 ArtworkItem = TypeVar("ArtworkItem", Artist, Album)
 
 
-ExtraNeedsUpdateFn = Callable[["LyrionMusicProvider", Any, Any], Awaitable[bool]]
+ExtraNeedsUpdateFn = Callable[..., Awaitable[bool]]
 PostItemSyncFn = Callable[["LyrionMusicProvider", Any], Awaitable[None]]
 
 
@@ -50,12 +50,11 @@ async def _artist_needs_update(
     provider: LyrionMusicProvider,
     sync_details: Any,
     prov_item: Artist,
+    library_item: Any,
 ) -> bool:
     """Return True when linked artist artwork metadata has changed."""
-    try:
-        library_item = await provider.mass.music.artists.get_library_item(sync_details.item_id)
-    except MediaNotFoundError:
-        return True
+    del provider
+    del sync_details
     return parsers.artist_metadata_needs_update(library_item, prov_item)
 
 
@@ -63,12 +62,11 @@ async def _album_needs_update(
     provider: LyrionMusicProvider,
     sync_details: Any,
     prov_item: Album,
+    library_item: Any,
 ) -> bool:
     """Return True when linked album artist/artwork metadata has changed."""
-    try:
-        library_item = await provider.mass.music.albums.get_library_item(sync_details.item_id)
-    except MediaNotFoundError:
-        return True
+    del provider
+    del sync_details
     return parsers.album_metadata_needs_update(library_item, prov_item)
 
 
@@ -76,9 +74,11 @@ async def _track_needs_update(
     provider: LyrionMusicProvider,
     sync_details: Any,
     prov_item: Track,
+    library_item: Any | None = None,
 ) -> bool:
     """Return True when known track relation backfills are still missing."""
     del provider
+    del library_item
     has_album = bool(getattr(sync_details, "has_album", True))
     has_artists = bool(getattr(sync_details, "has_artists", True))
     return bool((prov_item.album and not has_album) or (prov_item.artists and not has_artists))
@@ -300,12 +300,124 @@ def _extract_artwork_url_from_mapping(
     return artwork.extract_artwork_url(provider, raw, fallback_id=mapping.item_id)
 
 
+async def _lookup_library_items_for_sync(
+    provider: LyrionMusicProvider,
+    controller: MediaControllerBase[ArtworkItem],
+    provider_item_ids: list[str],
+) -> dict[str, Any]:
+    """Batch-resolve library items for the given provider item ids."""
+    if not provider_item_ids:
+        return {}
+
+    unique_item_ids = list(dict.fromkeys(provider_item_ids))
+    result: dict[str, Any] = {}
+    for library_item in await controller.get_library_items_by_prov_id(
+        provider_instance=provider.instance_id,
+        provider_item_ids=unique_item_ids,
+        limit=len(unique_item_ids),
+    ):
+        for mapping in library_item.provider_mappings:
+            if (
+                mapping.provider_instance == provider.instance_id
+                and mapping.item_id in unique_item_ids
+            ):
+                result[mapping.item_id] = library_item
+                break
+    return result
+
+
+async def _sync_single_library_item(
+    provider: LyrionMusicProvider,
+    spec: SyncSpec,
+    controller: MediaControllerBase[ArtworkItem],
+    prov_item: Any,
+    sync_details: Any | None,
+    needs_update: bool,
+    cur_db_ids: set[int],
+) -> None:
+    """Apply one provider item to the library using the precomputed update decision."""
+    db_id: int | None = sync_details.item_id if sync_details else None
+
+    async with provider.mass.music.database.deferred_commit():
+        if not sync_details:
+            for prov_map in prov_item.provider_mappings:
+                prov_map.in_library = True
+            library_item = await controller.add_item_to_library(prov_item)
+            db_id = int(library_item.item_id)
+            favorite = library_item.favorite
+        elif needs_update:
+            library_item = await controller.update_item_in_library(
+                sync_details.item_id,
+                prov_item,
+            )
+            db_id = int(library_item.item_id)
+            favorite = library_item.favorite
+        else:
+            db_id = sync_details.item_id
+            favorite = sync_details.favorite
+
+        cur_db_ids.add(db_id)
+
+        if not favorite and prov_item.favorite:
+            await controller.set_favorite(db_id, True)
+
+        fallback_genres = (
+            set(prov_item.metadata.genres)
+            if prov_item.metadata and prov_item.metadata.genres
+            else None
+        )
+        await provider._sync_item_genres(
+            spec.media_type,
+            prov_item.item_id,
+            db_id,
+            fallback_genres,
+        )
+
+    await asyncio.sleep(0)
+
+
 async def _sync_library_entities(provider: LyrionMusicProvider, spec: SyncSpec) -> set[int]:
     """Sync one media type using shared logic plus entity-specific hooks."""
     provider.logger.debug("Start sync of %s to Music Assistant library.", spec.media_type.value)
     cur_db_ids: set[int] = set()
     item_count = 0
     controller = spec.controller_getter(provider)
+    pending_extra_checks: list[tuple[Any, Any]] = []
+
+    async def flush_pending_extra_checks() -> None:
+        if not pending_extra_checks:
+            return
+
+        library_items_by_provider_id = await _lookup_library_items_for_sync(
+            provider,
+            controller,
+            [prov_item.item_id for _, prov_item in pending_extra_checks],
+        )
+        for sync_details, prov_item in pending_extra_checks:
+            if not (library_item := library_items_by_provider_id.get(prov_item.item_id)):
+                needs_update = True
+            else:
+                needs_update = await spec.extra_needs_update(
+                    provider,
+                    sync_details,
+                    prov_item,
+                    library_item,
+                )
+            await _sync_single_library_item(
+                provider,
+                spec,
+                controller,
+                prov_item,
+                sync_details,
+                needs_update,
+                cur_db_ids,
+            )
+            if spec.post_item_sync is not None:
+                try:
+                    await spec.post_item_sync(provider, prov_item)
+                except (MediaNotFoundError, ProviderUnavailableError, ValueError) as err:
+                    provider._handle_sync_item_failure(spec.media_type, prov_item.uri, err)
+        pending_extra_checks.clear()
 
     async for prov_item in spec.iter_items(provider):
         item_count += 1
@@ -325,49 +437,28 @@ async def _sync_library_entities(provider: LyrionMusicProvider, spec: SyncSpec) 
                 )
                 continue
 
-            async with provider.mass.music.database.deferred_commit():
-                if not sync_details:
-                    for prov_map in prov_item.provider_mappings:
-                        prov_map.in_library = True
-                    library_item = await controller.add_item_to_library(prov_item)
-                    db_id = int(library_item.item_id)
-                    favorite = library_item.favorite
-                else:
-                    needs_update = provider._library_item_needs_update(sync_details, prov_item)
-                    if not needs_update and spec.extra_needs_update is not None:
-                        needs_update = await spec.extra_needs_update(
-                            provider, sync_details, prov_item
-                        )
+            needs_update = bool(
+                sync_details and provider._library_item_needs_update(sync_details, prov_item)
+            )
+            if (
+                not needs_update
+                and spec.extra_needs_update is not None
+                and sync_details is not None
+            ):
+                pending_extra_checks.append((sync_details, prov_item))
+                if len(pending_extra_checks) >= 200:
+                    await flush_pending_extra_checks()
+                continue
 
-                    if needs_update:
-                        library_item = await controller.update_item_in_library(
-                            sync_details.item_id,
-                            prov_item,
-                        )
-                        db_id = int(library_item.item_id)
-                        favorite = library_item.favorite
-                    else:
-                        db_id = sync_details.item_id
-                        favorite = sync_details.favorite
-
-                cur_db_ids.add(db_id)
-
-                if not favorite and prov_item.favorite:
-                    await controller.set_favorite(db_id, True)
-
-                fallback_genres = (
-                    set(prov_item.metadata.genres)
-                    if prov_item.metadata and prov_item.metadata.genres
-                    else None
-                )
-                await provider._sync_item_genres(
-                    spec.media_type,
-                    prov_item.item_id,
-                    db_id,
-                    fallback_genres,
-                )
-
-            await asyncio.sleep(0)
+            await _sync_single_library_item(
+                provider,
+                spec,
+                controller,
+                prov_item,
+                sync_details,
+                needs_update,
+                cur_db_ids,
+            )
         except (MediaNotFoundError, ProviderUnavailableError, ValueError) as err:
             provider._handle_sync_item_failure(spec.media_type, prov_item.uri, err)
             provider._protect_failed_sync_item(
@@ -381,4 +472,5 @@ async def _sync_library_entities(provider: LyrionMusicProvider, spec: SyncSpec) 
             except (MediaNotFoundError, ProviderUnavailableError, ValueError) as err:
                 provider._handle_sync_item_failure(spec.media_type, prov_item.uri, err)
 
+    await flush_pending_extra_checks()
     return cur_db_ids

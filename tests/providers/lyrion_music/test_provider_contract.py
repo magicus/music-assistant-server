@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -11,6 +12,7 @@ from music_assistant_models.media_items import BrowseFolder
 
 from music_assistant.providers.lyrion_music import client as lyrion_client
 from music_assistant.providers.lyrion_music import provider as lyrion_provider_mod
+from music_assistant.providers.lyrion_music import sync as lyrion_sync_mod
 from music_assistant.providers.lyrion_music.provider import LyrionMusicProvider
 from tests.providers.lyrion.lms_server_harness import LyrionTestEndpoint
 
@@ -118,6 +120,27 @@ async def test_browse_root_and_nested_sections(
     )
     album_tracks = await lyrion_provider.browse(album_folder.path)
     assert [item.name for item in album_tracks] == ["Await Me Maybe", "Future Is Pending"]
+
+
+async def test_sync_batches_lookup_for_extra_metadata_checks() -> None:
+    """Extra metadata checks should batch provider-id lookups instead of a DB hit per item."""
+    seen: list[list[str]] = []
+
+    async def fake_get_library_items_by_prov_id(
+        provider_instance: str | None = None,
+        provider_item_ids: list[str] | None = None,
+        **_: Any,
+    ) -> list[Any]:
+        seen.append(provider_item_ids or [])
+        return []
+
+    await lyrion_sync_mod._lookup_library_items_for_sync(
+        SimpleNamespace(instance_id="provider-1"),
+        SimpleNamespace(get_library_items_by_prov_id=fake_get_library_items_by_prov_id),
+        [f"item-{index}" for index in range(10)],
+    )
+
+    assert seen == [[f"item-{index}" for index in range(10)]]
 
 
 async def test_get_playlist_tracks_respects_page_offset(
