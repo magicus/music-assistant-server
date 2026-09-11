@@ -179,12 +179,17 @@ async def get_playlists_page(
     )
     playlists: list[dict[str, str]] = []
     for raw_playlist in raw_playlists:
-        if playlist := _normalize_named_browse_item(
-            raw_playlist,
+        normalized_playlist = _normalize_lms_row(raw_playlist)
+        playlist_id = parsers.extract_item_id(
+            normalized_playlist,
             id_keys=("id", "playlist_id"),
-            name_keys=("playlist", "name"),
-        ):
-            playlists.append(playlist)
+        )
+        if playlist_id is None:
+            continue
+        playlist_name = (
+            normalized_playlist.get("playlist") or normalized_playlist.get("name") or playlist_id
+        )
+        playlists.append({"id": playlist_id, "name": playlist_name})
     return playlists, has_more
 
 
@@ -203,33 +208,16 @@ async def get_genres_page(
     )
     genres: list[dict[str, str]] = []
     for raw_genre in raw_genres:
-        if genre := _normalize_named_browse_item(
-            raw_genre,
+        normalized_genre = _normalize_lms_row(raw_genre)
+        genre_id = parsers.extract_item_id(
+            normalized_genre,
             id_keys=("id", "genre_id"),
-            name_keys=("genre", "name"),
-        ):
-            genres.append(genre)
+        )
+        if genre_id is None:
+            continue
+        genre_name = normalized_genre.get("genre") or normalized_genre.get("name") or genre_id
+        genres.append({"id": genre_id, "name": genre_name})
     return genres, has_more
-
-
-def _normalize_named_browse_item(
-    raw_item: Mapping[str, object],
-    *,
-    id_keys: tuple[str, ...],
-    name_keys: tuple[str, ...],
-) -> dict[str, str] | None:
-    """Normalize a raw LMS browse row into a cooked id/name pair."""
-    normalized_item = _normalize_lms_row(raw_item)
-    item_id = parsers.extract_item_id(normalized_item, id_keys=id_keys)
-    if item_id is None:
-        return None
-
-    for key in name_keys:
-        name = normalized_item.get(key)
-        if name:
-            return {"id": item_id, "name": name}
-
-    return {"id": item_id, "name": item_id}
 
 
 def _normalize_lms_row(raw_item: Mapping[str, object]) -> dict[str, str]:

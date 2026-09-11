@@ -38,7 +38,6 @@ from music_assistant.providers.lyrion.client import (
 from music_assistant.providers.lyrion.client import (
     get_configured_port as get_shared_configured_port,
 )
-from music_assistant.providers.lyrion.client import normalize_lms_text_value
 from music_assistant.providers.lyrion.setup_flow import validate_lms_endpoint
 
 from . import artwork, client, parsers, sync
@@ -634,9 +633,9 @@ class LyrionMusicProvider(MusicProvider):
             raise MediaNotFoundError(f"Unsupported media type: {media_type}")
 
         track_data = await self._get_track_data(item_id)
-        raw_url = normalize_lms_text_value(track_data.get("url"))
-        stream_url = parsers.to_lms_stream_url(self, item_id, raw_url)
-        content_type = ContentType.try_parse(raw_url or stream_url)
+        track_url = track_data.get("url")
+        stream_url = parsers.to_lms_stream_url(self, item_id, track_url)
+        content_type = ContentType.try_parse(track_url or stream_url)
 
         return StreamDetails(
             provider=self.instance_id,
