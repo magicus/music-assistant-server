@@ -133,6 +133,14 @@ class LyrionPlayerClient:
         """Delete one LMS queue item by index."""
         return await self.send_command(player_id, ["playlist", "delete", index])
 
+    async def play_url(self, player_id: str, url: str) -> dict[str, object]:
+        """Start playback of one URL on the player."""
+        return await self.send_command(player_id, ["playlist", "play", url])
+
+    async def add_url(self, player_id: str, url: str) -> dict[str, object]:
+        """Append one URL to the player queue."""
+        return await self.send_command(player_id, ["playlist", "add", url])
+
     async def add_url_to_queue(
         self,
         player_id: str,

@@ -503,6 +503,8 @@ async def test_transport_adapter_methods_use_pylyrion_client() -> None:
     player_client.players.clear_queue = AsyncMock(return_value={})
     player_client.players.add_track_id = AsyncMock(return_value={})
     player_client.players.add_url_to_queue = AsyncMock(return_value={})
+    player_client.players.play_url = AsyncMock(return_value={})
+    player_client.players.add_url = AsyncMock(return_value={})
     player_client.players.move_queue_item = AsyncMock(return_value={})
     player_client.players.delete_queue_item = AsyncMock(return_value={})
 
@@ -535,6 +537,8 @@ async def test_transport_adapter_methods_use_pylyrion_client() -> None:
             artist="Artist",
             album="Album",
         )
+        await provider.play_player_url("p1", "http://example/play")
+        await provider.append_player_url("p1", "http://example/add")
         await provider.move_player_queue_item("p1", 5, 2)
         await provider.delete_player_queue_item("p1", 4)
 
@@ -571,6 +575,8 @@ async def test_transport_adapter_methods_use_pylyrion_client() -> None:
         artist="Artist",
         album="Album",
     )
+    player_client.players.play_url.assert_awaited_once_with("p1", "http://example/play")
+    player_client.players.add_url.assert_awaited_once_with("p1", "http://example/add")
     player_client.players.move_queue_item.assert_awaited_once_with("p1", 5, 2)
     player_client.players.delete_queue_item.assert_awaited_once_with("p1", 4)
 

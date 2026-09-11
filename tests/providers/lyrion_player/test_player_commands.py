@@ -48,6 +48,8 @@ def mock_provider() -> MagicMock:
     provider.set_player_volume = AsyncMock()
     provider.set_player_muted = AsyncMock()
     provider.set_player_sync_volume = AsyncMock()
+    provider.play_player_url = AsyncMock()
+    provider.append_player_url = AsyncMock()
     provider.get_player_queue_status = AsyncMock(return_value={"mode": "play"})
     provider.get_last_cometd_status_seen_at = MagicMock(return_value=0.0)
     provider.get_cached_cometd_status = MagicMock(return_value={"playlist_cur_index": 0})
@@ -259,7 +261,7 @@ async def test_play_media_native_queue_path_skips_stream_url_resolution(
     await player.play_media(media)
 
     player._queue_sync.try_play_lyrion_track_id.assert_awaited_once_with(media)
-    assert not mock_provider.send_player_command.await_args_list
+    mock_provider.play_player_url.assert_not_awaited()
     assert player.current_media is media
 
 
@@ -275,9 +277,7 @@ async def test_play_media_stream_url_path_dispatches_playlist_play(
 
     await player.play_media(media)
 
-    mock_provider.send_player_command.assert_awaited_once_with(
-        "test_player", ["playlist", "play", "http://stream/abc"]
-    )
+    mock_provider.play_player_url.assert_awaited_once_with("test_player", "http://stream/abc")
 
 
 @pytest.mark.asyncio
@@ -289,7 +289,7 @@ async def test_play_media_wraps_provider_unavailable_in_url_path(
     media.uri = "spotify://track/123"
     player._queue_sync.try_play_lyrion_track_id = AsyncMock(return_value=False)
     mock_provider.mass.streams.resolve_stream_url = AsyncMock(return_value="http://stream/abc")
-    mock_provider.send_player_command.side_effect = ProviderUnavailableError("down")
+    mock_provider.play_player_url.side_effect = ProviderUnavailableError("down")
 
     with pytest.raises(PlayerCommandFailed, match="play_media failed"):
         await player.play_media(media)
@@ -310,10 +310,10 @@ async def test_enqueue_next_media_covers_native_and_url_paths(
 
     player._queue_sync.try_play_lyrion_track_id = AsyncMock(return_value=False)
     mock_provider.mass.streams.resolve_stream_url = AsyncMock(return_value="http://stream/next")
-    mock_provider.send_player_command.reset_mock()
+    mock_provider.append_player_url.reset_mock()
     await player.enqueue_next_media(media)
-    mock_provider.send_player_command.assert_awaited_once_with(
-        "test_player", ["playlist", "add", "http://stream/next"]
+    mock_provider.append_player_url.assert_awaited_once_with(
+        "test_player", "http://stream/next"
     )
 
 
@@ -454,7 +454,7 @@ async def test_enqueue_next_media_wraps_provider_unavailable(
     media.uri = "spotify://track/123"
     player._queue_sync.try_play_lyrion_track_id = AsyncMock(return_value=False)
     mock_provider.mass.streams.resolve_stream_url = AsyncMock(return_value="http://stream/next")
-    mock_provider.send_player_command.side_effect = ProviderUnavailableError("down")
+    mock_provider.append_player_url.side_effect = ProviderUnavailableError("down")
 
     with pytest.raises(PlayerCommandFailed, match="enqueue_next_media failed"):
         await player.enqueue_next_media(media)
@@ -509,14 +509,16 @@ async def test_set_members_noop_and_skip_self_or_unknown_members(
 ) -> None:
     """set_members should noop on empty changes and skip self/non-members safely."""
     await player.set_members(player_ids_to_add=None, player_ids_to_remove=None)
-    mock_provider.send_player_command.assert_not_awaited()
+    mock_provider.unsync_player.assert_not_awaited()
+    mock_provider.sync_player_to.assert_not_awaited()
 
     player._attr_group_members = ["test_player", "member_a"]
     await player.set_members(
         player_ids_to_remove=["test_player", "missing"],
         player_ids_to_add=["test_player", "member_a"],
     )
-    mock_provider.send_player_command.assert_not_awaited()
+    mock_provider.unsync_player.assert_not_awaited()
+    mock_provider.sync_player_to.assert_not_awaited()
 
 
 @pytest.mark.asyncio

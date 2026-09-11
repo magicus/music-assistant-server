@@ -133,9 +133,7 @@ class LyrionPlayer(Player):
             media,
         )
         try:
-            await self.provider.send_player_command(
-                self.player_id, ["playlist", "play", stream_url]
-            )
+            await self.provider.play_player_url(self.player_id, stream_url)
         except ProviderUnavailableError as err:
             raise PlayerCommandFailed(f"play_media failed: {err}") from err
 
@@ -168,10 +166,7 @@ class LyrionPlayer(Player):
             media,
         )
         try:
-            await self.provider.send_player_command(
-                self.player_id,
-                ["playlist", "add", stream_url],
-            )
+            await self.provider.append_player_url(self.player_id, stream_url)
         except ProviderUnavailableError as err:
             raise PlayerCommandFailed(f"enqueue_next_media failed: {err}") from err
         await self._verify_cometd_status_update(baseline)

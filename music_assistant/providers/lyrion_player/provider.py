@@ -405,6 +405,20 @@ class LyrionPlayerProvider(PlayerProvider):
         except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
             raise ProviderUnavailableError(str(err)) from err
 
+    async def play_player_url(self, player_id: str, url: str) -> dict[str, Any]:
+        """Start playback of one URL via pylyrion."""
+        try:
+            return await self._build_pylyrion_client().players.play_url(player_id, url)
+        except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
+            raise ProviderUnavailableError(str(err)) from err
+
+    async def append_player_url(self, player_id: str, url: str) -> dict[str, Any]:
+        """Append one URL to LMS queue via pylyrion."""
+        try:
+            return await self._build_pylyrion_client().players.add_url(player_id, url)
+        except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
+            raise ProviderUnavailableError(str(err)) from err
+
     async def move_player_queue_item(
         self,
         player_id: str,

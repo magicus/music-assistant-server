@@ -87,6 +87,8 @@ async def test_player_client_transport_methods_dispatch_expected_commands() -> N
     await client.add_track_id("player1", "t-42", command="load")
     await client.move_queue_item("player1", 6, 1)
     await client.delete_queue_item("player1", 3)
+    await client.play_url("player1", "http://example/play")
+    await client.add_url("player1", "http://example/add")
     await client.add_url_to_queue(
         "player1",
         "http://example/stream",
@@ -116,7 +118,9 @@ async def test_player_client_transport_methods_dispatch_expected_commands() -> N
     assert calls[17] == ["player1", ["playlistcontrol", "cmd:load", "track_id:t-42"]]
     assert calls[18] == ["player1", ["playlist", "move", 6, 1]]
     assert calls[19] == ["player1", ["playlist", "delete", 3]]
-    assert calls[20] == [
+    assert calls[20] == ["player1", ["playlist", "play", "http://example/play"]]
+    assert calls[21] == ["player1", ["playlist", "add", "http://example/add"]]
+    assert calls[22] == [
         "player1",
         [
             "playlistcontrol",
