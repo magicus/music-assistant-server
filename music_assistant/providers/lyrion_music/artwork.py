@@ -11,7 +11,11 @@ from music_assistant_models.enums import ImageType
 from music_assistant_models.errors import ProviderUnavailableError
 from music_assistant_models.media_items import MediaItemImage, UniqueList
 
-from music_assistant.providers.lyrion.client import get_configured_host, get_configured_port
+from music_assistant.providers.lyrion.client import (
+    build_lms_url,
+    get_configured_host,
+    get_configured_port,
+)
 
 from . import parsers
 from .constants import ARTWORK_VALIDATION_TIMEOUT, CONF_ARTWORK_CACHE_BUSTER, RPC_TIMEOUT
@@ -178,7 +182,7 @@ def to_lms_absolute_url(provider: LyrionMusicProvider, path: str) -> str:
     port = get_configured_port(provider, default=None)
     if port is None:
         raise ProviderUnavailableError("Lyrion port is not configured")
-    return f"http://{host}:{port}{path}"
+    return build_lms_url(host, port, path)
 
 
 async def fetch_remote_image_if_ok(provider: LyrionMusicProvider, url: str) -> bytes | None:

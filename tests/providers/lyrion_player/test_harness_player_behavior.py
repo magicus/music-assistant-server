@@ -336,7 +336,7 @@ async def test_fake_player_harness_uses_same_endpoint_contract_for_real_lms() ->
 
 
 @pytest.mark.asyncio
-async def test_ma_volume_change_disables_lms_sync_volume_before_grouped_volume_change(
+async def test_ma_volume_change_disables_lms_sync_volume_before_grouped_volume_change(  # noqa: PLR0915
     lyrion_test_endpoint: LyrionTestEndpoint,
 ) -> None:
     """MA-driven Lyrion volume changes must disable LMS syncVolume first."""
@@ -517,7 +517,7 @@ async def test_ma_volume_change_disables_lms_sync_volume_before_grouped_volume_c
 
 
 @pytest.mark.asyncio
-async def test_group_lifecycle_three_players_and_group_transport(
+async def test_group_lifecycle_three_players_and_group_transport(  # noqa: PLR0915
     lyrion_test_endpoint: LyrionTestEndpoint,
 ) -> None:
     """Group A+B, add C, remove B, then verify group-wide play/pause remains on A+C."""
@@ -671,7 +671,7 @@ async def test_group_lifecycle_three_players_and_group_transport(
 
 @pytest.mark.asyncio
 @pytest.mark.live_lyrion_docker
-async def test_live_group_transport_three_players_with_member_removal(
+async def test_live_group_transport_three_players_with_member_removal(  # noqa: PLR0915
     lyrion_test_endpoint: LyrionTestEndpoint,
 ) -> None:
     """Live LMS: load/play follows active group and excludes removed member."""
@@ -789,7 +789,9 @@ async def test_live_group_transport_three_players_with_member_removal(
         expected_ids: dict[str, str],
         timeout: float = 6.0,
     ) -> dict[str, dict[str, object]]:
-        assert rpc_a is not None and rpc_b is not None and rpc_c is not None
+        assert rpc_a is not None
+        assert rpc_b is not None
+        assert rpc_c is not None
         client_by_id = {
             player_a.rpc_player_id: rpc_a,
             player_b.rpc_player_id: rpc_b,

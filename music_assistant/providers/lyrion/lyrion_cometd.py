@@ -9,9 +9,10 @@ from contextlib import suppress
 from typing import TYPE_CHECKING, Any, cast
 
 from aiohttp import ClientError, ClientTimeout
-from music_assistant_models.errors import ProviderUnavailableError
+from music_assistant_models.errors import MusicAssistantError, ProviderUnavailableError
 
 from .bayeux_client import BayeuxClient
+from .client import build_lms_url
 from .constants import (
     COMETD_CONNECT_TIMEOUT,
     COMETD_PLAYERSTATUS_SUBSCRIBE_INTERVAL,
@@ -472,7 +473,7 @@ class LyrionCometDEventStream:
         if _is_invalid_player_payload(partial):
             self._status_by_player.pop(player_id, None)
             self.mark_player_removed(player_id)
-            await self._event_callback(
+            await self._emit_event(
                 LmsPlayerStatusUpdatedEvent(
                     player_id=player_id,
                     status=dict(partial),
@@ -489,7 +490,7 @@ class LyrionCometDEventStream:
         self._touch_player_status_activity(player_id)
 
         is_initial = previous is None
-        await self._event_callback(
+        await self._emit_event(
             LmsPlayerStatusUpdatedEvent(
                 player_id=player_id,
                 status=dict(merged),
@@ -502,7 +503,7 @@ class LyrionCometDEventStream:
         assert previous is not None
 
         if (old_mode := _get_mode(previous)) != (new_mode := _get_mode(merged)):
-            await self._event_callback(
+            await self._emit_event(
                 LmsPlayerPlaybackChangedEvent(
                     player_id=player_id,
                     old_mode=old_mode,
@@ -513,7 +514,7 @@ class LyrionCometDEventStream:
         old_power = _get_power(previous)
         new_power = _get_power(merged)
         if old_power is not None and new_power is not None and old_power != new_power:
-            await self._event_callback(
+            await self._emit_event(
                 LmsPlayerPowerChangedEvent(
                     player_id=player_id,
                     old_powered=old_power,
@@ -524,7 +525,7 @@ class LyrionCometDEventStream:
         old_volume = _get_int(previous, "mixer volume")
         new_volume = _get_int(merged, "mixer volume")
         if old_volume is not None and new_volume is not None and old_volume != new_volume:
-            await self._event_callback(
+            await self._emit_event(
                 LmsPlayerVolumeChangedEvent(
                     player_id=player_id,
                     old_volume=old_volume,
@@ -535,7 +536,7 @@ class LyrionCometDEventStream:
         old_repeat = _get_int(previous, "playlist repeat")
         new_repeat = _get_int(merged, "playlist repeat")
         if old_repeat is not None and new_repeat is not None and old_repeat != new_repeat:
-            await self._event_callback(
+            await self._emit_event(
                 LmsPlayerRepeatChangedEvent(
                     player_id=player_id,
                     old_repeat=old_repeat,
@@ -546,7 +547,7 @@ class LyrionCometDEventStream:
         old_shuffle = _get_int(previous, "playlist shuffle")
         new_shuffle = _get_int(merged, "playlist shuffle")
         if old_shuffle is not None and new_shuffle is not None and old_shuffle != new_shuffle:
-            await self._event_callback(
+            await self._emit_event(
                 LmsPlayerShuffleChangedEvent(
                     player_id=player_id,
                     old_shuffle=old_shuffle,
@@ -558,7 +559,7 @@ class LyrionCometDEventStream:
         new_time = _get_float(merged, "time")
         if old_time is not None and new_time is not None and old_time != new_time:
             if _same_active_track(previous, merged):
-                await self._event_callback(
+                await self._emit_event(
                     LmsPlayerSeekedEvent(
                         player_id=player_id,
                         old_time=old_time,
@@ -571,7 +572,7 @@ class LyrionCometDEventStream:
         old_tracks = _get_int(previous, "playlist_tracks")
         new_tracks = _get_int(merged, "playlist_tracks")
         if old_timestamp != new_timestamp or old_tracks != new_tracks:
-            await self._event_callback(
+            await self._emit_event(
                 LmsPlayerPlaylistChangedEvent(
                     player_id=player_id,
                     old_playlist_timestamp=old_timestamp,
@@ -579,6 +580,17 @@ class LyrionCometDEventStream:
                     old_playlist_tracks=old_tracks,
                     new_playlist_tracks=new_tracks,
                 )
+            )
+
+    async def _emit_event(self, event: Any) -> None:
+        """Emit one normalized event without terminating the connect loop on MA errors."""
+        try:
+            await self._event_callback(event)
+        except MusicAssistantError as err:
+            self.provider.logger.warning(
+                "CometD event handling failed for %s: %s",
+                getattr(event, "player_id", "unknown"),
+                err,
             )
 
     async def _post(
@@ -594,7 +606,7 @@ class LyrionCometDEventStream:
         if port is None:
             raise ProviderUnavailableError("Lyrion port is not configured")
 
-        url = f"http://{host}:{port}/cometd"
+        url = build_lms_url(host, port, "/cometd")
         try:
             async with self.provider.mass.http_session.post(
                 url,
@@ -676,12 +688,17 @@ def _extract_current_track_id(status: StatusPayload) -> str | None:
     playlist_loop = status.get("playlist_loop")
     if not isinstance(playlist_loop, list) or not playlist_loop:
         return None
-    first_item = playlist_loop[0]
-    if not isinstance(first_item, dict):
+
+    current_index = _get_int(status, "playlist_cur_index")
+    if current_index is None or not 0 <= current_index < len(playlist_loop):
+        return None
+
+    current_item = playlist_loop[current_index]
+    if not isinstance(current_item, dict):
         return None
 
     for key in ("id", "track_id"):
-        value = first_item.get(key)
+        value = current_item.get(key)
         if value is not None:
             return str(value)
     return None

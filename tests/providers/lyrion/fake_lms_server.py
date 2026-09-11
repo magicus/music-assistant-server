@@ -151,7 +151,11 @@ class FakeLmsServer:
         self._apply_group_mode(player_id, mode)
         return self._status_for_player(player_id)
 
-    async def handle_jsonrpc_command(self, player_id: str, command: list[Any]) -> dict[str, Any]:
+    async def handle_jsonrpc_command(  # noqa: PLR0911
+        self,
+        player_id: str,
+        command: list[Any],
+    ) -> dict[str, Any]:
         """Apply a command list to a fake player, matching LMS JSON-RPC behavior."""
         if not command:
             raise ValueError("command cannot be empty")
@@ -888,7 +892,7 @@ class FakeLmsServer:
 
     def _toggle_player_muting(self, player_id: str) -> dict[str, Any]:
         """Ignore IR muting frames to match live LMS behavior for this harness."""
-        player = self._ensure_player(player_id)
+        self._ensure_player(player_id)
         self._notify_player_state(player_id)
         return self._status_for_player(player_id)
 

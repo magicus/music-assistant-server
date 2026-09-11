@@ -15,6 +15,7 @@ from music_assistant_models.enums import ConfigEntryType
 from music_assistant_models.errors import SetupFailedError
 
 from music_assistant.models.setup_flow import SetupFlowError
+from music_assistant.providers.lyrion.client import build_lms_url
 
 if TYPE_CHECKING:
     import logging
@@ -143,7 +144,7 @@ async def validate_lms_endpoint(
         "method": "slim.request",
         "params": ["", ["serverstatus", 0, 1]],
     }
-    url = f"http://{host_str}:{resolved_port}/jsonrpc.js"
+    url = build_lms_url(host_str, resolved_port, "/jsonrpc.js")
     try:
         async with http_session.post(
             url,

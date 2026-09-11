@@ -47,6 +47,17 @@ def get_configured_port(
         return default
 
 
+def build_lms_url(host: str, port: int | None, path: str) -> str:
+    """Build an HTTP URL for an LMS endpoint with IPv6-safe host formatting."""
+    normalized_host = host
+    if ":" in host and not host.startswith("[") and not host.endswith("]"):
+        normalized_host = f"[{host}]"
+    normalized_path = path if path.startswith("/") else f"/{path}"
+    if port is None:
+        return f"http://{normalized_host}{normalized_path}"
+    return f"http://{normalized_host}:{port}{normalized_path}"
+
+
 async def rpc_request(
     provider: _ConfigProvider,
     player_id: str,
@@ -65,7 +76,7 @@ async def rpc_request(
         "method": "slim.request",
         "params": [player_id, list(command)],
     }
-    url = f"http://{host}:{port}/jsonrpc.js"
+    url = build_lms_url(host, port, "/jsonrpc.js")
 
     try:
         async with provider.mass.http_session.post(
