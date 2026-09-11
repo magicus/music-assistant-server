@@ -16,6 +16,7 @@ from music_assistant.controllers.tasks import (
     update_current_task_progress_text,
 )
 from music_assistant.providers.lyrion.client import normalize_lms_text_value, rpc_request
+from pylyrion.errors import LyrionProtocolError, LyrionRequestError, LyrionTimeoutError
 from pylyrion.library import ALBUM_SPEC as PY_ALBUM_SPEC
 from pylyrion.library import ARTIST_SPEC as PY_ARTIST_SPEC
 from pylyrion.library import TRACK_SPEC as PY_TRACK_SPEC
@@ -518,9 +519,26 @@ async def _get_entity_data(
     item_id: str,
 ) -> Mapping[str, str]:
     """Fetch one raw entity payload by id using the shared lookup flow."""
-    async for raw_item in _iter_raw_entities(provider, spec, [item_id]):
-        return raw_item
-    raise MediaNotFoundError(f"{spec.key.title()} not found: {item_id}")
+    py_spec = _to_py_entity_spec(spec)
+    try:
+        raw_item = await _build_library_client(provider).get_entity_data(py_spec, item_id)
+    except LyrionRequestError as err:
+        message = str(err)
+        if "not found" in message.lower():
+            raise MediaNotFoundError(f"{spec.key.title()} not found: {item_id}") from err
+        raise ProviderUnavailableError(message) from err
+    except (LyrionProtocolError, LyrionTimeoutError) as err:
+        raise ProviderUnavailableError(str(err)) from err
+    return _normalize_lms_row(raw_item)
+
+
+def _to_py_entity_spec(spec: LmsEntitySpec):
+    """Map MA-side entity spec to the corresponding pylyrion entity spec."""
+    if spec.key == "artist":
+        return PY_ARTIST_SPEC
+    if spec.key == "album":
+        return PY_ALBUM_SPEC
+    return PY_TRACK_SPEC
 
 
 async def _fetch_worker(

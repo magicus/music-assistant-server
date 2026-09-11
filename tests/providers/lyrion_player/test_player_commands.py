@@ -36,6 +36,10 @@ def mock_provider() -> MagicMock:
     provider.mass.config.create_default_player_config = MagicMock()
     provider.mass.config.get_base_player_config = MagicMock(return_value=MagicMock())
     provider.send_player_command = AsyncMock()
+    provider.play_player = AsyncMock()
+    provider.pause_player = AsyncMock()
+    provider.stop_player = AsyncMock()
+    provider.set_player_power = AsyncMock()
     provider.get_last_cometd_status_seen_at = MagicMock(return_value=0.0)
     provider.get_cached_cometd_status = MagicMock(return_value={"playlist_cur_index": 0})
     provider.wait_for_cometd_status_update = AsyncMock(return_value=True)
@@ -329,27 +333,18 @@ async def test_enqueue_next_media_covers_native_and_url_paths(
 async def test_play_pause_stop_and_power_dispatch_expected_commands(
     player: LyrionPlayer, mock_provider: MagicMock
 ) -> None:
-    """Transport/power commands should map to LMS commands and local state."""
+    """Transport/power commands should delegate through thin provider adapters."""
     await player.play()
     await player.pause()
     await player.stop()
     await player.power(True)
     await player.power(False)
 
-    assert mock_provider.send_player_command.await_args_list[0].args == ("test_player", ["play"])
-    assert mock_provider.send_player_command.await_args_list[1].args == (
-        "test_player",
-        ["pause", 1],
-    )
-    assert mock_provider.send_player_command.await_args_list[2].args == ("test_player", ["stop"])
-    assert mock_provider.send_player_command.await_args_list[3].args == (
-        "test_player",
-        ["power", 1],
-    )
-    assert mock_provider.send_player_command.await_args_list[4].args == (
-        "test_player",
-        ["power", 0],
-    )
+    mock_provider.play_player.assert_awaited_once_with("test_player")
+    mock_provider.pause_player.assert_awaited_once_with("test_player")
+    mock_provider.stop_player.assert_awaited_once_with("test_player")
+    assert mock_provider.set_player_power.await_args_list[0].args == ("test_player", True)
+    assert mock_provider.set_player_power.await_args_list[1].args == ("test_player", False)
 
 
 @pytest.mark.asyncio
@@ -489,6 +484,10 @@ async def test_play_pause_stop_power_and_volume_set_wrap_provider_unavailable(
 ) -> None:
     """Command helpers should wrap ProviderUnavailableError consistently."""
     mock_provider.send_player_command.side_effect = ProviderUnavailableError("down")
+    mock_provider.play_player.side_effect = ProviderUnavailableError("down")
+    mock_provider.pause_player.side_effect = ProviderUnavailableError("down")
+    mock_provider.stop_player.side_effect = ProviderUnavailableError("down")
+    mock_provider.set_player_power.side_effect = ProviderUnavailableError("down")
     with pytest.raises(PlayerCommandFailed, match="play failed"):
         await player.play()
 

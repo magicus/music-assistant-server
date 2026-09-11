@@ -15,6 +15,7 @@ from music_assistant_models.errors import MediaNotFoundError, ProviderUnavailabl
 
 from music_assistant.providers.lyrion import client as shared_client
 from music_assistant.providers.lyrion_music import client
+from pylyrion.errors import LyrionRequestError
 from tests.providers.lyrion.rpc_test_doubles import FakeResponse, FakeRpcTransport
 
 
@@ -379,6 +380,8 @@ async def test_get_entity_data_and_iter_entities_fast_paths(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Single-item and empty-id paths should work without pipeline workers."""
+    library = Mock()
+    library.get_entity_data = AsyncMock(return_value={"id": "42"})
 
     async def _raw(_provider: Any, _spec: Any, _ids: list[str]):
         yield {"id": "42"}
@@ -386,6 +389,7 @@ async def test_get_entity_data_and_iter_entities_fast_paths(
     async def _decode(_provider: Any, _spec: Any, _raw_item: dict[str, Any]):
         return "decoded"
 
+    monkeypatch.setattr(client, "_build_library_client", lambda _provider: library)
     monkeypatch.setattr(client, "_iter_raw_entities", _raw)
     monkeypatch.setattr(client, "_decode_entity", _decode)
 
@@ -402,12 +406,9 @@ async def test_get_entity_data_and_iter_entities_fast_paths(
 
 async def test_get_entity_data_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
     """Missing entity should raise MediaNotFoundError."""
-
-    async def _empty(_provider: Any, _spec: Any, _ids: list[str]):
-        if False:
-            yield {}
-
-    monkeypatch.setattr(client, "_iter_raw_entities", _empty)
+    library = Mock()
+    library.get_entity_data = AsyncMock(side_effect=LyrionRequestError("Track not found: missing"))
+    monkeypatch.setattr(client, "_build_library_client", lambda _provider: library)
 
     with pytest.raises(MediaNotFoundError):
         await client._get_entity_data(_provider(), client.TRACK_SPEC, "missing")

@@ -55,3 +55,25 @@ async def test_high_level_client_exposes_player_control() -> None:
     client = LyrionClient(session)
 
     assert await client.players.get_status("player1") == {"mode": "stop"}
+
+
+@pytest.mark.asyncio
+async def test_player_client_transport_methods_dispatch_expected_commands() -> None:
+    """High-level transport helpers should dispatch LMS-native command payloads."""
+    transport = SimpleNamespace(post=MagicMock(return_value=FakeResponse({"result": {"ok": True}})))
+    session = LyrionSession(
+        http_session=transport,
+        endpoint=LyrionEndpoint(host="127.0.0.1", port=9000),
+    )
+    client = LyrionPlayerClient(session)
+
+    await client.play("player1")
+    await client.pause("player1")
+    await client.stop("player1")
+    await client.set_power("player1", True)
+
+    calls = [call.kwargs["json"]["params"] for call in transport.post.call_args_list]
+    assert calls[0] == ["player1", ["play"]]
+    assert calls[1] == ["player1", ["pause", 1]]
+    assert calls[2] == ["player1", ["stop"]]
+    assert calls[3] == ["player1", ["power", 1]]

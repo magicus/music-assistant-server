@@ -180,7 +180,7 @@ class LyrionPlayer(Player):
         """Resume playback."""
         baseline = self.provider.get_last_cometd_status_seen_at(self.player_id)
         try:
-            await self.provider.send_player_command(self.player_id, ["play"])
+            await self.provider.play_player(self.player_id)
         except ProviderUnavailableError as err:
             raise PlayerCommandFailed(f"play failed: {err}") from err
         self._attr_playback_state = PlaybackState.PLAYING
@@ -195,10 +195,7 @@ class LyrionPlayer(Player):
         """Pause playback."""
         baseline = self.provider.get_last_cometd_status_seen_at(self.player_id)
         try:
-            await self.provider.send_player_command(
-                self.player_id,
-                ["pause", 1],
-            )
+            await self.provider.pause_player(self.player_id)
         except ProviderUnavailableError as err:
             raise PlayerCommandFailed(f"pause failed: {err}") from err
         self._attr_playback_state = PlaybackState.PAUSED
@@ -213,7 +210,7 @@ class LyrionPlayer(Player):
         """Stop playback."""
         baseline = self.provider.get_last_cometd_status_seen_at(self.player_id)
         try:
-            await self.provider.send_player_command(self.player_id, ["stop"])
+            await self.provider.stop_player(self.player_id)
         except ProviderUnavailableError as err:
             raise PlayerCommandFailed(f"stop failed: {err}") from err
         self._attr_playback_state = PlaybackState.IDLE
@@ -233,10 +230,7 @@ class LyrionPlayer(Player):
         """
         baseline = self.provider.get_last_cometd_status_seen_at(self.player_id)
         try:
-            await self.provider.send_player_command(
-                self.player_id,
-                ["power", 1 if powered else 0],
-            )
+            await self.provider.set_player_power(self.player_id, powered)
         except ProviderUnavailableError as err:
             raise PlayerCommandFailed(f"power failed: {err}") from err
         self._attr_powered = powered

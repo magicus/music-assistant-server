@@ -23,6 +23,7 @@ from music_assistant.providers.lyrion.cometd.stream import LyrionCometDEventStre
 from music_assistant.providers.lyrion.constants import COMETD_COMMAND_STATUS_VERIFY_TIMEOUT
 from music_assistant.providers.lyrion.setup_flow import validate_lms_endpoint
 from pylyrion.client import LyrionClient
+from pylyrion.errors import LyrionProtocolError, LyrionRequestError, LyrionTimeoutError
 from pylyrion.models import LyrionEndpoint
 from pylyrion.session import LyrionSession
 
@@ -216,14 +217,38 @@ class LyrionPlayerProvider(PlayerProvider):
 
         :param player_id: LMS player id.
         """
-        session = LyrionSession(
-            http_session=self.mass.http_session,
-            endpoint=LyrionEndpoint(
-                host=self.get_configured_host() or "",
-                port=self.get_configured_port(),
-            ),
-        )
-        return await LyrionClient(session).players.get_status(player_id)
+        try:
+            return await self._build_pylyrion_client().players.get_status(player_id)
+        except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
+            raise ProviderUnavailableError(str(err)) from err
+
+    async def play_player(self, player_id: str) -> dict[str, Any]:
+        """Resume playback for one LMS player via pylyrion."""
+        try:
+            return await self._build_pylyrion_client().players.play(player_id)
+        except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
+            raise ProviderUnavailableError(str(err)) from err
+
+    async def pause_player(self, player_id: str) -> dict[str, Any]:
+        """Pause playback for one LMS player via pylyrion."""
+        try:
+            return await self._build_pylyrion_client().players.pause(player_id)
+        except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
+            raise ProviderUnavailableError(str(err)) from err
+
+    async def stop_player(self, player_id: str) -> dict[str, Any]:
+        """Stop playback for one LMS player via pylyrion."""
+        try:
+            return await self._build_pylyrion_client().players.stop(player_id)
+        except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
+            raise ProviderUnavailableError(str(err)) from err
+
+    async def set_player_power(self, player_id: str, powered: bool) -> dict[str, Any]:
+        """Set player power state via pylyrion."""
+        try:
+            return await self._build_pylyrion_client().players.set_power(player_id, powered)
+        except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
+            raise ProviderUnavailableError(str(err)) from err
 
     def apply_status_update(
         self,
@@ -370,6 +395,20 @@ class LyrionPlayerProvider(PlayerProvider):
     ) -> dict[str, Any]:
         """Execute one LMS JSON-RPC request via the shared Lyrion transport."""
         return await rpc_request(self, player_id=player_id, command=command)
+
+    def _build_pylyrion_client(self) -> LyrionClient:
+        """Build a pylyrion client from current MA provider config."""
+        host = self.get_configured_host()
+        if not host:
+            raise ProviderUnavailableError("Lyrion host is not configured")
+        session = LyrionSession(
+            http_session=self.mass.http_session,
+            endpoint=LyrionEndpoint(
+                host=host,
+                port=self.get_configured_port(),
+            ),
+        )
+        return LyrionClient(session)
 
     async def _run_discover_players_loop(self) -> None:
         """Run player discovery once or repeatedly while new triggers arrive."""

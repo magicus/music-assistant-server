@@ -10,13 +10,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from aiohttp import web
-from music_assistant_models.errors import MusicAssistantError
+from music_assistant_models.errors import MusicAssistantError, ProviderUnavailableError
 
 from music_assistant.providers.lyrion_player.player import LyrionPlayer
 from music_assistant.providers.lyrion_player.provider import (
     PLAYERS_BATCH_SIZE,
     LyrionPlayerProvider,
 )
+from pylyrion.errors import LyrionTimeoutError
 
 
 def _build_provider_stub() -> LyrionPlayerProvider:
@@ -65,7 +66,12 @@ def _build_provider_stub() -> LyrionPlayerProvider:
         wait_for_player_status_update=AsyncMock(return_value=True),
         verify_player_status_expectation=AsyncMock(return_value=True),
     )
-    provider.get_setup_value = MagicMock(side_effect=lambda key, default=None: default)
+    provider.get_setup_value = MagicMock(
+        side_effect=lambda key, default=None: {
+            "lms_host": "127.0.0.1",
+            "port": 9000,
+        }.get(key, default)
+    )
     return provider
 
 
@@ -465,6 +471,48 @@ async def test_get_player_status_uses_pylyrion_client() -> None:
     assert status == {"mode": "play"}
     client_cls.assert_called_once()
     player_client.players.get_status.assert_awaited_once_with("p1")
+
+
+@pytest.mark.asyncio
+async def test_transport_adapter_methods_use_pylyrion_client() -> None:
+    """Transport adapter helpers should delegate play/pause/stop/power through pylyrion."""
+    provider = _build_provider_stub()
+    player_client = AsyncMock()
+    player_client.players.play = AsyncMock(return_value={})
+    player_client.players.pause = AsyncMock(return_value={})
+    player_client.players.stop = AsyncMock(return_value={})
+    player_client.players.set_power = AsyncMock(return_value={})
+
+    with patch(
+        "music_assistant.providers.lyrion_player.provider.LyrionClient",
+        return_value=player_client,
+    ):
+        await provider.play_player("p1")
+        await provider.pause_player("p1")
+        await provider.stop_player("p1")
+        await provider.set_player_power("p1", True)
+
+    player_client.players.play.assert_awaited_once_with("p1")
+    player_client.players.pause.assert_awaited_once_with("p1")
+    player_client.players.stop.assert_awaited_once_with("p1")
+    player_client.players.set_power.assert_awaited_once_with("p1", True)
+
+
+@pytest.mark.asyncio
+async def test_transport_adapter_methods_map_pylyrion_errors() -> None:
+    """Pylyrion transport failures should map to ProviderUnavailableError."""
+    provider = _build_provider_stub()
+    player_client = AsyncMock()
+    player_client.players.play = AsyncMock(side_effect=LyrionTimeoutError("timeout"))
+
+    with (
+        patch(
+            "music_assistant.providers.lyrion_player.provider.LyrionClient",
+            return_value=player_client,
+        ),
+        pytest.raises(ProviderUnavailableError, match="timeout"),
+    ):
+        await provider.play_player("p1")
 
 
 def test_get_configured_helpers_handle_invalid_types_and_none_port() -> None:

@@ -18,3 +18,7 @@
 
 - Whether to move lookup/search helpers into `pylyrion` in the next slice or keep them in MA until more of the model layer is ready.
 - Whether to add a dedicated `pylyrion` packaging config beyond the root workspace setup once the split stabilizes.
+- Whether the MA player adapter should keep creating a fresh `LyrionSession` per transport call or hold a cached pylyrion client/session per provider instance.
+	- Chosen now: create a fresh pylyrion client per call to keep lifecycle coupling low and avoid hidden stale-session state while APIs are still moving.
+	- Alternative A: cache one client on provider load for lower call overhead.
+	- Alternative B: cache lazily with explicit invalidation on provider reload.
