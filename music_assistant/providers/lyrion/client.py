@@ -93,11 +93,11 @@ async def rpc_request(
             timeout=ClientTimeout(total=timeout),
         ) as response:
             response.raise_for_status()
-            data = cast("dict[str, object]", await response.json())
+            data = cast("Mapping[str, object]", await response.json())
     except TimeoutError as err:
         raise ProviderUnavailableError(
-            f"Lyrion server at {host}:{port} did not respond in time ({timeout}s). "
-            "Verify that Lyrion is running and reachable."
+            f"Lyrion server at {host}:{port} did not respond in time "
+            f"({timeout}s). Verify that Lyrion is running and reachable."
         ) from err
     except ValueError as err:
         raise ProviderUnavailableError(
@@ -108,18 +108,17 @@ async def rpc_request(
             f"Lyrion JSON-RPC connection request to {host}:{port} failed: {err}"
         ) from err
 
-    if error_payload := cast("dict[str, object] | None", data.get("error")):
+    command_name = command[0] if command else "<unknown>"
+    if error_payload := cast("dict[str, Any] | None", data.get("error")):
         error_code = error_payload.get("code", "unknown")
         error_message = error_payload.get("message", "unknown JSON-RPC error")
         raise ProviderUnavailableError(
-            f"Lyrion JSON-RPC command {command[0] if command else '<unknown>'} failed with "
-            f"code {error_code}: {error_message}"
+            f"Lyrion JSON-RPC command {command_name} failed with code {error_code}: {error_message}"
         )
 
     result = cast("dict[str, object] | None", data.get("result"))
     if result is None:
         raise ProviderUnavailableError(
-            f"Lyrion JSON-RPC response for command {command[0] if command else '<unknown>'} "
-            "is missing result payload"
+            f"Lyrion JSON-RPC response for command {command_name} is missing result payload"
         )
     return result

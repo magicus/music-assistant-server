@@ -878,10 +878,7 @@ class LyrionCometDEventStream:
                 timeout=ClientTimeout(total=timeout),
             ) as response:
                 response.raise_for_status()
-                payload = cast(
-                    "dict[str, object] | list[dict[str, object]]",
-                    await response.json(),
-                )
+                payload = await response.json()
         except (ClientError, TimeoutError, ValueError) as err:
             raise ProviderUnavailableError(
                 f"CometD request to {host}:{port} failed: {err}"
@@ -889,6 +886,8 @@ class LyrionCometDEventStream:
 
         if isinstance(payload, dict):
             return [payload]
+        if not isinstance(payload, list):
+            raise ProviderUnavailableError("CometD response must be a JSON object or list")
         return [message for message in payload if isinstance(message, dict)]
 
 

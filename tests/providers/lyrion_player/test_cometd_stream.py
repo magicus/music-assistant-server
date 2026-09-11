@@ -7,9 +7,13 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+from music_assistant_models.errors import ProviderUnavailableError
+
 from music_assistant.providers.lyrion.lyrion_cometd import LyrionCometDEventStream
 from music_assistant.providers.lyrion_player.cometd_events import LmsPlayerPlaylistChangedEvent
 from music_assistant.providers.lyrion_player.provider import LyrionPlayerProvider
+from tests.providers.lyrion.rpc_test_doubles import FakeResponse
 
 
 async def _noop_event_callback(_event: object) -> None:
@@ -35,6 +39,20 @@ class _StubProvider:
     def schedule_players_discovery(self) -> None:
         """Record rediscovery scheduling calls."""
         self.discovery_calls += 1
+
+
+class _StubCometDProvider(_StubProvider):
+    """Provider stub with JSON-RPC endpoints for CometD unit tests."""
+
+    def __init__(self, player_ids: list[str]) -> None:
+        super().__init__(player_ids)
+        self.mass.http_session = SimpleNamespace(post=MagicMock())
+
+    def get_configured_host(self) -> str | None:
+        return "127.0.0.1"
+
+    def get_configured_port(self) -> int | None:
+        return 9000
 
 
 async def test_serverstatus_players_loop_triggers_on_roster_change() -> None:
@@ -370,3 +388,14 @@ async def test_active_state_timeout_triggers_implicit_recovery() -> None:
     await stream._run_expectation_tick()
 
     assert calls == [("player_a", "active-state timeout")]
+
+
+@pytest.mark.parametrize("body", [None, 1, "oops"])
+async def test_post_rejects_non_object_and_non_list_payloads(body: Any) -> None:
+    """CometD POST helper should reject scalar JSON payloads cleanly."""
+    provider = _StubCometDProvider(["player_a"])
+    provider.mass.http_session.post = MagicMock(return_value=FakeResponse(body))
+    stream = LyrionCometDEventStream(cast("Any", provider), _noop_event_callback)
+
+    with pytest.raises(ProviderUnavailableError, match="JSON object or list"):
+        await stream._post([], timeout=1)

@@ -126,8 +126,11 @@ class ScriptableSlimProtoPlayer:
 
         assert self._slimproto_writer is not None
         writer = self._slimproto_writer[1]
+        helo_player_id = (
+            self.player_id if self.endpoint.fake_server is not None else self.rpc_player_id
+        )
         helo_payload = self._make_helo_payload(
-            self.player_id,
+            helo_player_id,
             self._mac_address,
             self.name,
             self.model,

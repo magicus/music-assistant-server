@@ -111,6 +111,30 @@ async def test_validate_lms_endpoint_happy_path() -> None:
         )
 
 
+async def test_validate_lms_endpoint_accepts_bracketed_ipv6() -> None:
+    """Endpoint validator should normalize URL-style IPv6 host brackets."""
+    http_session = Mock()
+    http_session.post = Mock(return_value=FakeResponse({"result": {"count": 1}}))
+
+    with (
+        patch.object(
+            asyncio.get_running_loop(),
+            "getaddrinfo",
+            new=AsyncMock(return_value=[object()]),
+        ),
+        patch(
+            "music_assistant.providers.lyrion.setup_flow.asyncio.open_connection",
+            new=AsyncMock(return_value=(object(), _FakeWriter())),
+        ) as open_connection_mock,
+    ):
+        await shared_setup_flow.validate_lms_endpoint(
+            host="[::1]",
+            port=9000,
+            http_session=http_session,
+        )
+    open_connection_mock.assert_awaited_once_with("::1", 9000)
+
+
 async def test_validate_lms_endpoint_errors() -> None:
     """Endpoint validator should raise typed setup errors for bad input/state."""
     http_session = Mock()

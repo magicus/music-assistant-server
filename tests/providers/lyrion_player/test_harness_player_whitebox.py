@@ -2,12 +2,35 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
 from tests.providers.lyrion.fake_lms_server import FakeLmsServer
 from tests.providers.lyrion.lms_server_harness import LyrionTestEndpoint
 from tests.providers.lyrion.scriptable_slimproto_player import ScriptableSlimProtoPlayer
 from tests.providers.lyrion_player.harness_test_support import EndpointRpcClient, FakeMAProvider
+
+
+class _FakeWriter:
+    def __init__(self) -> None:
+        self.writes: list[bytes] = []
+
+    def write(self, data: bytes) -> None:
+        self.writes.append(data)
+
+    async def drain(self) -> None:
+        return None
+
+    def is_closing(self) -> bool:
+        return False
+
+    def close(self) -> None:
+        return None
+
+    async def wait_closed(self) -> None:
+        return None
+
 
 pytestmark = [
     pytest.mark.asyncio,
@@ -43,6 +66,36 @@ async def test_player_seek_updates_scriptable_elapsed_time(
         if rpc_client is not None:
             await rpc_client.close()
         await player.close()
+
+
+async def test_player_connect_uses_rpc_player_id_for_live_endpoint() -> None:
+    """Live-style connect should advertise the RPC player id in the HELO payload."""
+    endpoint = LyrionTestEndpoint(
+        host="127.0.0.1",
+        port=9000,
+        base_url="http://127.0.0.1:9000",
+        source="docker",
+    )
+    player = ScriptableSlimProtoPlayer(
+        endpoint=endpoint,
+        player_id="test-alias",
+        name="Live Player",
+        model="test",
+    )
+    fake_writer = _FakeWriter()
+
+    with patch(
+        "tests.providers.lyrion.scriptable_slimproto_player.asyncio.open_connection",
+        new=AsyncMock(return_value=(object(), fake_writer)),
+    ):
+        result = await player.connect()
+
+    payload = fake_writer.writes[0]
+    assert f"PlayerID={player.rpc_player_id}".encode() in payload
+    assert f"PlayerID={player.player_id}".encode() not in payload
+    assert result["playerid"] == player.rpc_player_id
+
+    await player.close()
 
 
 async def test_player_local_playback_state_across_multiple_sources(

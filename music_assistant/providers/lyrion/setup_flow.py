@@ -92,6 +92,8 @@ async def validate_lms_endpoint(
 ) -> None:
     """Validate a configured LMS endpoint."""
     host_str = str(host or "").strip()
+    if host_str.startswith("[") and host_str.endswith("]"):
+        host_str = host_str[1:-1]
     if not host_str:
         raise SetupFailedError(
             "host_required",
@@ -251,7 +253,9 @@ async def _prefill_lms_endpoint(
         *(x for x in ("lyrion_music", "lyrion_player") if x != current_domain),
     ]
     for domain in domain_order:
-        for config in await session.mass.config.get_provider_configs(provider_domain=domain):
+        for config in await session.mass.config.get_provider_configs(
+            provider_domain=domain,
+        ):
             if config.instance_id == session.context.instance_id:
                 continue
             host = session.mass.config.get_provider_setup_value(

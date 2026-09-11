@@ -14,8 +14,6 @@ from music_assistant.providers.lyrion_music.provider import LyrionMusicProvider
 from tests.common import use_real_create_task
 from tests.providers.lyrion.lms_server_harness import LyrionTestEndpoint
 
-pytest_plugins = ("tests.providers.lyrion.fixtures",)
-
 
 @pytest.fixture
 async def lyrion_provider(
