@@ -6,7 +6,7 @@ import asyncio
 import ipaddress
 import socket
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from aiohttp import ClientError, ClientSession, ClientTimeout
@@ -21,6 +21,28 @@ if TYPE_CHECKING:
     import logging
 
     from music_assistant.models.setup_flow import SetupSession
+
+
+_DISCOVERY_MESSAGE = b"eIPAD\x00NAME\x00JSON\x00UUID\x00VERS"
+_DISCOVERY_TARGET = ("255.255.255.255", 3483)
+
+
+@dataclass(slots=True)
+class _DiscoveredLMSEndpoint:
+    """One LMS endpoint returned by UDP discovery."""
+
+    host: str
+    port: int
+    name: str | None = None
+    uuid: str | None = None
+
+
+@dataclass(slots=True)
+class _ConfiguredLMSEndpoint:
+    """One configured LMS endpoint from an existing provider instance."""
+
+    host: str
+    port: int | None
 
 
 async def run_lms_setup_flow(
@@ -248,10 +270,51 @@ async def _prefill_lms_endpoint(
     if session.context.kind != "setup":
         return
 
-    domain_order = [
+    sibling_domain = "lyrion_player" if current_domain == "lyrion_music" else "lyrion_music"
+
+    current_endpoints = await _configured_lms_endpoints(
+        session,
         current_domain,
-        *(x for x in ("lyrion_music", "lyrion_player") if x != current_domain),
-    ]
+        host_key,
+        port_key,
+    )
+    sibling_endpoints = await _configured_lms_endpoints(
+        session,
+        sibling_domain,
+        host_key,
+        port_key,
+    )
+
+    # Refill mode: if the sibling provider has any host this provider lacks,
+    # suggest that first. This must be symmetric regardless of start domain.
+    current_hosts = {endpoint.host.lower() for endpoint in current_endpoints}
+    for endpoint in sibling_endpoints:
+        if endpoint.host.lower() in current_hosts:
+            continue
+        setup_data[host_key] = endpoint.host
+        if setup_data.get(port_key) is None and endpoint.port is not None:
+            setup_data[port_key] = endpoint.port
+        return
+
+    domain_order = [current_domain, sibling_domain]
+    configured_hosts = await _configured_lms_hosts(
+        session,
+        domain_order,
+        host_key,
+    )
+    discovered_endpoints = await _discover_lms_endpoints(timeout=3.0)
+    if discovered := _select_discovered_lms_endpoint(
+        discovered_endpoints,
+        configured_hosts,
+    ):
+        setup_data[host_key] = discovered.host
+        if setup_data.get(port_key) is None:
+            setup_data[port_key] = discovered.port
+        return
+
+    if configured_hosts:
+        return
+
     for domain in domain_order:
         for config in await session.mass.config.get_provider_configs(
             provider_domain=domain,
@@ -324,3 +387,177 @@ def _coerce_port(value: object) -> int | None:
     if int_port < 1 or int_port > 65535:
         return None
     return int_port
+
+
+def _unpack_discovery_response(
+    data: bytes,
+    addr: tuple[str, int],
+) -> _DiscoveredLMSEndpoint | None:
+    """Parse one LMS UDP discovery response into a connectable endpoint."""
+    if data[0:1] != b"E":
+        return None
+
+    payload = data[1:]
+    fields: dict[str, str] = {"host": addr[0]}
+    while len(payload) >= 5:
+        if len(payload) < 5 + payload[4]:
+            return None
+        try:
+            tag = payload[0:4].decode().lower()
+            value = payload[5 : 5 + payload[4]].decode()
+        except UnicodeDecodeError:
+            return None
+        fields[tag] = value
+        payload = payload[5 + payload[4] :]
+
+    if fields.get("uuid") == "slimproto":
+        return None
+
+    port = _coerce_port(fields.get("json"))
+    host = fields.get("host")
+    if not host or port is None:
+        return None
+
+    return _DiscoveredLMSEndpoint(
+        host=host,
+        port=port,
+        name=fields.get("name"),
+        uuid=fields.get("uuid"),
+    )
+
+
+class _LMSDiscoveryProtocol(asyncio.DatagramProtocol):
+    """Collect UDP TLV discovery responses from LMS servers."""
+
+    def __init__(self) -> None:
+        """Initialize response collection."""
+        self.transport: asyncio.DatagramTransport | None = None
+        self.discovered: dict[tuple[str, int], _DiscoveredLMSEndpoint] = {}
+
+    def connection_made(self, transport: asyncio.BaseTransport) -> None:
+        """Store the datagram transport."""
+        self.transport = transport  # type: ignore[assignment]
+
+    def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
+        """Collect one valid LMS discovery response."""
+        if endpoint := _unpack_discovery_response(data, addr):
+            self.discovered[(endpoint.host, endpoint.port)] = endpoint
+
+
+async def _configured_lms_hosts(
+    session: SetupSession,
+    domains: list[str],
+    host_key: str,
+) -> set[str]:
+    """Return configured LMS hosts plus resolved IPv4 addresses."""
+    hosts: set[str] = set()
+    for domain in domains:
+        for config in await session.mass.config.get_provider_configs(
+            provider_domain=domain,
+        ):
+            if config.instance_id == session.context.instance_id:
+                continue
+            host = session.mass.config.get_provider_setup_value(
+                config.instance_id,
+                host_key,
+            )
+            if not isinstance(host, str):
+                continue
+            normalized_host = host.strip().lower()
+            if not normalized_host:
+                continue
+            hosts.add(normalized_host)
+            resolved_host = await _resolve_discovery_host(normalized_host)
+            if resolved_host is not None:
+                hosts.add(resolved_host)
+    return hosts
+
+
+async def _resolve_discovery_host(host: str) -> str | None:
+    """Resolve one configured host to its primary IPv4 address."""
+    if _is_ip_address(host):
+        return host
+    try:
+        infos = await asyncio.get_running_loop().getaddrinfo(
+            host,
+            None,
+            family=socket.AF_UNSPEC,
+            type=socket.SOCK_STREAM,
+        )
+    except socket.gaierror:
+        return None
+
+    for family, _, _, _, sockaddr in infos:
+        if family == socket.AF_INET:
+            return str(sockaddr[0])
+    return None
+
+
+def _select_discovered_lms_endpoint(
+    endpoints: list[_DiscoveredLMSEndpoint],
+    configured_hosts: set[str],
+) -> _DiscoveredLMSEndpoint | None:
+    """Return the first discovered LMS endpoint that is not configured."""
+    for endpoint in endpoints:
+        if endpoint.host.lower() in configured_hosts:
+            continue
+        return endpoint
+    return None
+
+
+async def _configured_lms_endpoints(
+    session: SetupSession,
+    domain: str,
+    host_key: str,
+    port_key: str,
+) -> list[_ConfiguredLMSEndpoint]:
+    """Return configured LMS endpoints for one provider domain, preserving order."""
+    endpoints: list[_ConfiguredLMSEndpoint] = []
+    for config in await session.mass.config.get_provider_configs(provider_domain=domain):
+        if config.instance_id == session.context.instance_id:
+            continue
+        host = session.mass.config.get_provider_setup_value(config.instance_id, host_key)
+        if not isinstance(host, str):
+            continue
+        normalized_host = host.strip()
+        if not normalized_host:
+            continue
+        endpoints.append(
+            _ConfiguredLMSEndpoint(
+                host=normalized_host,
+                port=_coerce_port(
+                    session.mass.config.get_provider_setup_value(
+                        config.instance_id,
+                        port_key,
+                    )
+                ),
+            )
+        )
+    return endpoints
+
+
+async def _discover_lms_endpoints(
+    timeout: float,
+) -> list[_DiscoveredLMSEndpoint]:
+    """Send one LMS UDP discovery probe and return all usable responses."""
+    loop = asyncio.get_running_loop()
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    protocol = _LMSDiscoveryProtocol()
+    transport: asyncio.DatagramTransport | None = None
+    try:
+        transport, _ = await loop.create_datagram_endpoint(
+            lambda: protocol,
+            sock=sock,
+        )
+        transport.sendto(_DISCOVERY_MESSAGE, _DISCOVERY_TARGET)
+        await asyncio.sleep(timeout)
+    except OSError:
+        return []
+    finally:
+        if transport is not None:
+            transport.close()
+        else:
+            sock.close()
+
+    return list(protocol.discovered.values())
