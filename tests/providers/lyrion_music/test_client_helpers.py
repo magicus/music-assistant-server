@@ -37,6 +37,8 @@ def _provider(
         return default
 
     provider.get_setup_value = Mock(side_effect=_get_setup_value)
+    provider.get_configured_host = Mock(return_value=host)
+    provider.get_configured_port = Mock(return_value=port)
     provider._disabled_batch_lookup_keys = set()
     if rpc_handler is not None:
         transport = FakeRpcTransport(rpc_handler)
@@ -414,93 +416,70 @@ async def test_get_entity_data_not_found(monkeypatch: pytest.MonkeyPatch) -> Non
         await client._get_entity_data(_provider(), client.TRACK_SPEC, "missing")
 
 
-async def test_get_entity_pages_has_more_branches() -> None:
-    """has_more should use count when present and fallback to page size when absent."""
-
-    def _rpc_count(_player_id: str, _command: list[Any]) -> dict[str, Any]:
-        return {"albums_loop": [{"id": "1"}], "count": 2}
-
-    page, has_more = await client._get_entity_page(
-        _provider(rpc_handler=_rpc_count), client.ALBUM_SPEC, 0, 1
-    )
-    assert len(page) == 1
-    assert has_more is True
-
-    def _rpc_entity_no_count(_player_id: str, _command: list[Any]) -> dict[str, Any]:
-        return {"albums_loop": []}
-
-    page, has_more = await client._get_entity_page(
-        _provider(rpc_handler=_rpc_entity_no_count), client.ALBUM_SPEC, 0, 1
-    )
-    assert page == []
-    assert has_more is False
-
-    def _rpc_no_count(_player_id: str, _command: list[Any]) -> dict[str, Any]:
-        return {"playlists_loop": [{"id": "1"}]}
-
-    page, has_more = await client._get_simple_browse_page(
-        _provider(rpc_handler=_rpc_no_count), "playlists", "playlists_loop", 0, 1
-    )
-    assert len(page) == 1
-    assert has_more is True
-
-
-async def test_get_browse_ids_without_count_uses_found_so_far_and_offset_paging(
+async def test_get_entity_pages_has_more_branches(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """_get_browse_ids should use the no-count progress text and advance offset by page size."""
-    observed_offsets: list[int] = []
+    """Album page helper should surface has_more from pylyrion page responses."""
+    library = Mock()
+    library.get_entity_page = AsyncMock(
+        return_value=SimpleNamespace(items=[{"id": "1"}], has_more=True)
+    )
+    monkeypatch.setattr(client, "_build_library_client", lambda _provider: library)
+    monkeypatch.setattr(client.parsers, "parse_album", lambda _provider, row: row["id"])
 
-    first_page = [{"id": f"id{i}"} for i in range(client.BROWSE_PAGE_SIZE)]
-    second_page = [{"id": "id-last"}]
+    page, has_more = await client.get_albums_page(_provider(), offset=0, limit=1)
+    assert page == ["1"]
+    assert has_more is True
 
-    def _rpc(player_id: str, command: list[Any]) -> dict[str, Any]:
-        assert player_id == ""
-        observed_offsets.append(int(command[1]))
-        if int(command[1]) == 0:
-            return {client.ARTIST_SPEC.loop_key: first_page}
-        if int(command[1]) == client.BROWSE_PAGE_SIZE:
-            return {client.ARTIST_SPEC.loop_key: second_page}
-        return {client.ARTIST_SPEC.loop_key: []}
 
-    provider = _provider(rpc_handler=_rpc)
+async def test_get_browse_ids_delegates_to_pylyrion_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_get_browse_ids should delegate id discovery to pylyrion and report completion."""
+    provider = _provider()
+    library = Mock()
+    library.get_artist_ids = AsyncMock(return_value=["id1", "id2"])
+    monkeypatch.setattr(client, "_build_library_client", lambda _provider: library)
 
     progress_texts: list[str] = []
-
-    def _capture_progress(text: str) -> None:
-        progress_texts.append(text)
-
-    monkeypatch.setattr(client, "update_current_task_progress_text", _capture_progress)
+    monkeypatch.setattr(client, "update_current_task_progress_text", progress_texts.append)
     monkeypatch.setattr(client, "_update_weighted_sync_progress", lambda **_: None)
 
     ids = await client._get_browse_ids(provider, client.ARTIST_SPEC)
 
-    assert len(ids) == client.BROWSE_PAGE_SIZE + 1
-    assert observed_offsets == [0, client.BROWSE_PAGE_SIZE]
-    assert any("found so far" in text for text in progress_texts)
+    assert ids == ["id1", "id2"]
+    library.get_artist_ids.assert_awaited_once_with(None)
+    assert any("Fetching number of artists" in text for text in progress_texts)
+    assert any("done (2)" in text for text in progress_texts)
 
 
 async def test_get_entity_page_filter_and_has_more_false() -> None:
-    """_get_entity_page should append filter value and compute has_more=False at total boundary."""
-    captured_commands: list[list[Any]] = []
-
-    def _rpc(player_id: str, command: list[Any]) -> dict[str, Any]:
-        assert player_id == ""
-        captured_commands.append(command)
-        return {"albums_loop": [{"id": "1"}], "count": 3}
-
-    page, has_more = await client._get_entity_page(
-        _provider(rpc_handler=_rpc),
-        client.ALBUM_SPEC,
-        offset=2,
-        limit=5,
-        filter_value="genre_id:g1",
+    """Album page helper should pass filter value into delegated pylyrion calls."""
+    library = Mock()
+    library.get_entity_page = AsyncMock(
+        return_value=SimpleNamespace(items=[{"id": "1", "album": "A"}], has_more=False)
     )
 
-    assert len(page) == 1
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(client, "_build_library_client", lambda _provider: library)
+    monkeypatch.setattr(client.parsers, "parse_album", lambda _provider, row: row["id"])
+
+    page, has_more = await client.get_albums_page(
+        _provider(),
+        filter_value="genre_id:g1",
+        offset=2,
+        limit=5,
+    )
+
+    assert page == ["1"]
     assert has_more is False
-    assert captured_commands
-    assert captured_commands[0][-1] == "genre_id:g1"
+    library.get_entity_page.assert_awaited_once_with(
+        client.PY_ALBUM_SPEC,
+        2,
+        5,
+        filter_value="genre_id:g1",
+    )
+    monkeypatch.undo()
 
 
 def test_should_report_lookup_progress_task_domain_gate(monkeypatch: pytest.MonkeyPatch) -> None:

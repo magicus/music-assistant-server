@@ -335,7 +335,7 @@ async def _get_browse_ids(
     spec: LmsEntitySpec,
     filter_value: str | None = None,
 ) -> list[str]:
-    """Return ids for one LMS entity using paged browse requests."""
+    """Return ids for one LMS entity via the shared pylyrion browse client."""
     provider.logger.debug(
         "Lyrion %s id discovery -> command %s (filter: %s)",
         spec.key,
@@ -343,76 +343,20 @@ async def _get_browse_ids(
         filter_value or "none",
     )
     update_current_task_progress_text(f"Fetching number of {spec.key}s from Lyrion...")
-    ids: list[str] = []
-    seen: set[str] = set()
-    expected_total: int | None = None
-    offset = 0
-    page_index = 0
-    while True:
-        page_index += 1
-        command: list[Any] = [
-            spec.command,
-            offset,
-            BROWSE_PAGE_SIZE,
-            spec.tags,
-        ]
-        if filter_value:
-            command.append(filter_value)
-        provider.logger.debug(
-            "Lyrion %s id discovery request -> page %s (offset: %s, limit: %s)",
-            spec.key,
-            page_index,
-            offset,
-            BROWSE_PAGE_SIZE,
-        )
-        request_started = monotonic()
-        result = await rpc_request(provider, player_id="", command=command)
-        request_elapsed_ms = (monotonic() - request_started) * 1000
-        if expected_total is None:
-            expected_total = _extract_browse_total_count(result)
-        raw_items = cast("list[Mapping[str, object]]", result.get(spec.loop_key, []))
-        provider.logger.debug(
-            "Lyrion %s id discovery response <- page %s (%s rows, rpc: %.1f ms)",
-            spec.key,
-            page_index,
-            len(raw_items),
-            request_elapsed_ms,
-        )
-        if not raw_items:
-            break
-        ids_before_page = len(ids)
-        for raw_item in raw_items:
-            normalized_item = _normalize_lms_row(raw_item)
-            if (item_id := parsers.extract_item_id(normalized_item, id_keys=spec.id_keys)) is None:
-                continue
-            if item_id in seen:
-                continue
-            seen.add(item_id)
-            ids.append(item_id)
-        if len(ids) == ids_before_page:
-            provider.logger.warning(
-                "Lyrion %s id discovery stalled at offset %s; received %s rows but no new ids",
-                spec.key,
-                offset,
-                len(raw_items),
-            )
-            break
-        if expected_total:
-            progress_text = f"Getting {spec.key} ids from Lyrion: {len(ids)}/{expected_total}"
-            update_current_task_progress_text(progress_text)
-            _update_weighted_sync_progress(
-                phase="id_discovery",
-                current=len(ids),
-                total=expected_total,
-                text=progress_text,
-            )
+    library = _build_library_client(provider)
+    try:
+        if spec.key == "artist":
+            ids = await library.get_artist_ids(filter_value)
+        elif spec.key == "album":
+            ids = await library.get_album_ids(filter_value)
         else:
-            update_current_task_progress_text(
-                f"Getting {spec.key} ids from Lyrion: {len(ids)} found so far"
-            )
-        if len(raw_items) < BROWSE_PAGE_SIZE:
-            break
-        offset += BROWSE_PAGE_SIZE
+            ids = await library.get_track_ids(filter_value)
+    except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
+        raise ProviderUnavailableError(str(err)) from err
+
+    update_current_task_progress_text(
+        f"Getting {spec.key} ids from Lyrion: done ({len(ids)})"
+    )
     provider.logger.debug(
         "Lyrion %s id discovery <- %s ids",
         spec.key,
