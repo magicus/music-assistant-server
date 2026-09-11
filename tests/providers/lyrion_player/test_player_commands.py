@@ -14,6 +14,7 @@ from music_assistant_models.errors import (
     ProviderUnavailableError,
 )
 
+from music_assistant.providers.lyrion_player.media_mapper import LmsQueueEntry
 from music_assistant.providers.lyrion_player.player import (
     LyrionPlayer,
     _get_status_int,
@@ -272,14 +273,24 @@ async def test_poll_applies_status_and_wraps_provider_unavailable(
 async def test_play_media_native_queue_path_skips_stream_url_resolution(
     player: LyrionPlayer, mock_provider: MagicMock
 ) -> None:
-    """play_media should delegate media routing to queue sync helper."""
+    """play_media should prefer native track-id queueing when available."""
     media = MagicMock()
     media.uri = "lyrion://track/1"
-    player._queue_sync.play_media = AsyncMock(return_value=None)
+    mock_provider.add_player_track_id_to_queue = AsyncMock(return_value={})
+    mock_provider.play_player = AsyncMock(return_value={})
+    player._queue_sync.resolve_ma_uri_to_lms_entry = AsyncMock(
+        return_value=LmsQueueEntry(kind="track_id", value="1")
+    )
 
     await player.play_media(media)
 
-    player._queue_sync.play_media.assert_awaited_once_with(media)
+    player._queue_sync.resolve_ma_uri_to_lms_entry.assert_awaited_once_with(media.uri)
+    mock_provider.add_player_track_id_to_queue.assert_awaited_once_with(
+        "test_player",
+        "1",
+        command="load",
+    )
+    mock_provider.play_player.assert_awaited_once_with("test_player")
     mock_provider.play_player_url.assert_not_awaited()
     assert player.current_media is media
 
@@ -288,15 +299,16 @@ async def test_play_media_native_queue_path_skips_stream_url_resolution(
 async def test_play_media_stream_url_path_dispatches_playlist_play(
     player: LyrionPlayer, mock_provider: MagicMock
 ) -> None:
-    """play_media should no longer resolve URLs directly in LyrionPlayer."""
+    """play_media should fall back to stream URL when native mapping is unavailable."""
     media = MagicMock()
     media.uri = "spotify://track/123"
-    player._queue_sync.play_media = AsyncMock(return_value=None)
+    player._queue_sync.resolve_ma_uri_to_lms_entry = AsyncMock(return_value=None)
+    mock_provider.mass.streams.resolve_stream_url = AsyncMock(return_value="http://stream/play")
 
     await player.play_media(media)
 
-    player._queue_sync.play_media.assert_awaited_once_with(media)
-    mock_provider.play_player_url.assert_not_awaited()
+    mock_provider.mass.streams.resolve_stream_url.assert_awaited_once_with("test_player", media)
+    mock_provider.play_player_url.assert_awaited_once_with("test_player", "http://stream/play")
 
 
 @pytest.mark.asyncio
@@ -306,7 +318,10 @@ async def test_play_media_wraps_provider_unavailable_in_url_path(
     """Queue-sync playback errors should map to PlayerCommandFailed."""
     media = MagicMock()
     media.uri = "spotify://track/123"
-    player._queue_sync.play_media = AsyncMock(side_effect=ProviderUnavailableError("down"))
+    player._queue_sync.resolve_ma_uri_to_lms_entry = AsyncMock(return_value=None)
+    mock_provider.mass.streams.resolve_stream_url = AsyncMock(
+        side_effect=ProviderUnavailableError("down")
+    )
 
     with pytest.raises(PlayerCommandFailed, match="play_media failed"):
         await player.play_media(media)
@@ -316,13 +331,22 @@ async def test_play_media_wraps_provider_unavailable_in_url_path(
 async def test_enqueue_next_media_covers_native_and_url_paths(
     player: LyrionPlayer, mock_provider: MagicMock
 ) -> None:
-    """enqueue_next_media should delegate insertion details to queue sync."""
+    """enqueue_next_media should prefer native add and otherwise fall back to URL."""
     media = MagicMock()
     media.uri = "spotify://track/123"
 
-    player._queue_sync.enqueue_next_media = AsyncMock(return_value=None)
+    mock_provider.add_player_track_id_to_queue = AsyncMock(return_value={})
+    player._queue_sync.resolve_ma_uri_to_lms_entry = AsyncMock(
+        return_value=LmsQueueEntry(kind="track_id", value="42")
+    )
+    player._queue_sync.sync_ma_queue_to_lms = AsyncMock(return_value=None)
     await player.enqueue_next_media(media)
-    player._queue_sync.enqueue_next_media.assert_awaited_once_with(media)
+    mock_provider.add_player_track_id_to_queue.assert_awaited_once_with(
+        "test_player",
+        "42",
+        command="add",
+    )
+    player._queue_sync.sync_ma_queue_to_lms.assert_awaited_once()
     mock_provider.append_player_url.assert_not_awaited()
 
 
@@ -467,7 +491,7 @@ async def test_enqueue_next_media_wraps_provider_unavailable(
     """Enqueue URL path provider failures should map to PlayerCommandFailed."""
     media = MagicMock()
     media.uri = "spotify://track/123"
-    player._queue_sync.try_play_lyrion_track_id = AsyncMock(return_value=False)
+    player._queue_sync.resolve_ma_uri_to_lms_entry = AsyncMock(return_value=None)
     mock_provider.mass.streams.resolve_stream_url = AsyncMock(return_value="http://stream/next")
     mock_provider.append_player_url.side_effect = ProviderUnavailableError("down")
 

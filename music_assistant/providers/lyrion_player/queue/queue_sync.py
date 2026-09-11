@@ -19,7 +19,6 @@ from .queue_planner import QueueDiffPlanner
 from .queue_sync_engine import QueueSyncEngine, QueueSyncInput
 
 if TYPE_CHECKING:
-    from music_assistant_models.player import PlayerMedia
     from music_assistant_models.queue_item import QueueItem
 
     from music_assistant.providers.lyrion_player.player import LyrionPlayer
@@ -94,47 +93,6 @@ class LyrionQueueSync:
     def syncing_from_lms_queue(self) -> bool:
         """Return whether LMS->MA queue sync is currently active."""
         return self._syncing_from_lms_queue
-
-    async def play_media(self, media: PlayerMedia) -> None:
-        """
-        Start playback for media via native LMS track_id when possible.
-
-        Falls back to MA stream URL playback when no native LMS mapping exists.
-
-        :param media: Media payload received from MA queue controller.
-        """
-        if await self.try_play_lyrion_track_id(media):
-            return
-
-        stream_url = await self.player.mass.streams.resolve_stream_url(
-            self.player.player_id,
-            media,
-        )
-        await self.player.lyrion_server.play_player_url(
-            self.player.player_id,
-            stream_url,
-        )
-
-    async def enqueue_next_media(self, media: PlayerMedia) -> None:
-        """
-        Enqueue media via native LMS track_id when possible.
-
-        Falls back to MA stream URL enqueue when no native LMS mapping exists.
-
-        :param media: Media payload received from MA queue controller.
-        """
-        if await self.try_play_lyrion_track_id(media, command="add"):
-            await self.sync_ma_queue_to_lms()
-            return
-
-        stream_url = await self.player.mass.streams.resolve_stream_url(
-            self.player.player_id,
-            media,
-        )
-        await self.player.lyrion_server.append_player_url(
-            self.player.player_id,
-            stream_url,
-        )
 
     async def sync_ma_queue_to_lms(
         self,
@@ -262,46 +220,9 @@ class LyrionQueueSync:
             self._ma_queue_sync_pending_sync_items = False
             await self.sync_ma_queue_to_lms(sync_items=pending_sync_items)
 
-    async def try_play_lyrion_track_id(
-        self,
-        media: PlayerMedia,
-        command: str = "load",
-    ) -> bool:
-        """
-        Try native LMS queue load for tracks from a matching Lyrion provider.
-
-        :param media: Media payload received from MA queue controller.
-        :param command: playlistcontrol command to execute, load or add.
-        """
-        if not media.uri:
-            return False
-
-        lms_entry = await self._media_mapper.resolve_ma_uri_to_lms_queue_entry(media.uri)
-        if lms_entry is None or lms_entry.kind != "track_id":
-            return False
-        item_id = lms_entry.value
-
-        if command not in {"load", "add"}:
-            return False
-
-        try:
-            await self.player.lyrion_server.add_player_track_id_to_queue(
-                self.player.player_id,
-                item_id,
-                command=command,
-            )
-            if command == "load":
-                # Ensure play_media always starts transport immediately.
-                await self.player.lyrion_server.play_player(self.player.player_id)
-        except ProviderUnavailableError as err:
-            self.player.logger.warning(
-                ("Native LMS queue %s failed for track_id %s, fall back to URL: %s"),
-                command,
-                item_id,
-                err,
-            )
-            return False
-        return True
+    async def resolve_ma_uri_to_lms_entry(self, uri: str) -> LmsQueueEntry | None:
+        """Resolve one MA URI to LMS-native queue identity when available."""
+        return await self._media_mapper.resolve_ma_uri_to_lms_queue_entry(uri)
 
     async def rebuild_from(
         self,
@@ -699,7 +620,7 @@ class LyrionQueueSync:
         uri: str,
     ) -> LmsQueueEntry | None:
         """Resolve one MA URI to an LMS queue entry."""
-        return await self._media_mapper.resolve_ma_uri_to_lms_queue_entry(uri)
+        return await self.resolve_ma_uri_to_lms_entry(uri)
 
     async def _add_url_entry_to_lms(self, entry: _LmsMirrorEntry) -> None:
         """Add one URL entry to LMS with optional display metadata."""

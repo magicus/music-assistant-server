@@ -10,7 +10,7 @@ from urllib.parse import urlencode
 
 from aiohttp import web
 from music_assistant_models.config_entries import ConfigEntry
-from music_assistant_models.enums import ConfigEntryType
+from music_assistant_models.enums import ConfigEntryType, PlaybackState
 from music_assistant_models.errors import (
     InvalidDataError,
     MusicAssistantError,
@@ -22,6 +22,7 @@ from music_assistant.providers.lyrion.constants import STATUS_COMMAND_VERIFY_TIM
 from music_assistant.providers.lyrion.setup_flow import validate_lms_endpoint
 from pylyrion.client import LyrionClient
 from pylyrion.cometd.transport import build_cometd_post_messages_callback
+from pylyrion.cometd_event_adapter import LyrionCometDEventAdapter
 from pylyrion.errors import LyrionRequestError
 from pylyrion.models import LyrionEndpoint
 from pylyrion.player import LyrionPlayerClient
@@ -39,7 +40,12 @@ from .constants import (
     PLAYERS_BATCH_SIZE,
 )
 from .player import LyrionPlayer
-from .status_event_adapter import LyrionStatusEventAdapter
+
+MODE_MAP = {
+    "play": PlaybackState.PLAYING,
+    "pause": PlaybackState.PAUSED,
+    "stop": PlaybackState.IDLE,
+}
 
 
 class LyrionPlayerProvider(PlayerProvider):
@@ -55,7 +61,12 @@ class LyrionPlayerProvider(PlayerProvider):
         self._unsubscribe_status_events = None
         self._discover_players_task: asyncio.Task[None] | None = None
         self._discover_players_again = False
-        self._status_event_adapter = LyrionStatusEventAdapter(self)
+        self._status_event_adapter = LyrionCometDEventAdapter(
+            self,
+            mode_map=MODE_MAP,
+            idle_state=PlaybackState.IDLE,
+            is_supported_player=lambda player: isinstance(player, LyrionPlayer),
+        )
         self._status_stream = PlayerStatusStream(
             self,
             post_messages=build_cometd_post_messages_callback(

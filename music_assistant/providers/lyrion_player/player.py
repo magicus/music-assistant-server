@@ -116,7 +116,7 @@ class LyrionPlayer(Player):
         """
         baseline = self.lyrion_server.get_last_status_seen_at(self.player_id)
         try:
-            await self._queue_sync.play_media(media)
+            await self._play_or_enqueue_media(media, command="load")
         except ProviderUnavailableError as err:
             raise PlayerCommandFailed(f"play_media failed: {err}") from err
 
@@ -137,7 +137,7 @@ class LyrionPlayer(Player):
         """
         baseline = self.lyrion_server.get_last_status_seen_at(self.player_id)
         try:
-            await self._queue_sync.enqueue_next_media(media)
+            await self._play_or_enqueue_media(media, command="add")
         except ProviderUnavailableError as err:
             raise PlayerCommandFailed(f"enqueue_next_media failed: {err}") from err
         await self._verify_status_update(baseline)
@@ -306,6 +306,60 @@ class LyrionPlayer(Player):
             expectation=expectation,
             expected_state=expected_state,
         )
+
+    async def _play_or_enqueue_media(
+        self,
+        media: PlayerMedia,
+        command: str,
+    ) -> None:
+        """Route media to LMS-native track_id flow first, else MA stream URL."""
+        if await self._try_play_lyrion_track_id(media, command=command):
+            if command == "add":
+                await self._queue_sync.sync_ma_queue_to_lms()
+            return
+
+        stream_url = await self.mass.streams.resolve_stream_url(
+            self.player_id,
+            media,
+        )
+        if command == "load":
+            await self.lyrion_server.play_player_url(self.player_id, stream_url)
+            return
+        await self.lyrion_server.append_player_url(self.player_id, stream_url)
+
+    async def _try_play_lyrion_track_id(
+        self,
+        media: PlayerMedia,
+        command: str = "load",
+    ) -> bool:
+        """Try LMS-native track_id queue load/add and return whether it succeeded."""
+        if command not in {"load", "add"}:
+            return False
+        if not media.uri:
+            return False
+
+        lms_entry = await self._queue_sync.resolve_ma_uri_to_lms_entry(media.uri)
+        if lms_entry is None or lms_entry.kind != "track_id":
+            return False
+
+        try:
+            await self.lyrion_server.add_player_track_id_to_queue(
+                self.player_id,
+                lms_entry.value,
+                command=command,
+            )
+            if command == "load":
+                # Ensure play_media always starts transport immediately.
+                await self.lyrion_server.play_player(self.player_id)
+        except ProviderUnavailableError as err:
+            self.logger.warning(
+                "Native LMS queue %s failed for track_id %s, fall back to URL: %s",
+                command,
+                lms_entry.value,
+                err,
+            )
+            return False
+        return True
 
     async def _on_ma_queue_items_updated(self, event: MassEvent) -> None:
         """

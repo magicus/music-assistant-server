@@ -236,7 +236,7 @@ async def test_provider_init_wires_status_adapter_and_stream() -> None:
             return_value=None,
         ),
         patch(
-            "music_assistant.providers.lyrion_player.provider.LyrionStatusEventAdapter"
+            "music_assistant.providers.lyrion_player.provider.LyrionCometDEventAdapter"
         ) as mock_adapter_cls,
         patch(
             "music_assistant.providers.lyrion_player.provider.PlayerStatusStream"
