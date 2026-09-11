@@ -466,3 +466,102 @@ async def test_get_stream_url_rejects_queue_id_mismatch(player_provider: MagicMo
         await LyrionPlayerProvider._handle_get_stream_url(player_provider, request)
 
     player_provider.mass.player_queues.get_item.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_enqueue_next_media_wraps_provider_unavailable(
+    player: LyrionPlayer, mock_provider: MagicMock
+) -> None:
+    """Enqueue URL path provider failures should map to PlayerCommandFailed."""
+    media = MagicMock()
+    media.uri = "spotify://track/123"
+    player._queue_sync.try_play_lyrion_track_id = AsyncMock(return_value=False)
+    mock_provider.mass.streams.resolve_stream_url = AsyncMock(return_value="http://stream/next")
+    mock_provider.send_player_command.side_effect = ProviderUnavailableError("down")
+
+    with pytest.raises(PlayerCommandFailed, match="enqueue_next_media failed"):
+        await player.enqueue_next_media(media)
+
+
+@pytest.mark.asyncio
+async def test_play_pause_stop_power_and_volume_set_wrap_provider_unavailable(
+    player: LyrionPlayer, mock_provider: MagicMock
+) -> None:
+    """Command helpers should wrap ProviderUnavailableError consistently."""
+    mock_provider.send_player_command.side_effect = ProviderUnavailableError("down")
+    with pytest.raises(PlayerCommandFailed, match="play failed"):
+        await player.play()
+
+    mock_provider.send_player_command.side_effect = ProviderUnavailableError("down")
+    with pytest.raises(PlayerCommandFailed, match="pause failed"):
+        await player.pause()
+
+    mock_provider.send_player_command.side_effect = ProviderUnavailableError("down")
+    with pytest.raises(PlayerCommandFailed, match="stop failed"):
+        await player.stop()
+
+    mock_provider.send_player_command.side_effect = ProviderUnavailableError("down")
+    with pytest.raises(PlayerCommandFailed, match="power failed"):
+        await player.power(True)
+
+    mock_provider.send_player_command.side_effect = ProviderUnavailableError("down")
+    with pytest.raises(PlayerCommandFailed, match="volume_set failed"):
+        await player.volume_set(10)
+
+
+@pytest.mark.asyncio
+async def test_next_previous_with_unknown_cached_index_use_baseline_only(
+    player: LyrionPlayer, mock_provider: MagicMock
+) -> None:
+    """When no cached playlist index exists, next/previous should use basic status verification."""
+    mock_provider.get_cached_cometd_status.return_value = {"playlist_cur_index": None}
+
+    await player.next_track()
+    await player.previous_track()
+
+    calls = mock_provider.verify_cometd_status_expectation.await_args_list
+    assert calls[0].args[0] == "test_player"
+    assert calls[0].kwargs["expectation"] is None
+    assert calls[1].args[0] == "test_player"
+    assert calls[1].kwargs["expectation"] is None
+
+
+@pytest.mark.asyncio
+async def test_set_members_noop_and_skip_self_or_unknown_members(
+    player: LyrionPlayer, mock_provider: MagicMock
+) -> None:
+    """set_members should noop on empty changes and skip self/non-members safely."""
+    await player.set_members(player_ids_to_add=None, player_ids_to_remove=None)
+    mock_provider.send_player_command.assert_not_awaited()
+
+    player._attr_group_members = ["test_player", "member_a"]
+    await player.set_members(
+        player_ids_to_remove=["test_player", "missing"],
+        player_ids_to_add=["test_player", "member_a"],
+    )
+    mock_provider.send_player_command.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_sync_queue_and_metadata_wrappers(
+    player: LyrionPlayer, mock_provider: MagicMock
+) -> None:
+    """Sync wrappers should delegate to queue-sync and metadata helpers."""
+    player._queue_sync.sync_lms_queue_to_ma = AsyncMock(return_value=None)
+    await player.sync_queue_from_lms()
+    player._queue_sync.sync_lms_queue_to_ma.assert_awaited_once()
+
+    await player.sync_from_lms({"name": "Kitchen", "model": "Squeeze"})
+    assert player._attr_name == "Kitchen"
+
+
+@pytest.mark.asyncio
+async def test_sync_from_lms_adds_mac_identifier_when_player_id_is_mac(
+    mock_provider: MagicMock,
+) -> None:
+    """MAC-like player ids should be added to device identifiers during metadata mapping."""
+    mac_player = LyrionPlayer(mock_provider, "aa:bb:cc:dd:ee:ff", {})
+    await mac_player.sync_from_lms({"name": "Kitchen", "model": "Squeeze"})
+
+    assert mac_player.device_info is not None
+    assert mac_player.device_info.identifiers

@@ -11,8 +11,17 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from music_assistant_models.errors import MusicAssistantError, ProviderUnavailableError
 
+from music_assistant.providers.lyrion.cometd.helpers import _TrackEndExpectation
 from music_assistant.providers.lyrion.cometd.stream import LyrionCometDEventStream
-from music_assistant.providers.lyrion_player.cometd_events import LmsPlayerPlaylistChangedEvent
+from music_assistant.providers.lyrion_player.cometd_events import (
+    LmsPlayerPlaybackChangedEvent,
+    LmsPlayerPlaylistChangedEvent,
+    LmsPlayerPowerChangedEvent,
+    LmsPlayerRepeatChangedEvent,
+    LmsPlayerSeekedEvent,
+    LmsPlayerShuffleChangedEvent,
+    LmsPlayerVolumeChangedEvent,
+)
 from music_assistant.providers.lyrion_player.provider import LyrionPlayerProvider
 from tests.providers.lyrion.fake_lms_server import FakeLmsServer
 from tests.providers.lyrion.rpc_test_doubles import FakeResponse
@@ -698,3 +707,221 @@ def test_requires_activity_expectation_sync_state_branch() -> None:
     assert LyrionCometDEventStream._requires_activity_expectation(
         {"mode": "stop", "sync_slaves": "child"}
     )
+
+
+async def test_verify_expectation_immediate_success_without_predicate() -> None:
+    """Expectation verification should pass immediately when update arrived and no predicate exists."""
+    provider = _StubProvider(["player_a"])
+    stream = LyrionCometDEventStream(cast("Any", provider), _noop_event_callback)
+    stream._status_by_player["player_a"] = {"mode": "play"}
+    stream.wait_for_player_status_update = AsyncMock(return_value=True)
+
+    assert await stream.verify_player_status_expectation("player_a", baseline=None)
+
+
+async def test_verify_expectation_returns_false_after_poll_failures() -> None:
+    """Expectation verification should fail cleanly when no CometD or polling update succeeds."""
+    provider = _StubProvider(["player_a"])
+    provider.get_player_status = AsyncMock(side_effect=ProviderUnavailableError("down"))
+    stream = LyrionCometDEventStream(cast("Any", provider), _noop_event_callback)
+    stream.wait_for_player_status_update = AsyncMock(return_value=False)
+
+    assert not await stream.verify_player_status_expectation(
+        "player_a",
+        baseline=None,
+        expectation=lambda _status: False,
+        expected_state="play",
+    )
+
+
+async def test_listener_watchdog_and_expectation_loops_tick_and_stop() -> None:
+    """Background loops should execute one cycle and stop when provider unloads."""
+    provider = _StubProvider(["player_a"])
+    stream = LyrionCometDEventStream(cast("Any", provider), _noop_event_callback)
+
+    async def _sleep_noop(_seconds: float) -> None:
+        return None
+
+    original_sleep = asyncio.sleep
+    asyncio.sleep = _sleep_noop
+    try:
+
+        async def _run_session() -> None:
+            raise ProviderUnavailableError("boom")
+
+        stream._run_session = AsyncMock(side_effect=_run_session)
+        stream._reset_session_state = MagicMock(
+            side_effect=lambda: setattr(provider, "unloading", True)
+        )
+        await stream._listener_loop()
+        stream._run_session.assert_awaited_once()
+
+        provider.unloading = False
+
+        async def _watchdog_tick() -> None:
+            provider.unloading = True
+
+        stream._run_watchdog_tick = AsyncMock(side_effect=_watchdog_tick)
+        await stream._watchdog_loop()
+        stream._run_watchdog_tick.assert_awaited_once()
+
+        provider.unloading = False
+
+        async def _expectation_tick() -> None:
+            provider.unloading = True
+
+        stream._run_expectation_tick = AsyncMock(side_effect=_expectation_tick)
+        await stream._expectation_loop()
+        stream._run_expectation_tick.assert_awaited_once()
+    finally:
+        asyncio.sleep = original_sleep
+
+
+async def test_subscribe_helpers_dispatch_followup_messages() -> None:
+    """Subscribe helpers should route response tail messages through message handler."""
+    provider = _StubProvider(["player_a"])
+    stream = LyrionCometDEventStream(cast("Any", provider), _noop_event_callback)
+    stream._client_id = "cid"
+    stream._handle_message = AsyncMock(return_value=None)
+
+    stream._bayeux.publish = AsyncMock(
+        return_value=[
+            {"channel": "/meta"},
+            {"channel": "/cid/slim/playerstatus/player_a", "data": {"mode": "play"}},
+        ]
+    )
+    await stream._subscribe_player_status("player_a")
+    assert "player_a" in stream._subscribed_player_ids
+    stream._handle_message.assert_awaited_once()
+
+    stream._handle_message.reset_mock()
+    stream._bayeux.publish = AsyncMock(
+        return_value=[
+            {"channel": "/meta"},
+            {"channel": "/cid/slim/serverstatus", "data": {"player count": 1}},
+        ]
+    )
+    await stream._subscribe_server_status()
+    stream._handle_message.assert_awaited_once()
+
+
+async def test_handle_player_status_emits_all_runtime_diff_events() -> None:
+    """Merged status deltas should emit playback/power/volume/repeat/shuffle/seek/playlist events."""
+    provider = _StubProvider(["player_a"])
+    emitted_events: list[object] = []
+
+    async def _capture_event(event: object) -> None:
+        emitted_events.append(event)
+
+    stream = LyrionCometDEventStream(cast("Any", provider), _capture_event)
+    await stream._handle_player_status(
+        "player_a",
+        {
+            "mode": "play",
+            "power": 0,
+            "mixer volume": 10,
+            "playlist repeat": 0,
+            "playlist shuffle": 0,
+            "time": 1,
+            "playlist_cur_index": 0,
+            "playlist_timestamp": 1.0,
+            "playlist_tracks": 2,
+            "playlist_loop": [{"id": "a"}, {"id": "b"}],
+        },
+    )
+    await stream._handle_player_status(
+        "player_a",
+        {
+            "mode": "pause",
+            "power": 1,
+            "mixer volume": 20,
+            "playlist repeat": 1,
+            "playlist shuffle": 1,
+            "time": 2,
+            "playlist_cur_index": 0,
+            "playlist_timestamp": 2.0,
+            "playlist_tracks": 3,
+            "playlist_loop": [{"id": "a"}, {"id": "b"}],
+        },
+    )
+
+    assert any(isinstance(event, LmsPlayerPlaybackChangedEvent) for event in emitted_events)
+    assert any(isinstance(event, LmsPlayerPowerChangedEvent) for event in emitted_events)
+    assert any(isinstance(event, LmsPlayerVolumeChangedEvent) for event in emitted_events)
+    assert any(isinstance(event, LmsPlayerRepeatChangedEvent) for event in emitted_events)
+    assert any(isinstance(event, LmsPlayerShuffleChangedEvent) for event in emitted_events)
+    assert any(isinstance(event, LmsPlayerSeekedEvent) for event in emitted_events)
+    assert any(isinstance(event, LmsPlayerPlaylistChangedEvent) for event in emitted_events)
+
+
+def test_next_expectation_delay_backoff_branch() -> None:
+    """Expectation delay should evaluate inverse backoff branch for far future transitions."""
+    provider = _StubProvider(["player_a"])
+    stream = LyrionCometDEventStream(cast("Any", provider), _noop_event_callback)
+    stream._track_end_expectations["player_a"] = _TrackEndExpectation(
+        expected_transition_at=1_000_000_000.0,
+        baseline_index=0,
+        baseline_track_id="x",
+        baseline_playlist_timestamp=1.0,
+    )
+
+    delay = stream._next_expectation_delay()
+    assert delay > 0
+
+
+async def test_recovery_helpers_cover_transition_clear_and_restart_paths() -> None:
+    """Recovery helpers should cover expectation clear, guarded recovery and restart branches."""
+    provider = _StubProvider(["player_a", "player_b"])
+    stream = LyrionCometDEventStream(cast("Any", provider), _noop_event_callback)
+
+    stream._status_by_player["player_a"] = {"mode": "play", "playlist_cur_index": 1}
+    original_recover = stream._recover_expected_status
+    stream._track_end_expectations["player_a"] = _TrackEndExpectation(
+        expected_transition_at=0.0,
+        baseline_index=0,
+        baseline_track_id=None,
+        baseline_playlist_timestamp=None,
+    )
+    stream._recover_expected_status = AsyncMock(return_value=None)
+    await stream._run_expectation_tick()
+    assert "player_a" not in stream._track_end_expectations
+    stream._recover_expected_status.assert_not_awaited()
+    stream._recover_expected_status = original_recover
+
+    stream._expectation_recovery_inflight.add("player_a")
+    stream.verify_player_status_expectation = AsyncMock(return_value=True)
+    await stream._recover_expected_status("player_a", "play")
+    stream.verify_player_status_expectation.assert_not_awaited()
+    stream._expectation_recovery_inflight.discard("player_a")
+
+    stream._track_end_expectations["player_a"] = _TrackEndExpectation(
+        expected_transition_at=0.0,
+        baseline_index=0,
+        baseline_track_id=None,
+        baseline_playlist_timestamp=None,
+    )
+    stream.verify_player_status_expectation = AsyncMock(return_value=True)
+    await stream._recover_expected_status("player_a", "play")
+    stream.verify_player_status_expectation.assert_awaited_once()
+
+    stream._client_id = "cid"
+    stream._subscribed_player_ids = {"player_a", "player_b"}
+    stream._status_seen_at = {
+        "player_a": 0.0,
+        "player_b": asyncio.get_running_loop().time(),
+    }
+    await stream._run_watchdog_tick()
+    assert "player_a" in stream._pending_player_ids
+    assert "player_b" in stream._subscribed_player_ids
+
+    stream._client_id = None
+    await stream._restart_stale_session(["player_a"])
+
+    stream._client_id = "cid"
+    stream._task = asyncio.create_task(asyncio.sleep(10))
+    done_watchdog = asyncio.create_task(asyncio.sleep(0))
+    await done_watchdog
+    stream._watchdog_task = done_watchdog
+    provider.unloading = True
+    await stream._restart_stale_session(["player_a"])
+    assert stream._task is not None

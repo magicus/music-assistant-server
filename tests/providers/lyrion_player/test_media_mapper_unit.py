@@ -181,3 +181,94 @@ async def test_resolve_matching_lms_track_id_handles_parse_and_lookup_failures(
     )
     mass.music.get_item_by_uri = AsyncMock(side_effect=MusicAssistantError("missing"))
     assert await mapper._resolve_matching_lms_track_id("x") is None
+
+
+def test_stream_redirect_uri_extraction_requires_expected_path_and_ma_uri() -> None:
+    """Redirect extraction should require provider path and a non-empty ma_uri query value."""
+    mapper, _player, _mass = _build_mapper()
+
+    assert (
+        mapper._extract_ma_uri_from_stream_redirect_url(
+            "http://127.0.0.1:8095/other/get_stream_url?ma_uri=spotify://track/1"
+        )
+        is None
+    )
+    assert (
+        mapper._extract_ma_uri_from_stream_redirect_url(
+            "http://127.0.0.1:8095/lyrion_player/get_stream_url?x=1"
+        )
+        is None
+    )
+    assert (
+        mapper._extract_ma_uri_from_stream_redirect_url(
+            "http://127.0.0.1:8095/lyrion_player/get_stream_url?ma_uri="
+        )
+        is None
+    )
+
+
+def test_extract_lms_entry_from_playlist_item_supports_alternate_url_keys() -> None:
+    """Playlist extraction should accept alternate LMS URL key names."""
+    assert LyrionMediaMapper.extract_lms_entry_from_playlist_item(
+        {"uri": "https://example/uri.mp3"}
+    ) == LmsQueueEntry(kind="url", value="https://example/uri.mp3")
+    assert LyrionMediaMapper.extract_lms_entry_from_playlist_item(
+        {"play_url": "https://example/play_url.mp3"}
+    ) == LmsQueueEntry(kind="url", value="https://example/play_url.mp3")
+    assert LyrionMediaMapper.extract_lms_entry_from_playlist_item(
+        {"playurl": "https://example/playurl.mp3"}
+    ) == LmsQueueEntry(kind="url", value="https://example/playurl.mp3")
+    assert LyrionMediaMapper.extract_lms_entry_from_playlist_item(
+        {"content_url": "https://example/content.mp3"}
+    ) == LmsQueueEntry(kind="url", value="https://example/content.mp3")
+
+
+def test_provider_endpoint_parser_rejects_invalid_host_and_port() -> None:
+    """Endpoint parser should reject missing host, bad port and out-of-range port values."""
+    assert LyrionMediaMapper._provider_lms_endpoint(_provider_for_endpoint(None, 9000)) is None
+    assert LyrionMediaMapper._provider_lms_endpoint(_provider_for_endpoint(" ", 9000)) is None
+    assert (
+        LyrionMediaMapper._provider_lms_endpoint(_provider_for_endpoint("127.0.0.1", None)) is None
+    )
+    assert (
+        LyrionMediaMapper._provider_lms_endpoint(_provider_for_endpoint("127.0.0.1", "bad")) is None
+    )
+    assert LyrionMediaMapper._provider_lms_endpoint(_provider_for_endpoint("127.0.0.1", 0)) is None
+    assert (
+        LyrionMediaMapper._provider_lms_endpoint(_provider_for_endpoint("127.0.0.1", 70000)) is None
+    )
+
+
+def test_is_matching_music_provider_rejects_missing_or_wrong_domain() -> None:
+    """Provider matching should reject unresolved providers and non-lyrion domains."""
+    mapper, _player, mass = _build_mapper()
+
+    mass.get_provider = lambda _lookup: None
+    assert not mapper._is_matching_music_provider("missing")
+
+    wrong = _provider_for_endpoint("127.0.0.1", 9000, instance_id="other")
+    wrong.domain = "spotify"
+    mass.get_provider = lambda _lookup: wrong
+    assert not mapper._is_matching_music_provider("wrong")
+
+
+@pytest.mark.asyncio
+async def test_resolve_matching_lms_track_id_rejects_non_track_library_items(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resolver should return None when library lookup does not return a Track object."""
+    mapper, _player, mass = _build_mapper()
+
+    async def _parse_library(_uri: str) -> tuple[MediaType, str, str]:
+        return (MediaType.TRACK, "library", "id")
+
+    monkeypatch.setattr(
+        "music_assistant.providers.lyrion_player.media_mapper.parse_uri",
+        _parse_library,
+    )
+
+    class _NotTrack:
+        provider_mappings: list[object] = []
+
+    mass.music.get_item_by_uri = AsyncMock(return_value=_NotTrack())
+    assert await mapper._resolve_matching_lms_track_id("library://track/id") is None
