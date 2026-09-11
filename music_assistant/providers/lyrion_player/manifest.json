@@ -2,7 +2,7 @@
   "type": "player",
   "domain": "lyrion_player",
   "name": "Lyrion Players",
-  "stage": "experimental",
+  "stage": "stable",
   "description": "Control and play music on Lyrion Media Server (LMS) players",
   "codeowners": ["@magicus"],
   "requirements": [],
