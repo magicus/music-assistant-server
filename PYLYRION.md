@@ -27,3 +27,12 @@
 	- Chosen now: expose them as named pylyrion player operations (`get_queue_status`, `sync_to`, `unsync`) and keep MA as a mapping adapter.
 	- Alternative A: keep raw command arrays in MA for now and only move transport mechanics.
 	- Alternative B: hide queue-status behind a future pylyrion queue domain object once more queue semantics move out of MA.
+
+- Whether queue-mutation commands should stay as raw arrays in MA queue sync or become named pylyrion player operations.
+	- Chosen now: move index/repeat/shuffle/clear/track-id-add/move/delete to named pylyrion operations and keep queue_diff logic in MA.
+	- Alternative A: move only read operations and keep mutation commands raw until full queue domain extraction.
+	- Alternative B: introduce a dedicated pylyrion QueueClient abstraction before exposing these methods on PlayerClient.
+
+- Whether URL-entry metadata fallback (`playlistcontrol` -> `playlist add`) should move into pylyrion now.
+	- Chosen now: keep fallback in MA queue adapter for this stage because fallback policy is tightly coupled to MA queue-sync behavior and error handling.
+	- Alternative A: move fallback into pylyrion once API shape for URL metadata add is finalized.

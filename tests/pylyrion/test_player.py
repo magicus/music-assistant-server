@@ -74,6 +74,13 @@ async def test_player_client_transport_methods_dispatch_expected_commands() -> N
     await client.unsync("player1")
     await client.sync_to("player1", "leader1")
     await client.get_queue_status("player1", offset=0, limit=33)
+    await client.set_queue_index("player1", 4)
+    await client.set_repeat_mode("player1", 2)
+    await client.set_shuffle_mode("player1", 1)
+    await client.clear_queue("player1")
+    await client.add_track_id("player1", "t-42", command="load")
+    await client.move_queue_item("player1", 6, 1)
+    await client.delete_queue_item("player1", 3)
 
     calls = [call.kwargs["json"]["params"] for call in transport.post.call_args_list]
     assert calls[0] == ["player1", ["play"]]
@@ -83,3 +90,10 @@ async def test_player_client_transport_methods_dispatch_expected_commands() -> N
     assert calls[4] == ["player1", ["sync", "-"]]
     assert calls[5] == ["player1", ["sync", "leader1"]]
     assert calls[6] == ["player1", ["status", 0, 33]]
+    assert calls[7] == ["player1", ["playlist", "index", 4]]
+    assert calls[8] == ["player1", ["playlist", "repeat", 2]]
+    assert calls[9] == ["player1", ["playlist", "shuffle", 1]]
+    assert calls[10] == ["player1", ["playlist", "clear"]]
+    assert calls[11] == ["player1", ["playlistcontrol", "cmd:load", "track_id:t-42"]]
+    assert calls[12] == ["player1", ["playlist", "move", 6, 1]]
+    assert calls[13] == ["player1", ["playlist", "delete", 3]]

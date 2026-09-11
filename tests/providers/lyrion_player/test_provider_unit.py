@@ -491,6 +491,13 @@ async def test_transport_adapter_methods_use_pylyrion_client() -> None:
     player_client.players.sync_to = AsyncMock(return_value={})
     player_client.players.unsync = AsyncMock(return_value={})
     player_client.players.get_queue_status = AsyncMock(return_value={})
+    player_client.players.set_queue_index = AsyncMock(return_value={})
+    player_client.players.set_repeat_mode = AsyncMock(return_value={})
+    player_client.players.set_shuffle_mode = AsyncMock(return_value={})
+    player_client.players.clear_queue = AsyncMock(return_value={})
+    player_client.players.add_track_id = AsyncMock(return_value={})
+    player_client.players.move_queue_item = AsyncMock(return_value={})
+    player_client.players.delete_queue_item = AsyncMock(return_value={})
 
     with patch(
         "music_assistant.providers.lyrion_player.provider.LyrionClient",
@@ -503,6 +510,13 @@ async def test_transport_adapter_methods_use_pylyrion_client() -> None:
         await provider.sync_player_to("p2", "p1")
         await provider.unsync_player("p2")
         await provider.get_player_queue_status("p1", limit=123)
+        await provider.set_player_queue_index("p1", 9)
+        await provider.set_player_repeat_mode("p1", 2)
+        await provider.set_player_shuffle_mode("p1", 1)
+        await provider.clear_player_queue("p1")
+        await provider.add_player_track_id_to_queue("p1", "42", command="load")
+        await provider.move_player_queue_item("p1", 5, 2)
+        await provider.delete_player_queue_item("p1", 4)
 
     player_client.players.play.assert_awaited_once_with("p1")
     player_client.players.pause.assert_awaited_once_with("p1")
@@ -515,6 +529,17 @@ async def test_transport_adapter_methods_use_pylyrion_client() -> None:
         offset=0,
         limit=123,
     )
+    player_client.players.set_queue_index.assert_awaited_once_with("p1", 9)
+    player_client.players.set_repeat_mode.assert_awaited_once_with("p1", 2)
+    player_client.players.set_shuffle_mode.assert_awaited_once_with("p1", 1)
+    player_client.players.clear_queue.assert_awaited_once_with("p1")
+    player_client.players.add_track_id.assert_awaited_once_with(
+        "p1",
+        "42",
+        command="load",
+    )
+    player_client.players.move_queue_item.assert_awaited_once_with("p1", 5, 2)
+    player_client.players.delete_queue_item.assert_awaited_once_with("p1", 4)
 
 
 @pytest.mark.asyncio

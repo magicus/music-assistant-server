@@ -60,3 +60,47 @@ class LyrionPlayerClient:
     ) -> dict[str, object]:
         """Return LMS status payload with queue rows for one player."""
         return await self.send_command(player_id, ["status", offset, limit])
+
+    async def set_queue_index(self, player_id: str, index: int) -> dict[str, object]:
+        """Set active queue index for one player."""
+        return await self.send_command(player_id, ["playlist", "index", index])
+
+    async def set_repeat_mode(self, player_id: str, repeat_mode: int) -> dict[str, object]:
+        """Set LMS queue repeat mode for one player."""
+        return await self.send_command(player_id, ["playlist", "repeat", repeat_mode])
+
+    async def set_shuffle_mode(self, player_id: str, shuffle_mode: int) -> dict[str, object]:
+        """Set LMS queue shuffle mode for one player."""
+        return await self.send_command(player_id, ["playlist", "shuffle", shuffle_mode])
+
+    async def clear_queue(self, player_id: str) -> dict[str, object]:
+        """Clear LMS queue for one player."""
+        return await self.send_command(player_id, ["playlist", "clear"])
+
+    async def add_track_id(
+        self,
+        player_id: str,
+        track_id: str,
+        command: str = "add",
+    ) -> dict[str, object]:
+        """Add or load one track_id via LMS playlistcontrol command."""
+        return await self.send_command(
+            player_id,
+            ["playlistcontrol", f"cmd:{command}", f"track_id:{track_id}"],
+        )
+
+    async def move_queue_item(
+        self,
+        player_id: str,
+        from_index: int,
+        to_index: int,
+    ) -> dict[str, object]:
+        """Move one LMS queue item by index."""
+        return await self.send_command(
+            player_id,
+            ["playlist", "move", from_index, to_index],
+        )
+
+    async def delete_queue_item(self, player_id: str, index: int) -> dict[str, object]:
+        """Delete one LMS queue item by index."""
+        return await self.send_command(player_id, ["playlist", "delete", index])

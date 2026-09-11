@@ -288,6 +288,87 @@ class LyrionPlayerProvider(PlayerProvider):
         except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
             raise ProviderUnavailableError(str(err)) from err
 
+    async def set_player_queue_index(self, player_id: str, index: int) -> dict[str, Any]:
+        """Set active LMS queue index via pylyrion."""
+        try:
+            return await self._build_pylyrion_client().players.set_queue_index(player_id, index)
+        except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
+            raise ProviderUnavailableError(str(err)) from err
+
+    async def set_player_repeat_mode(self, player_id: str, repeat_mode: int) -> dict[str, Any]:
+        """Set LMS repeat mode via pylyrion."""
+        try:
+            return await self._build_pylyrion_client().players.set_repeat_mode(
+                player_id,
+                repeat_mode,
+            )
+        except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
+            raise ProviderUnavailableError(str(err)) from err
+
+    async def set_player_shuffle_mode(
+        self,
+        player_id: str,
+        shuffle_mode: int,
+    ) -> dict[str, Any]:
+        """Set LMS shuffle mode via pylyrion."""
+        try:
+            return await self._build_pylyrion_client().players.set_shuffle_mode(
+                player_id,
+                shuffle_mode,
+            )
+        except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
+            raise ProviderUnavailableError(str(err)) from err
+
+    async def clear_player_queue(self, player_id: str) -> dict[str, Any]:
+        """Clear LMS queue via pylyrion."""
+        try:
+            return await self._build_pylyrion_client().players.clear_queue(player_id)
+        except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
+            raise ProviderUnavailableError(str(err)) from err
+
+    async def add_player_track_id_to_queue(
+        self,
+        player_id: str,
+        track_id: str,
+        *,
+        command: str = "add",
+    ) -> dict[str, Any]:
+        """Add or load one LMS track_id via pylyrion."""
+        try:
+            return await self._build_pylyrion_client().players.add_track_id(
+                player_id,
+                track_id,
+                command=command,
+            )
+        except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
+            raise ProviderUnavailableError(str(err)) from err
+
+    async def move_player_queue_item(
+        self,
+        player_id: str,
+        from_index: int,
+        to_index: int,
+    ) -> dict[str, Any]:
+        """Move one LMS queue item via pylyrion."""
+        try:
+            return await self._build_pylyrion_client().players.move_queue_item(
+                player_id,
+                from_index,
+                to_index,
+            )
+        except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
+            raise ProviderUnavailableError(str(err)) from err
+
+    async def delete_player_queue_item(self, player_id: str, index: int) -> dict[str, Any]:
+        """Delete one LMS queue item via pylyrion."""
+        try:
+            return await self._build_pylyrion_client().players.delete_queue_item(
+                player_id,
+                index,
+            )
+        except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
+            raise ProviderUnavailableError(str(err)) from err
+
     def apply_status_update(
         self,
         player: LyrionPlayer,

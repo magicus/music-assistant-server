@@ -25,6 +25,14 @@ def _build_queue_sync() -> tuple[LyrionQueueSync, Any]:
     provider = SimpleNamespace(
         send_player_command=AsyncMock(),
         get_player_queue_status=AsyncMock(),
+        set_player_queue_index=AsyncMock(),
+        set_player_repeat_mode=AsyncMock(),
+        set_player_shuffle_mode=AsyncMock(),
+        clear_player_queue=AsyncMock(),
+        add_player_track_id_to_queue=AsyncMock(),
+        move_player_queue_item=AsyncMock(),
+        delete_player_queue_item=AsyncMock(),
+        play_player=AsyncMock(),
         build_stream_redirect_url=MagicMock(return_value="http://redirect/item"),
     )
     player = SimpleNamespace(
@@ -150,18 +158,9 @@ async def test_sync_ma_position_and_modes_to_lms() -> None:
     await queue_sync._sync_ma_position_to_lms(ma_snapshot, lms_snapshot)
     await queue_sync._sync_ma_modes_to_lms(ma_snapshot, lms_snapshot)
 
-    assert player.provider.send_player_command.await_args_list[0].args == (
-        "player-1",
-        ["playlist", "index", 2],
-    )
-    assert player.provider.send_player_command.await_args_list[1].args == (
-        "player-1",
-        ["playlist", "repeat", 1],
-    )
-    assert player.provider.send_player_command.await_args_list[2].args == (
-        "player-1",
-        ["playlist", "shuffle", 1],
-    )
+    player.provider.set_player_queue_index.assert_awaited_once_with("player-1", 2)
+    player.provider.set_player_repeat_mode.assert_awaited_once_with("player-1", 1)
+    player.provider.set_player_shuffle_mode.assert_awaited_once_with("player-1", 1)
 
 
 @pytest.mark.asyncio
@@ -254,7 +253,7 @@ async def test_rebuild_lms_tail_clears_for_full_rebuild_and_appends_entries() ->
     )
     await queue_sync._rebuild_lms_tail(source_entries, 0)
 
-    player.provider.send_player_command.assert_awaited_once_with("player-1", ["playlist", "clear"])
+    player.provider.clear_player_queue.assert_awaited_once_with("player-1")
     assert queue_sync._append_lms_entry.await_count == 2
 
 
@@ -362,10 +361,7 @@ async def test_append_lms_entry_uses_track_id_or_url_path() -> None:
     await queue_sync._append_lms_entry(_LmsMirrorEntry(kind="track_id", value="42"))
     await queue_sync._append_lms_entry(_LmsMirrorEntry(kind="url", value="http://x"))
 
-    assert player.provider.send_player_command.await_args_list[0].args == (
-        "player-1",
-        ["playlistcontrol", "cmd:add", "track_id:42"],
-    )
+    player.provider.add_player_track_id_to_queue.assert_awaited_once_with("player-1", "42")
     queue_sync._add_url_entry_to_lms.assert_awaited_once()
 
 
@@ -495,15 +491,19 @@ async def test_try_play_lyrion_track_id_branches_and_success_paths() -> None:
     )
     assert await queue_sync.try_play_lyrion_track_id(media, command="invalid") is False
 
-    player.provider.send_player_command = AsyncMock(return_value={})
+    player.provider.add_player_track_id_to_queue = AsyncMock(return_value={})
+    player.provider.play_player = AsyncMock(return_value={})
     assert await queue_sync.try_play_lyrion_track_id(media, command="load") is True
-    assert player.provider.send_player_command.await_args_list[0].args == (
+    player.provider.add_player_track_id_to_queue.assert_awaited_once_with(
         "player-1",
-        ["playlistcontrol", "cmd:load", "track_id:42"],
+        "42",
+        command="load",
     )
-    assert player.provider.send_player_command.await_args_list[1].args == ("player-1", ["play"])
+    player.provider.play_player.assert_awaited_once_with("player-1")
 
-    player.provider.send_player_command = AsyncMock(side_effect=ProviderUnavailableError("down"))
+    player.provider.add_player_track_id_to_queue = AsyncMock(
+        side_effect=ProviderUnavailableError("down")
+    )
     assert await queue_sync.try_play_lyrion_track_id(media, command="add") is False
 
 
@@ -961,14 +961,8 @@ async def test_move_and_delete_lms_index_send_expected_commands() -> None:
     await queue_sync._move_lms_index(5, 2)
     await queue_sync._delete_lms_index(3)
 
-    assert player.provider.send_player_command.await_args_list[0].args == (
-        "player-1",
-        ["playlist", "move", 5, 2],
-    )
-    assert player.provider.send_player_command.await_args_list[1].args == (
-        "player-1",
-        ["playlist", "delete", 3],
-    )
+    player.provider.move_player_queue_item.assert_awaited_once_with("player-1", 5, 2)
+    player.provider.delete_player_queue_item.assert_awaited_once_with("player-1", 3)
 
 
 def test_determine_protected_prefix_falls_back_to_current_index_when_buffer_index_missing() -> None:

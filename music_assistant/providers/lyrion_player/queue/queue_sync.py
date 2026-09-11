@@ -244,16 +244,14 @@ class LyrionQueueSync:
             return False
 
         try:
-            await self.player.provider.send_player_command(
+            await self.player.provider.add_player_track_id_to_queue(
                 self.player.player_id,
-                ["playlistcontrol", f"cmd:{command}", f"track_id:{item_id}"],
+                item_id,
+                command=command,
             )
             if command == "load":
                 # Ensure play_media always starts transport immediately.
-                await self.player.provider.send_player_command(
-                    self.player.player_id,
-                    ["play"],
-                )
+                await self.player.provider.play_player(self.player.player_id)
         except ProviderUnavailableError as err:
             self.player.logger.warning(
                 ("Native LMS queue %s failed for track_id %s, fall back to URL: %s"),
@@ -487,9 +485,9 @@ class LyrionQueueSync:
             return
         if ma_snapshot.current_index == lms_snapshot.current_index:
             return
-        await self.player.provider.send_player_command(
+        await self.player.provider.set_player_queue_index(
             self.player.player_id,
-            ["playlist", "index", ma_snapshot.current_index],
+            ma_snapshot.current_index,
         )
 
     async def _sync_ma_modes_to_lms(
@@ -500,16 +498,16 @@ class LyrionQueueSync:
         """Apply repeat/shuffle alignment from MA to LMS."""
         repeat_target = self._ma_repeat_to_lms(ma_snapshot.repeat_mode)
         if repeat_target != lms_snapshot.repeat_mode:
-            await self.player.provider.send_player_command(
+            await self.player.provider.set_player_repeat_mode(
                 self.player.player_id,
-                ["playlist", "repeat", repeat_target],
+                repeat_target,
             )
 
         shuffle_target = 1 if ma_snapshot.shuffle_enabled else 0
         if shuffle_target != lms_snapshot.shuffle_mode:
-            await self.player.provider.send_player_command(
+            await self.player.provider.set_player_shuffle_mode(
                 self.player.player_id,
-                ["playlist", "shuffle", shuffle_target],
+                shuffle_target,
             )
 
     async def _apply_lms_modes_to_ma(
@@ -542,10 +540,7 @@ class LyrionQueueSync:
     ) -> None:
         """Rebuild LMS queue from the given index onward."""
         if rebuild_from_index <= 0:
-            await self.player.provider.send_player_command(
-                self.player.player_id,
-                ["playlist", "clear"],
-            )
+            await self.player.provider.clear_player_queue(self.player.player_id)
             for entry in source_entries:
                 await self._append_lms_entry(entry)
             return
@@ -581,25 +576,26 @@ class LyrionQueueSync:
     async def _append_lms_entry(self, entry: _LmsMirrorEntry) -> None:
         """Append one queue entry on LMS."""
         if entry.kind == "track_id":
-            await self.player.provider.send_player_command(
+            await self.player.provider.add_player_track_id_to_queue(
                 self.player.player_id,
-                ["playlistcontrol", "cmd:add", f"track_id:{entry.value}"],
+                entry.value,
             )
             return
         await self._add_url_entry_to_lms(entry)
 
     async def _move_lms_index(self, from_index: int, to_index: int) -> None:
         """Move one LMS queue entry by index."""
-        await self.player.provider.send_player_command(
+        await self.player.provider.move_player_queue_item(
             self.player.player_id,
-            ["playlist", "move", from_index, to_index],
+            from_index,
+            to_index,
         )
 
     async def _delete_lms_index(self, index: int) -> None:
         """Delete one LMS queue entry by index."""
-        await self.player.provider.send_player_command(
+        await self.player.provider.delete_player_queue_item(
             self.player.player_id,
-            ["playlist", "delete", index],
+            index,
         )
 
     @staticmethod
