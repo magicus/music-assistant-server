@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Literal
-from urllib.parse import quote
 
 from music_assistant_models.enums import ImageType, MediaType
 from music_assistant_models.errors import MediaNotFoundError, ProviderUnavailableError
@@ -20,11 +19,7 @@ from music_assistant_models.media_items import (
     UniqueList,
 )
 
-from music_assistant.providers.lyrion.client import (
-    build_lms_url,
-    get_configured_host,
-    get_configured_port,
-)
+from music_assistant.providers.lyrion.client import get_configured_host, get_configured_port
 from pylyrion import media_parsers as pylyrion_parsers
 from pylyrion.media_items import LyrionAlbum, LyrionArtist, LyrionTrack
 
@@ -245,17 +240,19 @@ def extract_item_id(
 
 def to_lms_stream_url(provider: LyrionMusicProvider, track_id: str, raw_url: str | None) -> str:
     """Resolve track stream URL."""
-    if raw_url and raw_url.startswith(("http://", "https://")):
-        return raw_url
     host = get_configured_host(provider)
     if host is None:
         raise ProviderUnavailableError("Lyrion host is not configured")
     port = get_configured_port(provider, default=None)
     if port is None:
         raise ProviderUnavailableError("Lyrion port is not configured")
-    encoded_track_id = quote(track_id, safe="")
-    stream_path = STREAM_PATH_TEMPLATE.format(track_id=encoded_track_id)
-    return build_lms_url(host, port, stream_path)
+    return pylyrion_parsers.to_lms_stream_url(
+        track_id=track_id,
+        host=host,
+        port=port,
+        stream_path_template=STREAM_PATH_TEMPLATE,
+        raw_url=raw_url,
+    )
 
 
 def extract_artist_ref(

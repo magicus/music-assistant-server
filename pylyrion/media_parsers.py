@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Literal
+from urllib.parse import quote
 
 from pylyrion.media_items import (
     LyrionAlbum,
@@ -12,6 +13,7 @@ from pylyrion.media_items import (
     LyrionPlaylist,
     LyrionTrack,
 )
+from pylyrion.session import build_lms_url
 
 
 def parse_artist(row: Mapping[str, str], artwork_url: str | None = None) -> LyrionArtist:
@@ -254,8 +256,24 @@ def parse_int(value: str | None, default: int = 0) -> int:
         return default
     try:
         return int(value.strip())
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         return default
+
+
+def to_lms_stream_url(
+    *,
+    track_id: str,
+    host: str,
+    port: int,
+    stream_path_template: str,
+    raw_url: str | None = None,
+) -> str:
+    """Resolve a track stream URL from raw URL or LMS stream path template."""
+    if raw_url and raw_url.startswith(("http://", "https://")):
+        return raw_url
+    encoded_track_id = quote(track_id, safe="")
+    stream_path = stream_path_template.format(track_id=encoded_track_id)
+    return build_lms_url(host, port, stream_path)
 
 
 def extract_mapping_details(row: Mapping[str, str], keys: tuple[str, ...]) -> dict[str, str]:
