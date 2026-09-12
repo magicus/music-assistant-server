@@ -19,6 +19,7 @@ from music_assistant.controllers.tasks import (
     update_current_task_progress_from_index,
     update_current_task_progress_text,
 )
+from pylyrion.library import normalize_lookup_ids
 
 from . import artwork, parsers
 
@@ -309,7 +310,7 @@ async def _lookup_library_items_for_sync(
     if not provider_item_ids:
         return {}
 
-    unique_item_ids = list(dict.fromkeys(provider_item_ids))
+    unique_item_ids = normalize_lookup_ids(provider_item_ids)
     result: dict[str, Any] = {}
     for library_item in await controller.get_library_items_by_prov_id(
         provider_instance=provider.instance_id,

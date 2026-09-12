@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from pylyrion.library import ARTIST_SPEC, LyrionLibraryClient
+from pylyrion.library import ARTIST_SPEC, LyrionLibraryClient, normalize_lookup_ids
 from pylyrion.models import LyrionEndpoint
 from pylyrion.session import LyrionSession
 from tests.providers.lyrion.rpc_test_doubles import FakeResponse
@@ -111,3 +111,34 @@ async def test_library_client_playlist_tracks_and_entity_data() -> None:
     assert playlist_page.has_more is False
     assert playlist_tracks == [{"id": "p1"}]
     assert artist_row == {"id": "a1", "artist": "Artist 1"}
+
+
+def test_normalize_lookup_ids_keeps_stable_order() -> None:
+    """Lookup id normalization should deduplicate while preserving first-seen order."""
+    assert normalize_lookup_ids(["a", "a", "b", "a", "c"]) == ["a", "b", "c"]
+
+
+@pytest.mark.asyncio
+async def test_library_client_iter_decoded_entities() -> None:
+    """Decoded iteration should apply callback decoding on normalized row order."""
+    client = _build_library_client(
+        {
+            "result": {
+                "artists_loop": [{"id": "a1", "name": "Artist 1"}],
+                "count": "1",
+            }
+        }
+    )
+
+    async def _decode(row: dict[str, str]) -> str:
+        return row["id"]
+
+    result = [
+        item
+        async for item in client.iter_decoded_entities(
+            ARTIST_SPEC,
+            ["a1", "a1"],
+            _decode,
+        )
+    ]
+    assert result == ["a1"]

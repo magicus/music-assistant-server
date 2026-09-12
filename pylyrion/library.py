@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, Mapping
+import asyncio
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from time import monotonic
-from typing import Any, Literal, cast
+from typing import Any, Literal, TypeVar, cast
 
 from pylyrion.errors import LyrionRequestError
 from pylyrion.session import LyrionSession, normalize_lms_text_value
 
 EntityKey = Literal["artist", "album", "track", "playlist", "genre"]
+DecodedEntityT = TypeVar("DecodedEntityT")
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,11 +225,15 @@ async def iter_entity_rows(
     item_ids: list[str],
 ) -> AsyncGenerator[Mapping[str, str]]:
     """Yield normalized LMS rows in request order, with optional batch fallback."""
-    total_items = len(item_ids)
-    if len(item_ids) == 1:
-        item_id = item_ids[0]
-        result = await session.request("", _create_lookup_command(spec, item_ids))
-        for raw_item in _split_lookup_reply(spec, result, item_ids):
+    ordered_ids = normalize_lookup_ids(item_ids)
+    total_items = len(ordered_ids)
+    if total_items == 0:
+        return
+
+    if total_items == 1:
+        item_id = ordered_ids[0]
+        result = await session.request("", _create_lookup_command(spec, ordered_ids))
+        for raw_item in _split_lookup_reply(spec, result, ordered_ids):
             yield raw_item
         return
 
@@ -235,7 +241,7 @@ async def iter_entity_rows(
     try:
         if use_batch:
             processed_items = 0
-            for chunk in _chunked(item_ids, BATCH_LOOKUP_SIZE):
+            for chunk in _chunked(ordered_ids, BATCH_LOOKUP_SIZE):
                 chunk_start = processed_items + 1
                 chunk_end = processed_items + len(chunk)
                 _ = chunk_start, chunk_end, total_items
@@ -251,10 +257,100 @@ async def iter_entity_rows(
     else:
         fallback_start = 0
 
-    for item_id in item_ids[fallback_start:]:
+    for item_id in ordered_ids[fallback_start:]:
         result = await session.request("", _create_lookup_command(spec, [item_id]))
         for raw_item in _split_lookup_reply(spec, result, [item_id]):
             yield raw_item
+
+
+def normalize_lookup_ids(item_ids: list[str]) -> list[str]:
+    """Deduplicate lookup ids while preserving stable order."""
+    return list(dict.fromkeys(item_ids))
+
+
+async def _decode_entity_worker(
+    row_queue: asyncio.Queue[Mapping[str, str] | object],
+    decoded_queue: asyncio.Queue[DecodedEntityT | object],
+    stop_sentinel: object,
+    decode_row: Callable[[Mapping[str, str]], Awaitable[DecodedEntityT]],
+    error_box: list[Exception],
+) -> None:
+    """Decode normalized rows from a queue using a callback."""
+    try:
+        while True:
+            row = await row_queue.get()
+            if row is stop_sentinel:
+                break
+            decoded = await decode_row(cast("Mapping[str, str]", row))
+            await decoded_queue.put(decoded)
+    except Exception as err:
+        error_box.append(err)
+    finally:
+        await decoded_queue.put(stop_sentinel)
+
+
+async def iter_decoded_entities(
+    session: LyrionSession,
+    spec: LyrionEntitySpec,
+    item_ids: list[str],
+    decode_row: Callable[[Mapping[str, str]], Awaitable[DecodedEntityT]],
+    worker_count: int = 1,
+) -> AsyncGenerator[DecodedEntityT]:
+    """Yield decoded entities by combining pylyrion lookup with caller decode callback."""
+    ordered_ids = normalize_lookup_ids(item_ids)
+    if not ordered_ids:
+        return
+
+    if len(ordered_ids) == 1:
+        row = await get_entity_row(session, spec, ordered_ids[0])
+        yield await decode_row(row)
+        return
+
+    stop_sentinel = object()
+    row_queue: asyncio.Queue[Mapping[str, str] | object] = asyncio.Queue(maxsize=2)
+    decoded_queue: asyncio.Queue[DecodedEntityT | object] = asyncio.Queue(maxsize=2)
+    error_box: list[Exception] = []
+    decode_workers = max(1, worker_count)
+
+    async def _enqueue_rows() -> None:
+        try:
+            async for row in iter_entity_rows(session, spec, ordered_ids):
+                await row_queue.put(row)
+        finally:
+            for _ in range(decode_workers):
+                await row_queue.put(stop_sentinel)
+
+    tasks: list[asyncio.Task[None]] = [asyncio.create_task(_enqueue_rows())]
+    for _ in range(decode_workers):
+        tasks.append(
+            asyncio.create_task(
+                _decode_entity_worker(
+                    row_queue,
+                    decoded_queue,
+                    stop_sentinel,
+                    decode_row,
+                    error_box,
+                )
+            )
+        )
+
+    try:
+        completed_workers = 0
+        while completed_workers < decode_workers:
+            payload = await decoded_queue.get()
+            if payload is stop_sentinel:
+                completed_workers += 1
+                continue
+            if error_box:
+                raise error_box[0]
+            yield cast("DecodedEntityT", payload)
+        if error_box:
+            raise error_box[0]
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def search_entities(
@@ -339,6 +435,7 @@ class LyrionLibraryClient:
     """Expose Lyrion library browse operations."""
 
     def __init__(self, session: LyrionSession) -> None:
+        """Store the transport session used for all library operations."""
         self._session = session
 
     async def get_artists_page(
@@ -540,6 +637,23 @@ class LyrionLibraryClient:
         async for row in iter_entity_rows(self._session, spec, item_ids):
             yield row
 
+    async def iter_decoded_entities(
+        self,
+        spec: LyrionEntitySpec,
+        item_ids: list[str],
+        decode_row: Callable[[Mapping[str, str]], Awaitable[DecodedEntityT]],
+        worker_count: int = 1,
+    ) -> AsyncGenerator[DecodedEntityT]:
+        """Yield decoded entities from normalized rows via caller callback."""
+        async for item in iter_decoded_entities(
+            self._session,
+            spec,
+            item_ids,
+            decode_row,
+            worker_count,
+        ):
+            yield item
+
     async def get_entity_row(self, spec: LyrionEntitySpec, item_id: str) -> Mapping[str, str]:
         """Fetch one normalized entity payload by id."""
         return await get_entity_row(self._session, spec, item_id)
@@ -566,7 +680,9 @@ __all__ = [
     "get_entity_row",
     "get_playlist_tracks_page",
     "get_simple_browse_page",
+    "iter_decoded_entities",
     "iter_entity_rows",
+    "normalize_lookup_ids",
     "normalize_row",
     "search_entities",
 ]

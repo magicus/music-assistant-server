@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncGenerator, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, cast
@@ -14,12 +13,11 @@ from music_assistant.controllers.tasks import (
     update_current_task_progress,
     update_current_task_progress_text,
 )
-from music_assistant.providers.lyrion.client import normalize_lms_text_value
 from pylyrion.errors import LyrionProtocolError, LyrionRequestError, LyrionTimeoutError
 from pylyrion.library import ALBUM_SPEC as PY_ALBUM_SPEC
 from pylyrion.library import ARTIST_SPEC as PY_ARTIST_SPEC
 from pylyrion.library import TRACK_SPEC as PY_TRACK_SPEC
-from pylyrion.library import LyrionLibraryClient
+from pylyrion.library import LyrionLibraryClient, normalize_lookup_ids
 from pylyrion.models import LyrionEndpoint
 from pylyrion.session import LyrionSession
 
@@ -354,15 +352,6 @@ async def _get_browse_ids(
     return ids
 
 
-def _extract_browse_total_count(result: Mapping[str, object]) -> int | None:
-    """Extract total item count from an LMS browse response when available."""
-    count = normalize_lms_text_value(result.get("count"))
-    if count is None:
-        return None
-    parsed = parsers.parse_int(count, default=0)
-    return parsed if parsed > 0 else None
-
-
 async def get_all_genres(
     provider: LyrionMusicProvider,
 ) -> list[dict[str, str]]:
@@ -424,17 +413,17 @@ async def search_tracks(provider: LyrionMusicProvider, query: str, limit: int) -
 
 async def get_artist_data(provider: LyrionMusicProvider, artist_id: str) -> Mapping[str, object]:
     """Get artist payload from LMS."""
-    return await _build_library_client(provider).get_entity_row(PY_ARTIST_SPEC, artist_id)
+    return await _get_entity_data(provider, ARTIST_SPEC, artist_id)
 
 
 async def get_album_data(provider: LyrionMusicProvider, album_id: str) -> Mapping[str, object]:
     """Get album payload from LMS."""
-    return await _build_library_client(provider).get_entity_row(PY_ALBUM_SPEC, album_id)
+    return await _get_entity_data(provider, ALBUM_SPEC, album_id)
 
 
 async def get_track_data(provider: LyrionMusicProvider, track_id: str) -> Mapping[str, object]:
     """Get track payload from LMS."""
-    return await _build_library_client(provider).get_entity_row(PY_TRACK_SPEC, track_id)
+    return await _get_entity_data(provider, TRACK_SPEC, track_id)
 
 
 async def _get_entity_data(
@@ -465,89 +454,16 @@ def _to_py_entity_spec(spec: LmsEntitySpec):
     return PY_TRACK_SPEC
 
 
-async def _fetch_worker(
-    provider: LyrionMusicProvider,
-    spec: LmsEntitySpec,
-    ordered_ids: list[str],
-    row_queue: asyncio.Queue[Mapping[str, str] | object],
-    stop_sentinel: object,
-    error_box: list[Exception],
-) -> None:
-    try:
-        async for row in _iter_entity_rows(provider, spec, ordered_ids):
-            await row_queue.put(row)
-    except Exception as err:
-        error_box.append(err)
-    finally:
-        await row_queue.put(stop_sentinel)
-
-
-async def _decode_worker(
-    provider: LyrionMusicProvider,
-    spec: LmsEntitySpec,
-    row_queue: asyncio.Queue[Mapping[str, str] | object],
-    decoded_queue: asyncio.Queue[Artist | Album | Track | object],
-    stop_sentinel: object,
-    artwork_worker_count: int,
-    error_box: list[Exception],
-) -> None:
-    try:
-        while True:
-            payload = await row_queue.get()
-            if payload is stop_sentinel:
-                break
-            decoded = await _decode_entity(provider, spec, cast("Mapping[str, str]", payload))
-            await decoded_queue.put(decoded)
-    except Exception as err:
-        error_box.append(err)
-    finally:
-        for _ in range(artwork_worker_count):
-            await decoded_queue.put(stop_sentinel)
-
-
-async def _artwork_worker(
-    provider: LyrionMusicProvider,
-    spec: LmsEntitySpec,
-    decoded_queue: asyncio.Queue[Artist | Album | Track | object],
-    output_queue: asyncio.Queue[Artist | Album | Track | object],
-    stop_sentinel: object,
-    error_box: list[Exception],
-) -> None:
-    try:
-        del provider, spec
-        while True:
-            decoded = await decoded_queue.get()
-            if decoded is stop_sentinel:
-                break
-            await output_queue.put(cast("Artist | Album | Track", decoded))
-    except Exception as err:
-        error_box.append(err)
-    finally:
-        await output_queue.put(stop_sentinel)
-
-
 async def _iter_entities(
     provider: LyrionMusicProvider,
     spec: LmsEntitySpec,
     item_ids: list[str],
 ) -> AsyncGenerator[Artist | Album | Track]:
-    """Yield decoded entities via a bounded fetch -> decode -> pass-through pipeline."""
-    ordered_ids = _normalize_lookup_ids(provider, spec, item_ids)
+    """Yield decoded entities via pylyrion lookup + MA decode callback."""
+    ordered_ids = normalize_lookup_ids(item_ids)
     if not ordered_ids:
         return
 
-    # For single-item lookups we avoid pipeline overhead and return immediately.
-    if len(ordered_ids) == 1:
-        raw_item = await _get_entity_data(provider, spec, ordered_ids[0])
-        entity = await _decode_entity(provider, spec, raw_item)
-        yield entity
-        return
-
-    row_queue: asyncio.Queue[Mapping[str, str] | object] = asyncio.Queue(maxsize=2)
-    decoded_queue: asyncio.Queue[Artist | Album | Track | object] = asyncio.Queue(maxsize=2)
-    output_queue: asyncio.Queue[Artist | Album | Track | object] = asyncio.Queue(maxsize=2)
-    stop_sentinel = object()
-    error_box: list[Exception] = []
     artwork_worker_count = max(1, ARTWORK_WORKER_COUNT)
 
     provider.logger.debug(
@@ -555,63 +471,14 @@ async def _iter_entities(
         spec.key,
         artwork_worker_count,
     )
-
-    tasks = [
-        asyncio.create_task(
-            _fetch_worker(
-                provider,
-                spec,
-                ordered_ids,
-                row_queue,
-                stop_sentinel,
-                error_box,
-            )
-        ),
-        asyncio.create_task(
-            _decode_worker(
-                provider,
-                spec,
-                row_queue,
-                decoded_queue,
-                stop_sentinel,
-                artwork_worker_count,
-                error_box,
-            )
-        ),
-    ]
-    for _ in range(artwork_worker_count):
-        tasks.append(
-            asyncio.create_task(
-                _artwork_worker(
-                    provider,
-                    spec,
-                    decoded_queue,
-                    output_queue,
-                    stop_sentinel,
-                    error_box,
-                )
-            )
-        )
-    try:
-        completed_workers = 0
-        while True:
-            item = await output_queue.get()
-            if item is stop_sentinel:
-                completed_workers += 1
-                if completed_workers >= artwork_worker_count:
-                    break
-                continue
-            if error_box:
-                raise error_box[0]
-            yield cast("Artist | Album | Track", item)
-
-        if error_box:
-            raise error_box[0]
-    finally:
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+    library = _build_library_client(provider)
+    async for entity in library.iter_decoded_entities(
+        _to_py_entity_spec(spec),
+        ordered_ids,
+        lambda row: _decode_entity(provider, spec, row),
+        worker_count=artwork_worker_count,
+    ):
+        yield entity
 
 
 async def _decode_entity(
@@ -633,10 +500,18 @@ async def _iter_entity_rows(
     item_ids: list[str],
 ) -> AsyncGenerator[Mapping[str, str]]:
     """Yield normalized LMS rows in request order via pylyrion lookup."""
-    ordered_ids = _normalize_lookup_ids(provider, spec, item_ids)
+    ordered_ids = normalize_lookup_ids(item_ids)
     total_items = len(ordered_ids)
     if total_items == 0:
         return
+
+    if len(ordered_ids) != len(item_ids):
+        provider.logger.debug(
+            "Lyrion %s lookup deduplicated ids from %s to %s",
+            spec.key,
+            len(item_ids),
+            len(ordered_ids),
+        )
 
     for item_index, item_id in enumerate(ordered_ids, start=1):
         _log_lookup_request(
@@ -752,20 +627,3 @@ def _format_lookup_progress(item_index: int, total_items: int) -> str:
         return "single-item lookup"
     progress_pct = (item_index / total_items) * 100
     return f"item {item_index}/{total_items}, progress: {progress_pct:.1f}%"
-
-
-def _normalize_lookup_ids(
-    provider: LyrionMusicProvider,
-    spec: LmsEntitySpec,
-    item_ids: list[str],
-) -> list[str]:
-    """Deduplicate ids while preserving order."""
-    ordered_ids = list(dict.fromkeys(item_ids))
-    if len(ordered_ids) != len(item_ids):
-        provider.logger.debug(
-            "Lyrion %s lookup deduplicated ids from %s to %s",
-            spec.key,
-            len(item_ids),
-            len(ordered_ids),
-        )
-    return ordered_ids

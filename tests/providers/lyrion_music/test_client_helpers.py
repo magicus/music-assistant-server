@@ -289,20 +289,9 @@ async def test_get_album_tracks_sorting_and_playlist_tracks(
 
 def test_count_and_lookup_helpers() -> None:
     """Small helper functions should cover edge branches."""
-    assert client._extract_browse_total_count({"count": None}) is None
-    assert client._extract_browse_total_count({"count": "0"}) is None
-    assert client._extract_browse_total_count({"count": "2"}) == 2
-
     assert client._format_lookup_progress(1, 0) == "progress: unknown"
     assert client._format_lookup_progress(1, 1) == "single-item lookup"
     assert "item 2/4" in client._format_lookup_progress(2, 4)
-
-
-def test_normalize_lookup_ids() -> None:
-    """Lookup ids should be deduplicated while preserving stable order."""
-    provider = _provider()
-    normalized = client._normalize_lookup_ids(provider, client.ALBUM_SPEC, ["a", "a", "b"])
-    assert normalized == ["a", "b"]
 
 
 async def test_iter_entity_rows_delegates_to_pylyrion_and_reports_progress(
@@ -342,17 +331,25 @@ async def test_get_entity_data_and_iter_entities_fast_paths(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Single-item and empty-id paths should work without pipeline workers."""
-    library = Mock()
-    library.get_entity_row = AsyncMock(return_value={"id": "42"})
 
-    async def _raw(_provider: Any, _spec: Any, _ids: list[str]):
-        yield {"id": "42"}
+    async def _iter_decoded(
+        _spec: Any,
+        ids: list[str],
+        decode_row: Any,
+        worker_count: int = 1,
+    ):
+        del worker_count
+        for item_id in ids:
+            yield await decode_row({"id": item_id})
 
     async def _decode(_provider: Any, _spec: Any, _raw_item: dict[str, Any]):
         return "decoded"
 
+    library = SimpleNamespace(
+        get_entity_row=AsyncMock(return_value={"id": "42"}),
+        iter_decoded_entities=_iter_decoded,
+    )
     monkeypatch.setattr(client, "_build_library_client", lambda _provider: library)
-    monkeypatch.setattr(client, "_iter_entity_rows", _raw)
     monkeypatch.setattr(client, "_decode_entity", _decode)
 
     provider = _provider()
