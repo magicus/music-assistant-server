@@ -374,7 +374,10 @@ def _build_library_client(provider: LyrionMusicProvider) -> LyrionLibraryClient:
 async def search_artists(provider: LyrionMusicProvider, query: str, limit: int) -> list[Artist]:
     """Search artists in LMS."""
     library = _build_library_client(provider)
-    result = await library.search_entities(PY_ARTIST_SPEC, query, limit)
+    try:
+        result = await library.search_entities(PY_ARTIST_SPEC, query, limit)
+    except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
+        raise ProviderUnavailableError(str(err)) from err
     artists: list[Artist] = []
     for artist_row in result:
         if parsers.extract_item_id(artist_row) is None:
@@ -386,7 +389,10 @@ async def search_artists(provider: LyrionMusicProvider, query: str, limit: int) 
 async def search_albums(provider: LyrionMusicProvider, query: str, limit: int) -> list[Album]:
     """Search albums in LMS."""
     library = _build_library_client(provider)
-    result = await library.search_entities(PY_ALBUM_SPEC, query, limit)
+    try:
+        result = await library.search_entities(PY_ALBUM_SPEC, query, limit)
+    except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
+        raise ProviderUnavailableError(str(err)) from err
     albums: list[Album] = []
     for album_row in result:
         if parsers.extract_item_id(album_row) is None:
@@ -398,7 +404,10 @@ async def search_albums(provider: LyrionMusicProvider, query: str, limit: int) -
 async def search_tracks(provider: LyrionMusicProvider, query: str, limit: int) -> list[Track]:
     """Search tracks in LMS."""
     library = _build_library_client(provider)
-    result = await library.search_entities(PY_TRACK_SPEC, query, limit)
+    try:
+        result = await library.search_entities(PY_TRACK_SPEC, query, limit)
+    except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
+        raise ProviderUnavailableError(str(err)) from err
     tracks: list[Track] = []
     for track_row in result:
         if parsers.extract_item_id(track_row) is None:
