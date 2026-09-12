@@ -32,63 +32,41 @@ class LyrionPlayerControl:
         """Return the current status payload for this player."""
         return await self._server_control.get_player_status(self.player_id)
 
-    def get_last_status_seen_at(self) -> float | None:
-        """Return the last status timestamp for this player."""
-        return self._server_control._get_last_status_seen_at(self.player_id)
-
-    def get_cached_status(self) -> dict[str, Any] | None:
-        """Return the cached status snapshot for this player."""
-        return self._server_control._get_cached_status(self.player_id)
-
-    async def verify_status_expectation(
-        self,
-        baseline: float | None,
-        expectation: Callable[[dict[str, Any]], bool] | None = None,
-        expected_state: str = "status update",
-    ) -> bool:
-        """Verify expected status for this player via the status stream."""
-        return await self._server_control._verify_status_expectation(
-            self.player_id,
-            baseline,
-            expectation,
-            expected_state,
-        )
-
-    async def play(self) -> dict[str, Any]:
+    async def play(self) -> None:
         """Resume playback for this player."""
-        return await self._server_control.play_player(self.player_id)
+        await self._server_control.play_player_with_verify(self.player_id)
 
-    async def pause(self) -> dict[str, Any]:
+    async def pause(self) -> None:
         """Pause playback for this player."""
-        return await self._server_control.pause_player(self.player_id)
+        await self._server_control.pause_player_with_verify(self.player_id)
 
-    async def stop(self) -> dict[str, Any]:
+    async def stop(self) -> None:
         """Stop playback for this player."""
-        return await self._server_control.stop_player(self.player_id)
+        await self._server_control.stop_player_with_verify(self.player_id)
 
     async def set_power(self, powered: bool) -> None:
         """Set power state for this player."""
-        await self._server_control.player_set_power(self.player_id, powered)
+        await self._server_control.set_player_power_with_verify(self.player_id, powered)
 
-    async def set_volume(self, volume_level: int) -> dict[str, Any]:
+    async def set_volume(self, volume_level: int) -> None:
         """Set volume for this player."""
-        return await self._server_control.set_player_volume(self.player_id, volume_level)
+        await self._server_control.set_player_volume_with_verify(self.player_id, volume_level)
 
-    async def set_muted(self, muted: bool) -> dict[str, Any]:
+    async def set_muted(self, muted: bool) -> None:
         """Set mute state for this player."""
-        return await self._server_control.set_player_muted(self.player_id, muted)
+        await self._server_control.set_player_muted_with_verify(self.player_id, muted)
 
-    async def next_track(self) -> dict[str, Any]:
+    async def next_track(self) -> None:
         """Skip to the next queue entry."""
-        return await self._server_control.next_player_track(self.player_id)
+        await self._server_control.next_player_track_with_verify(self.player_id)
 
-    async def previous_track(self) -> dict[str, Any]:
+    async def previous_track(self) -> None:
         """Skip to the previous queue entry."""
-        return await self._server_control.previous_player_track(self.player_id)
+        await self._server_control.previous_player_track_with_verify(self.player_id)
 
-    async def seek(self, position: int) -> dict[str, Any]:
+    async def seek(self, position: int) -> None:
         """Seek this player to the target playback position."""
-        return await self._server_control.seek_player(self.player_id, position)
+        await self._server_control.seek_player_with_verify(self.player_id, position)
 
     async def sync_to(self, leader_player_id: str) -> dict[str, Any]:
         """Sync this player to a leader player."""

@@ -10,7 +10,6 @@ Queue sync must therefore handle mixed queues explicitly in both directions.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, cast
 
 from music_assistant_models.enums import EventType, IdentifierType, PlaybackState
@@ -115,7 +114,6 @@ class LyrionPlayer(Player):
 
         :param media: The media item to play.
         """
-        baseline = self.player_control.get_last_status_seen_at()
         try:
             await self._play_or_enqueue_media(media, command="load")
         except ProviderUnavailableError as err:
@@ -124,11 +122,6 @@ class LyrionPlayer(Player):
         self._attr_current_media = media
         self._attr_playback_state = PlaybackState.PLAYING
         self.update_state()
-        await self._verify_status_update(
-            baseline,
-            expectation=lambda status: _get_status_str(status, "mode") == "play",
-            expected_state="mode=play",
-        )
 
     async def enqueue_next_media(self, media: PlayerMedia) -> None:
         """
@@ -136,12 +129,10 @@ class LyrionPlayer(Player):
 
         :param media: The media item to enqueue.
         """
-        baseline = self.player_control.get_last_status_seen_at()
         try:
             await self._play_or_enqueue_media(media, command="add")
         except ProviderUnavailableError as err:
             raise PlayerCommandFailed(f"enqueue_next_media failed: {err}") from err
-        await self._verify_status_update(baseline)
 
     async def play(self) -> None:
         """Resume playback."""
@@ -239,7 +230,6 @@ class LyrionPlayer(Player):
         player_ids_to_remove: list[str] | None = None,
     ) -> None:
         """Apply member changes through LMS native sync commands."""
-        baseline = self.player_control.get_last_status_seen_at()
         if self.synced_to:
             raise InvalidCommand("Player is synced, cannot set members")
         if not player_ids_to_add and not player_ids_to_remove:
@@ -275,12 +265,6 @@ class LyrionPlayer(Player):
             if member := self.mass.players.get_player(member_id):
                 member.update_state()
 
-        await self._verify_status_update(
-            baseline,
-            expectation=lambda status: _group_members_match_leader(status, self.player_id),
-            expected_state="group topology updated",
-        )
-
     async def sync_queue_from_lms(self) -> None:
         """Refresh MA queue mirror from LMS queue state via JSON-RPC."""
         await self._queue_sync.sync_lms_queue_to_ma()
@@ -293,20 +277,6 @@ class LyrionPlayer(Player):
         """
         self._apply_player_metadata(player_data)
         self.update_state()
-
-    async def _verify_status_update(
-        self,
-        baseline: float | None,
-        expectation: Callable[[dict[str, Any]], bool] | None = None,
-        expected_state: str = "status update",
-    ) -> None:
-        """Wait for expected status and poll LMS retries if stream events stay silent."""
-        await self.lyrion_server._verify_status_expectation(
-            self.player_id,
-            baseline,
-            expectation=expectation,
-            expected_state=expected_state,
-        )
 
     async def _play_or_enqueue_media(
         self,

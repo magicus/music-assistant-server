@@ -276,31 +276,21 @@ async def test_get_config_entries_and_handle_async_init() -> None:
 
 
 @pytest.mark.asyncio
-async def test_provider_status_wrapper_methods_delegate_to_stream() -> None:
-    """Provider convenience methods should delegate to status stream internals."""
-    provider = _build_provider_stub()
+async def test_player_control_uses_pylyrion_verified_flow() -> None:
+    """Player facade should route commands through pylyrion's verified command flow."""
+    server = MagicMock()
+    server.play_player_with_verify = AsyncMock()
+    server.pause_player_with_verify = AsyncMock()
 
-    assert provider.get_last_status_seen_at("p1") == 1.0
-    assert provider.get_cached_status("p1") == {"mode": "play"}
+    from pylyrion.helpers import LyrionPlayerControl
 
-    assert await provider.wait_for_status_update("p1", since=0.5, timeout=2)
-    provider._status_stream.wait_for_player_status_update.assert_awaited_once_with("p1", 0.5, 2)
+    control = LyrionPlayerControl(server, "p1")
 
-    def expectation(status: dict[str, object]) -> bool:
-        return status.get("mode") == "play"
+    await control.play()
+    await control.pause()
 
-    assert await provider.verify_status_expectation(
-        "p1",
-        baseline=1.0,
-        expectation=expectation,
-        expected_state="play",
-    )
-    provider._status_stream.verify_player_status_expectation.assert_awaited_once_with(
-        "p1",
-        1.0,
-        expectation,
-        "play",
-    )
+    server.play_player_with_verify.assert_awaited_once_with("p1")
+    server.pause_player_with_verify.assert_awaited_once_with("p1")
 
 
 @pytest.mark.asyncio
