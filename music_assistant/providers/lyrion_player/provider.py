@@ -24,8 +24,8 @@ from pylyrion.client import LyrionClient
 from pylyrion.cometd.constants import COMETD_COMMAND_STATUS_VERIFY_TIMEOUT
 from pylyrion.cometd.player_status_events import NormalizedPlayerStatusEvent
 from pylyrion.cometd.transport import build_cometd_post_messages_callback
-from pylyrion.cometd_event_adapter import LyrionCometDEventAdapter
 from pylyrion.errors import LyrionRequestError
+from pylyrion.lyrion_events import LyrionEvents
 from pylyrion.models import LyrionEndpoint
 from pylyrion.player import LyrionPlayerClient
 from pylyrion.server_control import LyrionServerControl
@@ -66,7 +66,7 @@ class LyrionPlayerProvider(PlayerProvider):
         self._discover_players_task: asyncio.Task[None] | None = None
         self._discover_players_again = False
         self._runtime_players: dict[str, _ProviderRuntimePlayer] = {}
-        self._event_adapter = LyrionCometDEventAdapter(
+        self._event_adapter = LyrionEvents(
             mode_map=MODE_MAP,
             idle_state=PlaybackState.IDLE,
             is_supported_player=lambda _player: True,
