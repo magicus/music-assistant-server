@@ -31,6 +31,34 @@ from tests.common import (
 NUMBA_CACHE_DIR = pytest.StashKey[tempfile.TemporaryDirectory[str]]()
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    """Register project-specific test CLI options."""
+    parser.addoption(
+        "--live-lyrion-docker",
+        action="store_true",
+        default=False,
+        help="Run on-demand Lyrion live integration tests against Docker LMS.",
+    )
+    parser.addoption(
+        "--live-lyrion-verbose",
+        action="store_true",
+        default=False,
+        help=("Show detailed step-by-step output for live Lyrion Docker harness."),
+    )
+    parser.addoption(
+        "--live-lyrion-keep-running",
+        action="store_true",
+        default=False,
+        help=("Keep the Docker LMS container running after tests for manual inspection."),
+    )
+    parser.addoption(
+        "--live-lyrion-auth",
+        action="store_true",
+        default=False,
+        help=("Enable HTTP Basic Auth for the live Lyrion Docker LMS test server."),
+    )
+
+
 def pytest_configure(config: pytest.Config) -> None:
     """
     Give this test process its own numba kernel cache.
@@ -43,8 +71,33 @@ def pytest_configure(config: pytest.Config) -> None:
     """
     cache_dir = tempfile.TemporaryDirectory(prefix="ma-numba-cache-")
     config.stash[NUMBA_CACHE_DIR] = cache_dir
+    config.addinivalue_line(
+        "markers",
+        "live_lyrion_docker: on-demand tests requiring Docker LMS",
+    )
     # numba reads this once, when it is imported; nothing here imports it that early.
     os.environ["NUMBA_CACHE_DIR"] = cache_dir.name
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config,
+    items: list[pytest.Item],
+) -> None:
+    """Prioritize selected tests and tune live Docker test collection."""
+    auth_file = "tests/providers/lyrion_music/test_live_docker_auth.py"
+    items.sort(
+        key=lambda item: 0 if str(item.path).endswith(auth_file) else 1,
+    )
+
+    if not config.getoption("--live-lyrion-docker"):
+        return
+
+    for item in items:
+        if "live_lyrion_docker" not in item.keywords:
+            continue
+        has_timeout = any(item.iter_markers(name="timeout"))
+        if not has_timeout:
+            item.add_marker(pytest.mark.timeout(900))
 
 
 def pytest_unconfigure(config: pytest.Config) -> None:

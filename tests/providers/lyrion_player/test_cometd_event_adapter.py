@@ -1,0 +1,215 @@
+"""Unit tests for LMS sync-topology mapping in the CometD event adapter."""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, MagicMock
+
+from music_assistant_models.enums import PlaybackState
+
+from music_assistant.providers.lyrion_player.cometd_event_adapter import (
+    LyrionCometDEventAdapter,
+    _extract_group_members,
+    _extract_sync_master,
+    _extract_sync_slaves,
+)
+from music_assistant.providers.lyrion_player.cometd_events import (
+    LmsPlayerPlaylistChangedEvent,
+    LmsPlayerRepeatChangedEvent,
+    LmsPlayerShuffleChangedEvent,
+    LmsPlayerStatusUpdatedEvent,
+)
+from music_assistant.providers.lyrion_player.player import LyrionPlayer
+
+
+def _build_provider_and_players() -> tuple[MagicMock, LyrionPlayer, LyrionPlayer]:
+    """Create two linked Lyrion players with a shared mocked provider."""
+    provider = MagicMock()
+    provider.instance_id = "lyrion_player"
+    provider.logger = MagicMock()
+    provider.mass = MagicMock()
+    provider.mass.subscribe = MagicMock(return_value=lambda: None)
+    provider.mass.config = MagicMock()
+    provider.mass.config.create_default_player_config = MagicMock()
+    provider.mass.config.get_base_player_config = MagicMock(return_value=MagicMock())
+
+    player_by_id: dict[str, LyrionPlayer] = {}
+
+    def _get_player(player_id: str) -> LyrionPlayer | None:
+        return player_by_id.get(player_id)
+
+    provider.mass.players.get_player = MagicMock(side_effect=_get_player)
+    provider.mass.players.iter_players = MagicMock(
+        side_effect=lambda **_kwargs: list(player_by_id.values())
+    )
+
+    leader = LyrionPlayer(provider, "leader", {})
+    child = LyrionPlayer(provider, "child", {})
+    player_by_id[leader.player_id] = leader
+    player_by_id[child.player_id] = child
+    provider.players = [leader, child]
+
+    return provider, leader, child
+
+
+def test_apply_status_maps_sync_slaves_to_group_members() -> None:
+    """Leader status with sync_slaves should surface as MA group_members."""
+    provider, leader, _child = _build_provider_and_players()
+    adapter = LyrionCometDEventAdapter(provider)
+
+    adapter.apply_status(
+        leader,
+        {
+            "mode": "play",
+            "sync_slaves": "child",
+        },
+    )
+
+    assert leader.group_members == ["leader", "child"]
+
+
+def test_apply_status_refreshes_related_players_on_topology_change() -> None:
+    """Topology changes should trigger related-player state refresh."""
+    provider, leader, child = _build_provider_and_players()
+    adapter = LyrionCometDEventAdapter(provider)
+
+    original_child_update_state = child.update_state
+    child.update_state = MagicMock(side_effect=original_child_update_state)
+
+    adapter.apply_status(
+        leader,
+        {
+            "mode": "play",
+            "sync_slaves": [{"playerid": "child"}],
+        },
+    )
+
+    adapter.apply_status(
+        leader,
+        {
+            "mode": "stop",
+        },
+    )
+
+    assert leader.group_members == []
+    assert child.update_state.call_count >= 1
+
+
+def test_apply_status_invalid_player_marks_unavailable() -> None:
+    """Invalid-player payload should mark player unavailable and return early."""
+    provider, leader, _child = _build_provider_and_players()
+    adapter = LyrionCometDEventAdapter(provider)
+
+    leader._attr_available = True
+    adapter.apply_status(leader, {"error": "invalid player"})
+
+    assert leader.available is False
+
+
+def test_apply_status_maps_runtime_fields_and_clamps_volume() -> None:
+    """Normal status payload should map playback, power, volume and elapsed time."""
+    provider, leader, _child = _build_provider_and_players()
+    adapter = LyrionCometDEventAdapter(provider)
+
+    adapter.apply_status(
+        leader,
+        {
+            "mode": "play",
+            "player_connected": 1,
+            "power": "1",
+            "mixer volume": "150",
+            "time": "8.5",
+        },
+    )
+
+    assert leader._attr_available is True
+    assert leader._attr_playback_state == PlaybackState.PLAYING
+    assert leader._attr_powered is True
+    assert leader._attr_volume_level == 100
+    assert leader._attr_elapsed_time == 8.5
+
+
+def test_extract_sync_helpers_cover_dict_str_and_empty_cases() -> None:
+    """Sync parsing helpers should support dict/list/string forms and ignore empties."""
+    assert _extract_sync_master({"sync_master": {"playerid": "leader"}}) == "leader"
+    assert _extract_sync_master({"sync_master_id": "leader"}) == "leader"
+    assert _extract_sync_master({"sync_master": "-"}) is None
+
+    assert _extract_sync_slaves({"sync_slaves": "a,b, a"}) == ["a", "b"]
+    assert _extract_sync_slaves({"sync_slaves_loop": [{"playerid": "x"}, "y", "x"]}) == [
+        "x",
+        "y",
+    ]
+    assert _extract_sync_slaves({"sync_slaves": ""}) == []
+
+
+def test_extract_group_members_for_slave_and_leader_cases() -> None:
+    """Group member extraction should expose leader+children for sync leaders only."""
+    assert _extract_group_members("leader", {"sync_slaves": "child"}) == [
+        "leader",
+        "child",
+    ]
+    assert _extract_group_members("child", {"sync_master": "leader"}) == []
+    assert _extract_group_members("solo", {"mode": "stop"}) == []
+
+
+def test_apply_status_unknown_mode_defaults_to_idle() -> None:
+    """Unknown LMS modes should map to idle playback state."""
+    provider, leader, _child = _build_provider_and_players()
+    adapter = LyrionCometDEventAdapter(provider)
+    adapter.apply_status(leader, {"mode": "something-odd"})
+    assert leader._attr_playback_state == PlaybackState.IDLE
+
+
+async def test_handle_event_sync_triggers_for_status_playlist_repeat_shuffle() -> None:
+    """Adapter should sync queue for initial status, playlist, repeat and shuffle events."""
+    provider, leader, _child = _build_provider_and_players()
+    adapter = LyrionCometDEventAdapter(provider)
+    leader.sync_queue_from_lms = AsyncMock(return_value=None)
+
+    await adapter.handle_event(
+        LmsPlayerStatusUpdatedEvent(
+            player_id="leader",
+            status={"mode": "play"},
+            is_initial=True,
+        )
+    )
+    await adapter.handle_event(
+        LmsPlayerPlaylistChangedEvent(
+            player_id="leader",
+            old_playlist_timestamp=1.0,
+            new_playlist_timestamp=2.0,
+            old_playlist_tracks=1,
+            new_playlist_tracks=2,
+        )
+    )
+    await adapter.handle_event(
+        LmsPlayerRepeatChangedEvent(
+            player_id="leader",
+            old_repeat=0,
+            new_repeat=1,
+        )
+    )
+    await adapter.handle_event(
+        LmsPlayerShuffleChangedEvent(
+            player_id="leader",
+            old_shuffle=0,
+            new_shuffle=1,
+        )
+    )
+
+    assert leader.sync_queue_from_lms.call_count == 4
+
+
+async def test_handle_event_ignores_non_lyrion_player() -> None:
+    """Adapter should ignore events when target player is absent or wrong type."""
+    provider, _leader, _child = _build_provider_and_players()
+    adapter = LyrionCometDEventAdapter(provider)
+    provider.mass.players.get_player = MagicMock(return_value=object())
+
+    await adapter.handle_event(
+        LmsPlayerStatusUpdatedEvent(
+            player_id="ghost",
+            status={"mode": "play"},
+            is_initial=True,
+        )
+    )

@@ -1,0 +1,11 @@
+{
+  "type": "player",
+  "domain": "lyrion_player",
+  "name": "Lyrion Players",
+  "stage": "stable",
+  "description": "Control and play music on Lyrion Media Server (LMS) players",
+  "codeowners": ["@magicus"],
+  "requirements": [],
+  "documentation": "",
+  "multi_instance": true
+}
