@@ -2,17 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
 from typing import Any, Protocol, cast
 
-from music_assistant_models.errors import ProviderUnavailableError
-
 from music_assistant.constants import CONF_PORT
-from music_assistant.helpers.throttle_retry import ThrottlerManager
-from pylyrion.cometd.constants import RPC_TIMEOUT
-from pylyrion.errors import LyrionProtocolError, LyrionRequestError, LyrionTimeoutError
-from pylyrion.models import LyrionEndpoint
-from pylyrion.session import LyrionSession
 from pylyrion.session import build_lms_url as _build_lms_url
 from pylyrion.session import normalize_lms_text_value as _normalize_lms_text_value
 
@@ -22,8 +14,6 @@ normalize_lms_text_value = _normalize_lms_text_value
 CONF_LMS_HOST = "lms_host"
 CONF_LMS_PORT = CONF_PORT
 DEFAULT_LMS_PORT = 9000
-
-_RPC_THROTTLER = ThrottlerManager(rate_limit=1, period=1)
 
 
 class _ConfigProvider(Protocol):
@@ -55,32 +45,3 @@ def get_configured_port(
         return int(cast("int | str", raw_port))
     except TypeError, ValueError:
         return default
-
-
-async def rpc_request(
-    provider: _ConfigProvider,
-    player_id: str,
-    command: Sequence[Any],
-    *,
-    timeout: int = RPC_TIMEOUT,
-) -> Mapping[str, object]:
-    """Execute one LMS JSON-RPC request using the shared Lyrion transport."""
-    host = get_configured_host(provider)
-    if not host:
-        raise ProviderUnavailableError("Lyrion host is not configured")
-
-    port = get_configured_port(provider)
-    session = LyrionSession(
-        http_session=provider.mass.http_session,
-        endpoint=LyrionEndpoint(host=host, port=port),
-        timeout=timeout,
-        request_guard=_RPC_THROTTLER.acquire,
-    )
-    try:
-        return await session.request(player_id, command)
-    except (
-        LyrionProtocolError,
-        LyrionRequestError,
-        LyrionTimeoutError,
-    ) as err:
-        raise ProviderUnavailableError(str(err)) from err
