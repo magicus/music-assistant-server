@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from music_assistant.providers.lyrion.bayeux_client import BayeuxClient
+from pylyrion.cometd.bayeux_client import BayeuxClient
 from pylyrion.errors import LyrionRequestError
 
 

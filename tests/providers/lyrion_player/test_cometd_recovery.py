@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import aiohttp
 import pytest
 
-from music_assistant.providers.lyrion.cometd.stream import LyrionCometDEventStream
+from music_assistant.providers.lyrion.cometd.stream_adapter import LyrionCometDEventStream
 from tests.providers.lyrion.scriptable_slimproto_player import ScriptableSlimProtoPlayer
 from tests.providers.lyrion_player.harness_test_support import (
     EndpointRpcClient,
@@ -63,7 +63,7 @@ class _HttpStatusProvider:
 
         result = data.get("result")
         if not isinstance(result, dict):
-            raise RuntimeError(f"Missing status result payload: {data}")
+            raise TypeError(f"Missing status result payload: {data}")
 
         if self.polls == 1:
             self.first_poll_seen.set()

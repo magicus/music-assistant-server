@@ -11,9 +11,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from music_assistant_models.errors import MusicAssistantError, ProviderUnavailableError
 
-from music_assistant.providers.lyrion.cometd.helpers import _TrackEndExpectation
-from music_assistant.providers.lyrion.cometd.stream import LyrionCometDEventStream
+from music_assistant.providers.lyrion.cometd.stream_adapter import LyrionCometDEventStream
 from music_assistant.providers.lyrion_player.provider import LyrionPlayerProvider
+from pylyrion.cometd.helpers import _TrackEndExpectation
 from pylyrion.cometd.player_status_events import (
     PlayerPlaybackChanged,
     PlayerPlaylistChanged,
@@ -509,7 +509,8 @@ async def test_start_reuses_running_listener_and_restarts_side_tasks() -> None:
 
     stream.start()
 
-    assert stream._task is not None and not stream._task.done()
+    assert stream._task is not None
+    assert not stream._task.done()
     assert stream._watchdog_task is not None
     assert stream._expectation_task is not None
     stream._task.cancel()

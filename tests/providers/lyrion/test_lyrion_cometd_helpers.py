@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, Self, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from aiohttp import ClientError
 from music_assistant_models.errors import ProviderUnavailableError
 
-from music_assistant.providers.lyrion.cometd.helpers import (
+from music_assistant.providers.lyrion.cometd.stream_adapter import LyrionCometDEventStream
+from pylyrion.cometd.helpers import (
     _extract_current_track_id,
     _extract_server_player_ids,
     _get_float,
@@ -20,7 +21,6 @@ from music_assistant.providers.lyrion.cometd.helpers import (
     _is_invalid_player_payload,
     _same_active_track,
 )
-from music_assistant.providers.lyrion.cometd.stream import LyrionCometDEventStream
 
 
 async def _noop_event_callback(_event: object) -> None:
@@ -34,7 +34,7 @@ class _FakeResponse:
         self._payload = payload
         self._raise_error = raise_error
 
-    async def __aenter__(self) -> _FakeResponse:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(
