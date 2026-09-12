@@ -67,7 +67,6 @@ TRACK_SPEC = LyrionEntitySpec(
 
 DEFAULT_BROWSE_PAGE_SIZE = 250
 BATCH_LOOKUP_SIZE = 25
-ARTWORK_WORKER_COUNT = 6
 
 
 def normalize_row(raw_item: Mapping[str, object]) -> dict[str, str]:
@@ -668,7 +667,6 @@ class LyrionLibraryClient:
 __all__ = [
     "ALBUM_SPEC",
     "ARTIST_SPEC",
-    "ARTWORK_WORKER_COUNT",
     "BATCH_LOOKUP_SIZE",
     "DEFAULT_BROWSE_PAGE_SIZE",
     "TRACK_SPEC",

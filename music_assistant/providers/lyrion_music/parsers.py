@@ -24,7 +24,6 @@ from pylyrion import media_parsers as pylyrion_parsers
 from pylyrion.media_items import LyrionAlbum, LyrionArtist, LyrionTrack
 
 from . import artwork
-from .constants import STREAM_PATH_TEMPLATE
 
 if TYPE_CHECKING:
     from music_assistant.providers.lyrion_music.provider import LyrionMusicProvider
@@ -250,7 +249,6 @@ def to_lms_stream_url(provider: LyrionMusicProvider, track_id: str, raw_url: str
         track_id=track_id,
         host=host,
         port=port,
-        stream_path_template=STREAM_PATH_TEMPLATE,
         raw_url=raw_url,
     )
 

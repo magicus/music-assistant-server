@@ -22,7 +22,7 @@ from pylyrion.models import LyrionEndpoint
 from pylyrion.session import LyrionSession
 
 from . import parsers
-from .constants import ALBUM_TAGS, ARTIST_TAGS, ARTWORK_WORKER_COUNT, BROWSE_PAGE_SIZE, TRACK_TAGS
+from .constants import ARTWORK_WORKER_COUNT, BROWSE_PAGE_SIZE
 
 if TYPE_CHECKING:
     from music_assistant_models.media_items import Album, Artist, Track
@@ -42,7 +42,6 @@ class LmsEntitySpec:
     loop_key: str
     id_filter_key: str
     id_keys: tuple[str, ...]
-    tags: str
     supports_batch_lookup: bool = False
 
 
@@ -52,7 +51,6 @@ ARTIST_SPEC = LmsEntitySpec(
     loop_key="artists_loop",
     id_filter_key="artist_id",
     id_keys=("id", "artist_id", "contributor_id"),
-    tags=ARTIST_TAGS,
     supports_batch_lookup=False,
 )
 
@@ -62,7 +60,6 @@ ALBUM_SPEC = LmsEntitySpec(
     loop_key="albums_loop",
     id_filter_key="album_id",
     id_keys=("id", "album_id"),
-    tags=ALBUM_TAGS,
     supports_batch_lookup=True,
 )
 
@@ -72,7 +69,6 @@ TRACK_SPEC = LmsEntitySpec(
     loop_key="titles_loop",
     id_filter_key="track_id",
     id_keys=("id", "track_id"),
-    tags=TRACK_TAGS,
     supports_batch_lookup=True,
 )
 

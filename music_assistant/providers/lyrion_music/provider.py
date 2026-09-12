@@ -38,15 +38,10 @@ from music_assistant.providers.lyrion.client import (
     get_configured_port as get_shared_configured_port,
 )
 from music_assistant.providers.lyrion.setup_flow import validate_lms_endpoint
+from pylyrion.lyrion_constants import CONF_ARTWORK_CACHE_BUSTER, ITEM_CACHE_TTL, SEARCH_CACHE_TTL
 
 from . import artwork, browse, client, parsers, sync
-from .constants import (
-    ACTION_RESCAN_ARTWORK,
-    BROWSE_PAGE_SIZE,
-    CONF_ARTWORK_CACHE_BUSTER,
-    ITEM_CACHE_TTL,
-    SEARCH_CACHE_TTL,
-)
+from .constants import ACTION_RESCAN_ARTWORK, BROWSE_PAGE_SIZE
 
 
 class LyrionMusicProvider(MusicProvider):

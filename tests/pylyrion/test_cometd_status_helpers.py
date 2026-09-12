@@ -100,9 +100,7 @@ def test_extract_current_track_id_and_track_comparison() -> None:
         "playlist_loop": [{"id": "a"}, {"track_id": "b"}],
     }
     assert _extract_current_track_id(status) == "b"
-    assert _extract_current_track_id(
-        {"playlist_cur_index": 10, "playlist_loop": []}
-    ) is None
+    assert _extract_current_track_id({"playlist_cur_index": 10, "playlist_loop": []}) is None
 
     old_status = {
         "playlist_cur_index": 0,
@@ -156,9 +154,7 @@ async def test_post_rejects_missing_endpoint_configuration() -> None:
 async def test_post_normalizes_dict_and_list_payloads() -> None:
     """CometD POST should normalize payloads and filter dict entries."""
     provider = _build_provider()
-    provider.mass.http_session.post.return_value = _FakeResponse(
-        {"channel": "/ok"}
-    )
+    provider.mass.http_session.post.return_value = _FakeResponse({"channel": "/ok"})
     stream = LyrionCometDEventStream(
         cast("Any", provider),
         _noop_event_callback,
@@ -167,9 +163,7 @@ async def test_post_normalizes_dict_and_list_payloads() -> None:
     result = await stream._post([{"id": "1"}], timeout=1)
     assert result == [{"channel": "/ok"}]
 
-    provider.mass.http_session.post.return_value = _FakeResponse(
-        [{"a": 1}, "skip", {"b": 2}]
-    )
+    provider.mass.http_session.post.return_value = _FakeResponse([{"a": 1}, "skip", {"b": 2}])
     result = await stream._post([{"id": "2"}], timeout=1)
     assert result == [{"a": 1}, {"b": 2}]
 

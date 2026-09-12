@@ -2,10 +2,102 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
+from typing import Any, TypeVar
 from urllib.parse import quote
 
+from aiohttp import ClientError, ClientTimeout
+
+from pylyrion.cometd.constants import RPC_TIMEOUT
+from pylyrion.lyrion_constants import ARTWORK_VALIDATION_CACHE_TTL, ARTWORK_VALIDATION_TIMEOUT
 from pylyrion.session import build_lms_url
+
+ArtworkItem = TypeVar("ArtworkItem")
+
+
+async def ensure_preferred_artwork_size(
+    item: ArtworkItem,
+    probe_image: Callable[[str], Awaitable[bool]],
+    get_thumb_path: Callable[[ArtworkItem], str | None],
+    set_thumb_path: Callable[[ArtworkItem, str | None], None],
+) -> tuple[str, ...]:
+    """Keep 600px artwork when available, otherwise fall back to 300px."""
+    thumb_path = get_thumb_path(item)
+    if thumb_path is None:
+        return ()
+
+    attempted_urls = [thumb_path]
+    if await probe_image(thumb_path):
+        return tuple(attempted_urls)
+
+    fallback_url = thumb_path.replace("600x600", "300x300")
+    if fallback_url != thumb_path:
+        attempted_urls.append(fallback_url)
+    if fallback_url != thumb_path and await probe_image(fallback_url):
+        set_thumb_path(item, fallback_url)
+        return tuple(attempted_urls)
+
+    set_thumb_path(item, None)
+    return tuple(attempted_urls)
+
+
+async def fetch_remote_image_if_ok(session: Any, url: str) -> bytes | None:
+    """Fetch image bytes and return None for invalid LMS image responses."""
+    try:
+        async with session.get(
+            url,
+            timeout=ClientTimeout(total=RPC_TIMEOUT),
+        ) as response:
+            if response.status != 200:
+                return None
+            content_type = response.headers.get("Content-Type", "")
+            if "image/" not in content_type.lower():
+                return None
+            data = await response.read()
+            return data or None
+    except TimeoutError, ClientError:
+        return None
+
+
+async def probe_remote_image(
+    session: Any,
+    cache: Any,
+    provider_id: str,
+    url: str,
+    cache_category: str,
+) -> bool:
+    """Check a remote image endpoint without downloading payload bytes."""
+    cache_key = f"probe::{url}"
+    if (
+        cached := await cache.get(
+            cache_key,
+            provider=provider_id,
+            category=cache_category,
+        )
+    ) is not None:
+        return bool(cached)
+
+    try:
+        async with session.get(
+            url,
+            timeout=ClientTimeout(total=ARTWORK_VALIDATION_TIMEOUT),
+        ) as response:
+            if response.status != 200:
+                result = False
+            else:
+                content_type = response.headers.get("Content-Type", "")
+                result = "image/" in content_type.lower()
+    except TimeoutError, ClientError:
+        result = False
+
+    await cache.set(
+        cache_key,
+        result,
+        provider=provider_id,
+        category=cache_category,
+        expiration=ARTWORK_VALIDATION_CACHE_TTL,
+    )
+    return result
 
 
 def append_artwork_cache_buster(url: str, token: str | None) -> str:
@@ -60,7 +152,11 @@ def extract_artwork_url(
         return None
     encoded_cover_id = quote(cover_id, safe="")
     return append_artwork_cache_buster(
-        to_lms_absolute_url(host, port, f"/music/{encoded_cover_id}/cover_600x600_f"),
+        to_lms_absolute_url(
+            host,
+            port,
+            f"/music/{encoded_cover_id}/cover_600x600_f",
+        ),
         cache_buster_token,
     )
 
@@ -78,7 +174,11 @@ def extract_artist_artwork_url(
     if portrait_id is not None:
         encoded_id = quote(portrait_id, safe="")
         return append_artwork_cache_buster(
-            to_lms_absolute_url(host, port, f"/contributor/{encoded_id}/image_600x600_f"),
+            to_lms_absolute_url(
+                host,
+                port,
+                f"/contributor/{encoded_id}/image_600x600_f",
+            ),
             cache_buster_token,
         )
 

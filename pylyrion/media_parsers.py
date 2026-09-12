@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from typing import Literal
 from urllib.parse import quote
 
+from pylyrion.lyrion_constants import STREAM_PATH_TEMPLATE
 from pylyrion.media_items import (
     LyrionAlbum,
     LyrionArtist,
@@ -265,7 +266,7 @@ def to_lms_stream_url(
     track_id: str,
     host: str,
     port: int,
-    stream_path_template: str,
+    stream_path_template: str = STREAM_PATH_TEMPLATE,
     raw_url: str | None = None,
 ) -> str:
     """Resolve a track stream URL from raw URL or LMS stream path template."""

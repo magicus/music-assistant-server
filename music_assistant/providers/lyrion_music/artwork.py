@@ -6,7 +6,6 @@ import dataclasses
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
-from aiohttp import ClientError, ClientTimeout
 from music_assistant_models.enums import ImageType
 from music_assistant_models.errors import ProviderUnavailableError
 from music_assistant_models.media_items import MediaItemImage, UniqueList
@@ -17,14 +16,9 @@ from music_assistant.providers.lyrion.client import (
     get_configured_port,
 )
 from pylyrion import artwork as pylyrion_artwork
+from pylyrion.lyrion_constants import CONF_ARTWORK_CACHE_BUSTER
 
 from . import parsers
-from .constants import (
-    ARTWORK_VALIDATION_CACHE_TTL,
-    ARTWORK_VALIDATION_TIMEOUT,
-    CONF_ARTWORK_CACHE_BUSTER,
-    RPC_TIMEOUT,
-)
 
 if TYPE_CHECKING:
     from music_assistant_models.media_items import Album, Artist
@@ -35,7 +29,10 @@ if TYPE_CHECKING:
 CACHE_CATEGORY_ARTWORK_PROBE = "lyrion_artwork_probe"
 
 
-async def resolve_image(provider: LyrionMusicProvider, path: str) -> str | bytes:
+async def resolve_image(
+    provider: LyrionMusicProvider,
+    path: str,
+) -> str | bytes:
     """Resolve artist artwork URLs with LMS size fallback when needed."""
     fallback_path = pylyrion_artwork.artwork_fallback_path(path)
     if fallback_path is None:
@@ -45,52 +42,42 @@ async def resolve_image(provider: LyrionMusicProvider, path: str) -> str | bytes
         return image_bytes
 
     if fallback_path != path and (
-        fallback_bytes := await fetch_remote_image_if_ok(provider, fallback_path)
+        fallback_bytes := await fetch_remote_image_if_ok(
+            provider,
+            fallback_path,
+        )
     ):
         return fallback_bytes
     return path
 
 
-async def build_artist(provider: LyrionMusicProvider, row: Mapping[str, str]) -> Artist:
+async def build_artist(
+    provider: LyrionMusicProvider,
+    row: Mapping[str, str],
+) -> Artist:
     """Build artist model from LMS payload and validate artwork URL."""
     return parsers.parse_artist(provider, row)
 
 
-async def build_album(provider: LyrionMusicProvider, row: Mapping[str, str]) -> Album:
+async def build_album(
+    provider: LyrionMusicProvider,
+    row: Mapping[str, str],
+) -> Album:
     """Build album model from LMS payload and validate artwork URL."""
     return parsers.parse_album(provider, row)
 
 
 async def ensure_preferred_artwork_size(
-    provider: LyrionMusicProvider, item: Artist | Album
+    provider: LyrionMusicProvider,
+    item: Artist | Album,
 ) -> tuple[str, ...]:
     """Resolve album or artist artwork by trying 600 first, then 300."""
-    attempted_urls: list[str] = []
-    if not item.metadata.images:
-        return ()
-    thumb_image = next(
-        (img for img in item.metadata.images if img.type == ImageType.THUMB),
-        None,
+    return await pylyrion_artwork.ensure_preferred_artwork_size(
+        item,
+        lambda url: probe_remote_image(provider, url),
+        get_thumb_path,
+        set_thumb_path,
     )
-    if thumb_image is None:
-        return ()
-    attempted_urls.append(thumb_image.path)
-    if await probe_remote_image(provider, thumb_image.path):
-        return tuple(attempted_urls)
-    fallback_url = thumb_image.path.replace("600x600", "300x300")
-    if fallback_url != thumb_image.path:
-        attempted_urls.append(fallback_url)
-    if fallback_url != thumb_image.path and await probe_remote_image(provider, fallback_url):
-        new_image = dataclasses.replace(thumb_image, path=fallback_url)
-        item.metadata.images = UniqueList(
-            new_image if img is thumb_image else img for img in (item.metadata.images or [])
-        )
-        return tuple(attempted_urls)
-    # Both URLs unreachable — drop the broken entry rather than storing it
-    item.metadata.images = UniqueList(
-        img for img in (item.metadata.images or []) if img is not thumb_image
-    )
-    return tuple(attempted_urls)
 
 
 def extract_artwork_url(
@@ -115,7 +102,10 @@ def extract_artwork_url(
     )
 
 
-def extract_artist_artwork_url(provider: LyrionMusicProvider, row: Mapping[str, str]) -> str | None:
+def extract_artist_artwork_url(
+    provider: LyrionMusicProvider,
+    row: Mapping[str, str],
+) -> str | None:
     """Extract artist artwork URL from known LMS artist fields."""
     host = get_configured_host(provider)
     if host is None:
@@ -153,57 +143,26 @@ def to_lms_absolute_url(provider: LyrionMusicProvider, path: str) -> str:
     return build_lms_url(host, port, path)
 
 
-async def fetch_remote_image_if_ok(provider: LyrionMusicProvider, url: str) -> bytes | None:
+async def fetch_remote_image_if_ok(
+    provider: LyrionMusicProvider,
+    url: str,
+) -> bytes | None:
     """Fetch image bytes and return None for invalid LMS image responses."""
-    try:
-        async with provider.mass.http_session.get(
-            url,
-            timeout=ClientTimeout(total=RPC_TIMEOUT),
-        ) as response:
-            if response.status != 200:
-                return None
-            content_type = response.headers.get("Content-Type", "")
-            if "image/" not in content_type.lower():
-                return None
-            data = await response.read()
-            return data or None
-    except TimeoutError, ClientError:
-        return None
+    return await pylyrion_artwork.fetch_remote_image_if_ok(
+        provider.mass.http_session,
+        url,
+    )
 
 
 async def probe_remote_image(provider: LyrionMusicProvider, url: str) -> bool:
-    """Check if a remote image endpoint is reachable without downloading payload bytes."""
-    cache_key = f"probe::{url}"
-    if (
-        cached := await provider.mass.cache.get(
-            cache_key,
-            provider=provider.instance_id,
-            category=CACHE_CATEGORY_ARTWORK_PROBE,
-        )
-    ) is not None:
-        return bool(cached)
-
-    try:
-        async with provider.mass.http_session.get(
-            url,
-            timeout=ClientTimeout(total=ARTWORK_VALIDATION_TIMEOUT),
-        ) as response:
-            if response.status != 200:
-                result = False
-            else:
-                content_type = response.headers.get("Content-Type", "")
-                result = "image/" in content_type.lower()
-    except TimeoutError, ClientError:
-        result = False
-
-    await provider.mass.cache.set(
-        cache_key,
-        result,
-        provider=provider.instance_id,
-        category=CACHE_CATEGORY_ARTWORK_PROBE,
-        expiration=ARTWORK_VALIDATION_CACHE_TTL,
+    """Check whether a remote image endpoint is reachable."""
+    return await pylyrion_artwork.probe_remote_image(
+        provider.mass.http_session,
+        provider.mass.cache,
+        provider.instance_id,
+        url,
+        CACHE_CATEGORY_ARTWORK_PROBE,
     )
-    return result
 
 
 def get_thumb_path(item: Artist | Album) -> str | None:
@@ -219,7 +178,10 @@ def get_thumb_path(item: Artist | Album) -> str | None:
 def set_thumb_path(item: Artist | Album, path: str | None) -> None:
     """Set or clear thumbnail image path on an artist or album."""
     images = list(item.metadata.images or [])
-    thumb_image = next((img for img in images if img.type == ImageType.THUMB), None)
+    thumb_image = next(
+        (img for img in images if img.type == ImageType.THUMB),
+        None,
+    )
     if path is None:
         if thumb_image is None:
             return
@@ -244,7 +206,10 @@ def set_thumb_path(item: Artist | Album, path: str | None) -> None:
     )
 
 
-def append_artwork_cache_buster(provider: LyrionMusicProvider, url: str) -> str:
+def append_artwork_cache_buster(
+    provider: LyrionMusicProvider,
+    url: str,
+) -> str:
     """Append cache-buster token to artwork URLs when configured."""
     token = provider.get_setup_value(CONF_ARTWORK_CACHE_BUSTER)
     return pylyrion_artwork.append_artwork_cache_buster(url, token)
