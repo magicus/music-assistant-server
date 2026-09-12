@@ -20,7 +20,7 @@ from music_assistant_models.media_items import (
 )
 
 from music_assistant.providers.lyrion.client import get_configured_host, get_configured_port
-from pylyrion import media_parsers as pylyrion_parsers
+from pylyrion.helpers import LyrionMediaParserFacade
 from pylyrion.media_items import LyrionAlbum, LyrionArtist, LyrionTrack
 
 from . import artwork
@@ -29,11 +29,14 @@ if TYPE_CHECKING:
     from music_assistant.providers.lyrion_music.provider import LyrionMusicProvider
 
 
+PYLYRION_PARSERS = LyrionMediaParserFacade()
+
+
 def parse_artist(provider: LyrionMusicProvider, row: Mapping[str, str]) -> Artist:
     """Parse LMS artist payload into an MA Artist model."""
     artwork_url = artwork.extract_artist_artwork_url(provider, row)
     try:
-        lyrion_artist = pylyrion_parsers.parse_artist(row, artwork_url=artwork_url)
+        lyrion_artist = PYLYRION_PARSERS.parse_artist(row, artwork_url=artwork_url)
     except ValueError as err:
         raise MediaNotFoundError("Artist payload without id") from err
 
@@ -77,7 +80,7 @@ def parse_album(provider: LyrionMusicProvider, row: Mapping[str, str]) -> Album:
         fallback_id=extract_item_id(row),
     )
     try:
-        lyrion_album = pylyrion_parsers.parse_album(row, artwork_url=artwork_url)
+        lyrion_album = PYLYRION_PARSERS.parse_album(row, artwork_url=artwork_url)
     except ValueError as err:
         raise MediaNotFoundError("Album payload without id") from err
 
@@ -130,7 +133,7 @@ def parse_track(provider: LyrionMusicProvider, row: Mapping[str, str]) -> Track:
     track_id = extract_item_id(row)
     artwork_url = artwork.extract_artwork_url(provider, row, fallback_id=track_id)
     try:
-        lyrion_track = pylyrion_parsers.parse_track(row, artwork_url=artwork_url)
+        lyrion_track = PYLYRION_PARSERS.parse_track(row, artwork_url=artwork_url)
     except ValueError as err:
         raise MediaNotFoundError("Track payload without id") from err
 
@@ -192,7 +195,7 @@ def extract_track_artists(
     provider: LyrionMusicProvider, row: Mapping[str, str]
 ) -> UniqueList[Artist | ItemMapping]:
     """Extract track artists using LMS role precedence."""
-    lyrion_artists = pylyrion_parsers.extract_track_artists(row)
+    lyrion_artists = PYLYRION_PARSERS.extract_track_artists(row)
     return UniqueList(
         [
             ItemMapping(
@@ -209,7 +212,7 @@ def extract_track_artists(
 def parse_playlist(provider: LyrionMusicProvider, row: Mapping[str, str]) -> Playlist:
     """Parse LMS playlist payload into an MA Playlist model."""
     try:
-        lyrion_playlist = pylyrion_parsers.parse_playlist(row)
+        lyrion_playlist = PYLYRION_PARSERS.parse_playlist(row)
     except ValueError as err:
         raise MediaNotFoundError("Playlist payload without id or name") from err
 
@@ -233,7 +236,7 @@ def extract_item_id(
     id_keys: tuple[str, ...] = ("id", "track_id", "album_id", "artist_id"),
 ) -> str | None:
     """Extract the first available id field from a raw LMS payload."""
-    return pylyrion_parsers.extract_item_id(row, id_keys=id_keys)
+    return PYLYRION_PARSERS.extract_item_id(row, id_keys=id_keys)
 
 
 def to_lms_stream_url(provider: LyrionMusicProvider, track_id: str, raw_url: str | None) -> str:
@@ -244,7 +247,7 @@ def to_lms_stream_url(provider: LyrionMusicProvider, track_id: str, raw_url: str
     port = get_configured_port(provider, default=None)
     if port is None:
         raise ProviderUnavailableError("Lyrion port is not configured")
-    return pylyrion_parsers.to_lms_stream_url(
+    return PYLYRION_PARSERS.to_lms_stream_url(
         track_id=track_id,
         host=host,
         port=port,
@@ -272,7 +275,7 @@ def extract_artist_ref(
     ),
 ) -> tuple[str | None, str | None]:
     """Extract artist display name and provider id from LMS payload."""
-    return pylyrion_parsers.extract_artist_ref(
+    return PYLYRION_PARSERS.extract_artist_ref(
         row,
         preferred_name_keys=preferred_name_keys,
         preferred_id_keys=preferred_id_keys,
@@ -281,14 +284,14 @@ def extract_artist_ref(
 
 def extract_first_list_value(value: str) -> str | None:
     """Extract first value from scalar or comma-separated LMS field."""
-    return pylyrion_parsers.extract_first_list_value(value)
+    return PYLYRION_PARSERS.extract_first_list_value(value)
 
 
 def extract_values_for_keys(
     row: Mapping[str, str], keys: tuple[str, ...], split_mode: Literal["id", "name"]
 ) -> list[str]:
     """Extract scalar or list values from the first populated key."""
-    return pylyrion_parsers.extract_values_for_keys(row, keys, split_mode)
+    return PYLYRION_PARSERS.extract_values_for_keys(row, keys, split_mode)
 
 
 def album_metadata_needs_update(library_album: Album, provider_album: Album) -> bool:
@@ -307,7 +310,7 @@ def artist_metadata_needs_update(library_artist: Artist, provider_artist: Artist
 
 def parse_int(value: str | None, default: int = 0) -> int:
     """Parse int-like values from LMS payload, with safe fallback."""
-    return pylyrion_parsers.parse_int(value, default=default)
+    return PYLYRION_PARSERS.parse_int(value, default=default)
 
 
 def _serialize_mapping_details(details: Mapping[str, str]) -> str | None:

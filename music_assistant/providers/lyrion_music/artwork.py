@@ -19,8 +19,8 @@ from music_assistant.providers.lyrion.client import (
     get_configured_port,
     normalize_lms_text_value,
 )
-from pylyrion import artwork as pylyrion_artwork
 from pylyrion.cometd.constants import RPC_TIMEOUT
+from pylyrion.helpers import LyrionArtworkFacade
 from pylyrion.lyrion_constants import (
     ARTWORK_VALIDATION_CACHE_TTL,
     ARTWORK_VALIDATION_TIMEOUT,
@@ -36,6 +36,7 @@ if TYPE_CHECKING:
 
 
 CACHE_CATEGORY_ARTWORK_PROBE = 501
+PYLYRION_ARTWORK = LyrionArtworkFacade()
 
 
 async def resolve_image(
@@ -43,7 +44,7 @@ async def resolve_image(
     path: str,
 ) -> str | bytes:
     """Resolve artist artwork URLs with LMS size fallback when needed."""
-    fallback_path = pylyrion_artwork.artwork_fallback_path(path)
+    fallback_path = PYLYRION_ARTWORK.artwork_fallback_path(path)
     if fallback_path is None:
         return path
 
@@ -81,7 +82,7 @@ async def ensure_preferred_artwork_size(
     item: Artist | Album,
 ) -> tuple[str, ...]:
     """Resolve album or artist artwork by trying 600 first, then 300."""
-    return await pylyrion_artwork.ensure_preferred_artwork_size(
+    return await PYLYRION_ARTWORK.ensure_preferred_artwork_size(
         item,
         lambda url: probe_remote_image(provider, url),
         get_thumb_path,
@@ -102,7 +103,7 @@ def extract_artwork_url(
     if port is None:
         raise ProviderUnavailableError("Lyrion port is not configured")
     token = normalize_lms_text_value(provider.get_setup_value(CONF_ARTWORK_CACHE_BUSTER))
-    return pylyrion_artwork.extract_artwork_url(
+    return PYLYRION_ARTWORK.extract_artwork_url(
         row,
         host=host,
         port=port,
@@ -127,7 +128,7 @@ def extract_artist_artwork_url(
         id_keys=("id", "artist_id", "contributor_id"),
     )
     token = normalize_lms_text_value(provider.get_setup_value(CONF_ARTWORK_CACHE_BUSTER))
-    return pylyrion_artwork.extract_artist_artwork_url(
+    return PYLYRION_ARTWORK.extract_artist_artwork_url(
         row,
         host=host,
         port=port,
@@ -138,7 +139,7 @@ def extract_artist_artwork_url(
 
 def normalize_artist_artwork_path(path: str) -> str:
     """Normalize LMS artist artwork path variants to a sized endpoint."""
-    return pylyrion_artwork.normalize_artist_artwork_path(path)
+    return PYLYRION_ARTWORK.normalize_artist_artwork_path(path)
 
 
 def to_lms_absolute_url(provider: LyrionMusicProvider, path: str) -> str:
@@ -273,4 +274,4 @@ def append_artwork_cache_buster(
 ) -> str:
     """Append cache-buster token to artwork URLs when configured."""
     token = normalize_lms_text_value(provider.get_setup_value(CONF_ARTWORK_CACHE_BUSTER))
-    return pylyrion_artwork.append_artwork_cache_buster(url, token)
+    return PYLYRION_ARTWORK.append_artwork_cache_buster(url, token)
