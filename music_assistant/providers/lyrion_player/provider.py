@@ -18,9 +18,9 @@ from music_assistant_models.errors import (
 )
 
 from music_assistant.models.player_provider import PlayerProvider
-from music_assistant.providers.lyrion.constants import STATUS_COMMAND_VERIFY_TIMEOUT
 from music_assistant.providers.lyrion.setup_flow import validate_lms_endpoint
 from pylyrion.client import LyrionClient
+from pylyrion.cometd.constants import COMETD_COMMAND_STATUS_VERIFY_TIMEOUT
 from pylyrion.cometd.transport import build_cometd_post_messages_callback
 from pylyrion.cometd_event_adapter import LyrionCometDEventAdapter
 from pylyrion.errors import LyrionRequestError
@@ -405,7 +405,7 @@ class LyrionPlayerProvider(PlayerProvider):
         self,
         player_id: str,
         since: float | None,
-        timeout: float = STATUS_COMMAND_VERIFY_TIMEOUT,
+        timeout: float = COMETD_COMMAND_STATUS_VERIFY_TIMEOUT,
     ) -> bool:
         """Wait for a newer status update for one player."""
         return await self._status_stream.wait_for_player_status_update(
