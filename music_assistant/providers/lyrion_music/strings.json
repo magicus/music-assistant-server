@@ -8,6 +8,14 @@
       "label": "Lyrion JSON-RPC port",
       "description": "Port to reach Lyrion control interface, typically 9000"
     },
+    "lms_username": {
+      "label": "Lyrion username",
+      "description": "Optional username for HTTP Basic Auth on the LMS web interface."
+    },
+    "lms_password": {
+      "label": "Lyrion password",
+      "description": "Optional password for HTTP Basic Auth on the LMS web interface."
+    },
     "rescan_artwork": {
       "label": "Rescan artwork now",
       "description": "Refresh artwork for your Lyrion library artists and albums right away."

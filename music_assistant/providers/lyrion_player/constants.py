@@ -3,9 +3,13 @@
 from music_assistant_models.enums import PlayerFeature, ProviderFeature
 
 from music_assistant.constants import CONF_PORT
+from music_assistant.providers.lyrion.constants import CONF_LMS_PASSWORD as LMS_PASSWORD
+from music_assistant.providers.lyrion.constants import CONF_LMS_USERNAME as LMS_USERNAME
 
 CONF_LMS_HOST = "lms_host"
 CONF_LMS_PORT = CONF_PORT
+CONF_LMS_USERNAME = LMS_USERNAME
+CONF_LMS_PASSWORD = LMS_PASSWORD
 CONF_FALLBACK_POLLING = "fallback_polling"
 CONF_FALLBACK_POLLING_INTERVAL = "fallback_polling_interval"
 DEFAULT_LMS_HOST = "127.0.0.1"

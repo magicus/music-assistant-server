@@ -124,7 +124,7 @@ class BayeuxClient:
             ],
             timeout,
         )
-        if not response or not response[0].get("successful", True):
+        if not response or response[0].get("successful") is not True:
             raise LyrionRequestError(f"CometD channel subscribe failed: {response}")
         return response
 
@@ -147,7 +147,7 @@ class BayeuxClient:
             ],
             timeout,
         )
-        if not response or not response[0].get("successful", True):
+        if not response or response[0].get("successful") is not True:
             raise LyrionRequestError(f"CometD publish failed on {channel}: {response}")
         return response
 

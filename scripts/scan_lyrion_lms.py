@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 import aiohttp
 import ifaddr
+from music_assistant_models.errors import SetupFailedError
 
 from music_assistant.providers.lyrion.setup_flow import validate_lms_endpoint
 
@@ -196,12 +197,15 @@ async def _probe_candidate(
     """Validate one host:port as a real LMS endpoint."""
     async with limiter:
         try:
-            await validate_lms_endpoint(
-                host=host,
-                port=port,
-                http_session=http_session,
+            await asyncio.wait_for(
+                validate_lms_endpoint(
+                    host=host,
+                    port=port,
+                    http_session=http_session,
+                ),
+                timeout=timeout,
             )
-        except Exception:
+        except SetupFailedError, TimeoutError:
             return None
         return ProbeResult(host=host, port=port, network=network)
 

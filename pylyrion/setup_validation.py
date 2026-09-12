@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import ipaddress
 import socket
 from typing import Any
@@ -10,7 +11,7 @@ from typing import Any
 from aiohttp import ClientError, ClientTimeout
 
 from pylyrion.errors import LyrionError
-from pylyrion.session import build_lms_url
+from pylyrion.session import build_lms_url, normalize_lms_text_value
 
 
 class LyrionEndpointValidationError(LyrionError):
@@ -34,6 +35,8 @@ async def validate_lms_endpoint(
     port: object,
     *,
     http_session: Any,
+    username: object | None = None,
+    password: object | None = None,
 ) -> None:
     """Validate that endpoint is reachable and serves Lyrion JSON-RPC."""
     host_str = str(host or "").strip()
@@ -80,10 +83,19 @@ async def validate_lms_endpoint(
         "params": ["", ["serverstatus", 0, 1]],
     }
     url = build_lms_url(host_str, resolved_port, "/jsonrpc.js")
+    headers: dict[str, str] | None = None
+    normalized_username = normalize_lms_text_value(username)
+    normalized_password = normalize_lms_text_value(password)
+    if normalized_username is not None or normalized_password is not None:
+        token = base64.b64encode(
+            f"{normalized_username or ''}:{normalized_password or ''}".encode()
+        ).decode("ascii")
+        headers = {"Authorization": f"Basic {token}"}
     try:
         async with http_session.post(
             url,
             json=payload,
+            headers=headers,
             timeout=ClientTimeout(total=5),
         ) as response:
             response.raise_for_status()

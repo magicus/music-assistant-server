@@ -19,6 +19,7 @@ from music_assistant_models.errors import (
 )
 
 from music_assistant.models.player_provider import PlayerProvider
+from music_assistant.providers.lyrion.client import get_configured_basic_auth
 from music_assistant.providers.lyrion.setup_flow import validate_lms_endpoint
 from pylyrion.client import LyrionClient
 from pylyrion.cometd.constants import COMETD_COMMAND_STATUS_VERIFY_TIMEOUT
@@ -41,7 +42,9 @@ from .constants import (
     CONF_FALLBACK_POLLING,
     CONF_FALLBACK_POLLING_INTERVAL,
     CONF_LMS_HOST,
+    CONF_LMS_PASSWORD,
     CONF_LMS_PORT,
+    CONF_LMS_USERNAME,
     DEFAULT_FALLBACK_POLLING_INTERVAL,
     DEFAULT_LMS_PORT,
     PLAYERS_BATCH_SIZE,
@@ -115,6 +118,8 @@ class LyrionPlayerProvider(PlayerProvider):
         await validate_lms_endpoint(
             host=host,
             port=port,
+            username=self.get_setup_value(CONF_LMS_USERNAME),
+            password=self.get_setup_value(CONF_LMS_PASSWORD),
             http_session=self.mass.http_session,
             translation_owner=self.translation_owner,
         )
@@ -657,6 +662,7 @@ class LyrionPlayerProvider(PlayerProvider):
                 host=host,
                 port=self.get_configured_port(),
             ),
+            basic_auth_headers=get_configured_basic_auth(self),
         )
 
     def _build_pylyrion_client(self) -> LyrionClient:

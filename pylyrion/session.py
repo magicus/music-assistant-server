@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, AsyncContextManager, cast
 
 from aiohttp import ClientError, ClientTimeout
 
@@ -49,6 +49,7 @@ class LyrionSession:
     endpoint: LyrionEndpoint
     timeout: int = 10
     request_guard: Callable[[], AsyncContextManager[None]] | None = None
+    basic_auth_headers: dict[str, str] | None = None
 
     async def request(
         self,
@@ -74,6 +75,7 @@ class LyrionSession:
                 self.http_session.post(
                     url,
                     json=payload,
+                    headers=self.basic_auth_headers,
                     timeout=ClientTimeout(total=self.timeout),
                 ) as response,
             ):

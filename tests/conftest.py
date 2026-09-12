@@ -51,6 +51,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=False,
         help=("Keep the Docker LMS container running after tests for manual inspection."),
     )
+    parser.addoption(
+        "--live-lyrion-auth",
+        action="store_true",
+        default=False,
+        help=("Enable HTTP Basic Auth for the live Lyrion Docker LMS test server."),
+    )
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -77,7 +83,12 @@ def pytest_collection_modifyitems(
     config: pytest.Config,
     items: list[pytest.Item],
 ) -> None:
-    """Increase timeout budget for on-demand live Docker integration tests."""
+    """Prioritize selected tests and tune live Docker test collection."""
+    auth_file = "tests/providers/lyrion_music/test_live_docker_auth.py"
+    items.sort(
+        key=lambda item: 0 if str(item.path).endswith(auth_file) else 1,
+    )
+
     if not config.getoption("--live-lyrion-docker"):
         return
 

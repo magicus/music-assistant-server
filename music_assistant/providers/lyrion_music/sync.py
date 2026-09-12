@@ -55,11 +55,13 @@ async def _artist_needs_update(
     library_item: Any | None = None,
 ) -> bool:
     """Return True when linked artist artwork metadata has changed."""
-    if library_item is None:
+    if library_item is None and sync_details is not None:
         try:
             library_item = await provider.mass.music.artists.get_library_item(sync_details.item_id)
-        except MediaNotFoundError:
+        except MediaNotFoundError, ProviderUnavailableError, ValueError:
             return True
+    if library_item is None:
+        return True
     return parsers.artist_metadata_needs_update(library_item, prov_item)
 
 
@@ -70,11 +72,13 @@ async def _album_needs_update(
     library_item: Any | None = None,
 ) -> bool:
     """Return True when linked album artist/artwork metadata has changed."""
-    if library_item is None:
+    if library_item is None and sync_details is not None:
         try:
             library_item = await provider.mass.music.albums.get_library_item(sync_details.item_id)
-        except MediaNotFoundError:
+        except MediaNotFoundError, ProviderUnavailableError, ValueError:
             return True
+    if library_item is None:
+        return True
     return parsers.album_metadata_needs_update(library_item, prov_item)
 
 
@@ -224,7 +228,11 @@ async def _sync_library_artwork(
                 )
                 continue
             old_thumb = artwork.get_thumb_path(provider_item)
-            artwork.set_thumb_path(provider_item, artwork_url)
+            artwork.set_thumb_path(
+                provider_item,
+                artwork_url,
+                provider_instance=provider.instance_id,
+            )
             validation_started = monotonic()
             attempted_artwork_urls = await artwork.ensure_preferred_artwork_size(
                 provider,
@@ -317,21 +325,22 @@ async def _lookup_library_items_for_sync(
     if not provider_item_ids:
         return {}
 
-    lookup = getattr(controller, "get_library_items_by_prov_id", None)
-    if lookup is None:
-        return {}
-
     unique_item_ids = normalize_lookup_ids(provider_item_ids)
-    library_items = lookup(
-        provider_instance=provider.instance_id,
-        provider_item_ids=unique_item_ids,
-        limit=len(unique_item_ids),
-    )
-    if not hasattr(library_items, "__await__"):
-        return {}
-
     result: dict[str, Any] = {}
-    for library_item in await library_items:
+    getter = getattr(controller, "get_library_items_by_prov_id", None)
+    if getter is None:
+        return result
+
+    try:
+        library_items = await getter(
+            provider_instance=provider.instance_id,
+            provider_item_ids=unique_item_ids,
+            limit=len(unique_item_ids),
+        )
+    except TypeError:
+        return result
+
+    for library_item in library_items:
         for mapping in library_item.provider_mappings:
             if (
                 mapping.provider_instance == provider.instance_id

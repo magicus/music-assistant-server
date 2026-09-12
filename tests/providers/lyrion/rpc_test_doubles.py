@@ -39,9 +39,17 @@ class FakeRpcTransport:
         self._handler = handler
         self.commands: list[list[Any]] = []
 
-    def post(self, _url: str, json: dict[str, Any], timeout: Any) -> FakeResponse:
+    def post(
+        self,
+        _url: str,
+        json: dict[str, Any],
+        timeout: Any,
+        *,
+        auth: Any = None,
+        **kwargs: Any,
+    ) -> FakeResponse:
         """Dispatch a fake JSON-RPC request to the local handler."""
-        del timeout
+        del timeout, auth, kwargs
         player_id = str(json["params"][0])
         command = list(json["params"][1])
         self.commands.append(command)

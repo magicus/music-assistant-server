@@ -30,6 +30,7 @@ def build_cometd_post_messages_callback(
             async with session.http_session.post(
                 url,
                 json=messages,
+                headers=session.basic_auth_headers,
                 timeout=ClientTimeout(total=timeout),
             ) as response:
                 response.raise_for_status()

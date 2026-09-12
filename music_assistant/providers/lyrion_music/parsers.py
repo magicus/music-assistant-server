@@ -63,7 +63,7 @@ def _artist_from_lyrion(provider: LyrionMusicProvider, lyrion_artist: LyrionArti
                 type=ImageType.THUMB,
                 path=lyrion_artist.artwork_url,
                 provider=provider.instance_id,
-                remotely_accessible=True,
+                remotely_accessible=False,
             )
         )
     return artist
@@ -119,7 +119,7 @@ def _album_from_lyrion(provider: LyrionMusicProvider, lyrion_album: LyrionAlbum)
                 type=ImageType.THUMB,
                 path=lyrion_album.artwork_url,
                 provider=provider.instance_id,
-                remotely_accessible=True,
+                remotely_accessible=False,
             )
         )
     return album
@@ -183,7 +183,7 @@ def _track_from_lyrion(provider: LyrionMusicProvider, lyrion_track: LyrionTrack)
                 type=ImageType.THUMB,
                 path=lyrion_track.artwork_url,
                 provider=provider.instance_id,
-                remotely_accessible=True,
+                remotely_accessible=False,
             )
         )
     return track

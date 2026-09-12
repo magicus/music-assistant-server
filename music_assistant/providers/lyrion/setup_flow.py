@@ -7,9 +7,8 @@ import ipaddress
 import socket
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from aiohttp import ClientSession
 from music_assistant_models.config_entries import ConfigEntry
 from music_assistant_models.enums import ConfigEntryType
 from music_assistant_models.errors import SetupFailedError
@@ -54,6 +53,8 @@ async def run_lms_setup_flow(
     default_port: int,
     logger: logging.Logger,
     log_prefix: str,
+    username_key: str | None = None,
+    password_key: str | None = None,
 ) -> None:
     """Run shared setup flow for providers that connect to an LMS endpoint."""
     errors: dict[str, str] | None = None
@@ -64,8 +65,16 @@ async def run_lms_setup_flow(
         current_domain=current_domain,
         host_key=host_key,
         port_key=port_key,
+        username_key=username_key,
+        password_key=password_key,
     )
-    entries = _entries(host_key, port_key, default_port)
+    entries = _entries(
+        host_key,
+        port_key,
+        default_port,
+        username_key=username_key,
+        password_key=password_key,
+    )
     while True:
         form_entries = [
             replace(
@@ -85,9 +94,15 @@ async def run_lms_setup_flow(
             host_key=host_key,
             port_key=port_key,
             default_port=default_port,
+            username_key=username_key,
+            password_key=password_key,
         )
         setup_data[host_key] = normalized[host_key]
         setup_data[port_key] = normalized[port_key]
+        if username_key is not None:
+            setup_data[username_key] = normalized[username_key]
+        if password_key is not None:
+            setup_data[password_key] = normalized[password_key]
 
         try:
             await session.finish(setup_data)
@@ -110,7 +125,9 @@ async def validate_lms_endpoint(
     host: object,
     port: object,
     *,
-    http_session: ClientSession,
+    http_session: Any,
+    username: object | None = None,
+    password: object | None = None,
     translation_owner: str | None = None,
 ) -> None:
     """Validate a configured LMS endpoint."""
@@ -119,6 +136,8 @@ async def validate_lms_endpoint(
             host=host,
             port=port,
             http_session=http_session,
+            username=username,
+            password=password,
         )
     except LyrionEndpointValidationError as err:
         msg = err.error_key if err.details is None else f"{err.error_key}: {err.details}"
@@ -134,9 +153,12 @@ def _entries(
     host_key: str,
     port_key: str,
     default_port: int,
+    *,
+    username_key: str | None = None,
+    password_key: str | None = None,
 ) -> tuple[ConfigEntry, ...]:
     """Return the shared LMS endpoint form entries."""
-    return (
+    entries: list[ConfigEntry] = [
         ConfigEntry(
             key=host_key,
             type=ConfigEntryType.STRING,
@@ -148,7 +170,24 @@ def _entries(
             required=True,
             default_value=default_port,
         ),
-    )
+    ]
+    if username_key is not None:
+        entries.append(
+            ConfigEntry(
+                key=username_key,
+                type=ConfigEntryType.STRING,
+                required=False,
+            )
+        )
+    if password_key is not None:
+        entries.append(
+            ConfigEntry(
+                key=password_key,
+                type=ConfigEntryType.SECURE_STRING,
+                required=False,
+            )
+        )
+    return tuple(entries)
 
 
 async def _prefill_lms_endpoint(
@@ -157,6 +196,8 @@ async def _prefill_lms_endpoint(
     current_domain: str,
     host_key: str,
     port_key: str,
+    username_key: str | None = None,
+    password_key: str | None = None,
 ) -> None:
     """Prefill host/port from current or sibling Lyrion provider configs."""
     existing_host = setup_data.get(host_key)
@@ -172,6 +213,19 @@ async def _prefill_lms_endpoint(
         setup_data.pop(port_key, None)
     else:
         setup_data[port_key] = existing_port
+
+    for key in (username_key, password_key):
+        if key is None:
+            continue
+        value = setup_data.get(key)
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped:
+                setup_data[key] = stripped
+            else:
+                setup_data.pop(key, None)
+        elif value is None:
+            setup_data.pop(key, None)
 
     instance_id = session.context.instance_id
     if instance_id:
@@ -197,6 +251,16 @@ async def _prefill_lms_endpoint(
             )
             if port is not None:
                 setup_data[port_key] = port
+
+        for key in (username_key, password_key):
+            if key is None:
+                continue
+            if key not in setup_data:
+                value = session.mass.config.get_provider_setup_value(instance_id, key)
+                if value is None:
+                    value = session.context.values.get(key)
+                if value is not None:
+                    setup_data[key] = value
 
         if session.context.kind != "setup":
             return
@@ -281,6 +345,8 @@ def _normalize_submitted_values(
     host_key: str,
     port_key: str,
     default_port: int,
+    username_key: str | None = None,
+    password_key: str | None = None,
 ) -> dict[str, object]:
     """Normalize submitted endpoint values before persisting setup_data."""
     host = values.get(host_key)
@@ -295,10 +361,22 @@ def _normalize_submitted_values(
     if port is None:
         port = default_port
 
-    return {
+    result: dict[str, object] = {
         host_key: normalized_host,
         port_key: port,
     }
+    for key in (username_key, password_key):
+        if key is None:
+            continue
+        raw_value = values.get(key)
+        if isinstance(raw_value, str):
+            normalized_value = raw_value.strip()
+        elif raw_value is None:
+            normalized_value = ""
+        else:
+            normalized_value = str(raw_value).strip()
+        result[key] = normalized_value
+    return result
 
 
 def _is_ip_address(value: str) -> bool:

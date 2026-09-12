@@ -6,17 +6,25 @@ import dataclasses
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
+from aiohttp import ClientError, ClientTimeout
 from music_assistant_models.enums import ImageType
 from music_assistant_models.errors import ProviderUnavailableError
 from music_assistant_models.media_items import MediaItemImage, UniqueList
 
 from music_assistant.providers.lyrion.client import (
+    acquire_lms_request_slot,
     build_lms_url,
+    get_configured_basic_auth,
     get_configured_host,
     get_configured_port,
 )
 from pylyrion import artwork as pylyrion_artwork
-from pylyrion.lyrion_constants import CONF_ARTWORK_CACHE_BUSTER
+from pylyrion.cometd.constants import RPC_TIMEOUT
+from pylyrion.lyrion_constants import (
+    ARTWORK_VALIDATION_CACHE_TTL,
+    ARTWORK_VALIDATION_TIMEOUT,
+    CONF_ARTWORK_CACHE_BUSTER,
+)
 
 from . import parsers
 
@@ -148,21 +156,63 @@ async def fetch_remote_image_if_ok(
     url: str,
 ) -> bytes | None:
     """Fetch image bytes and return None for invalid LMS image responses."""
-    return await pylyrion_artwork.fetch_remote_image_if_ok(
-        provider.mass.http_session,
-        url,
-    )
+    try:
+        async with (
+            acquire_lms_request_slot(),
+            provider.mass.http_session.get(
+                url,
+                timeout=ClientTimeout(total=RPC_TIMEOUT),
+                headers=get_configured_basic_auth(provider),
+            ) as response,
+        ):
+            if response.status != 200:
+                return None
+            content_type = response.headers.get("Content-Type", "")
+            if "image/" not in content_type.lower():
+                return None
+            data = await response.read()
+            return data or None
+    except TimeoutError, ClientError:
+        return None
 
 
 async def probe_remote_image(provider: LyrionMusicProvider, url: str) -> bool:
-    """Check whether a remote image endpoint is reachable."""
-    return await pylyrion_artwork.probe_remote_image(
-        provider.mass.http_session,
-        provider.mass.cache,
-        provider.instance_id,
-        url,
-        CACHE_CATEGORY_ARTWORK_PROBE,
+    """Check if a remote image endpoint is reachable without downloading payload bytes."""
+    cache_key = f"probe::{url}"
+    if (
+        cached := await provider.mass.cache.get(
+            cache_key,
+            provider=provider.instance_id,
+            category=CACHE_CATEGORY_ARTWORK_PROBE,
+        )
+    ) is not None:
+        return bool(cached)
+
+    try:
+        async with (
+            acquire_lms_request_slot(),
+            provider.mass.http_session.get(
+                url,
+                timeout=ClientTimeout(total=ARTWORK_VALIDATION_TIMEOUT),
+                headers=get_configured_basic_auth(provider),
+            ) as response,
+        ):
+            if response.status != 200:
+                result = False
+            else:
+                content_type = response.headers.get("Content-Type", "")
+                result = "image/" in content_type.lower()
+    except TimeoutError, ClientError:
+        result = False
+
+    await provider.mass.cache.set(
+        cache_key,
+        result,
+        provider=provider.instance_id,
+        category=CACHE_CATEGORY_ARTWORK_PROBE,
+        expiration=ARTWORK_VALIDATION_CACHE_TTL,
     )
+    return result
 
 
 def get_thumb_path(item: Artist | Album) -> str | None:
@@ -175,8 +225,13 @@ def get_thumb_path(item: Artist | Album) -> str | None:
     return None
 
 
-def set_thumb_path(item: Artist | Album, path: str | None) -> None:
+def set_thumb_path(
+    item: Artist | Album,
+    path: str | None,
+    provider_instance: str | None = None,
+) -> None:
     """Set or clear thumbnail image path on an artist or album."""
+    owner_provider = provider_instance or item.provider
     images = list(item.metadata.images or [])
     thumb_image = next(
         (img for img in images if img.type == ImageType.THUMB),
@@ -188,7 +243,12 @@ def set_thumb_path(item: Artist | Album, path: str | None) -> None:
         item.metadata.images = UniqueList(img for img in images if img is not thumb_image)
         return
     if thumb_image is not None:
-        new_image = dataclasses.replace(thumb_image, path=path)
+        new_image = dataclasses.replace(
+            thumb_image,
+            path=path,
+            provider=owner_provider,
+            remotely_accessible=False,
+        )
         item.metadata.images = UniqueList(
             new_image if img is thumb_image else img for img in images
         )
@@ -199,8 +259,8 @@ def set_thumb_path(item: Artist | Album, path: str | None) -> None:
             MediaItemImage(
                 type=ImageType.THUMB,
                 path=path,
-                provider=item.provider,
-                remotely_accessible=True,
+                provider=owner_provider,
+                remotely_accessible=False,
             ),
         ]
     )

@@ -41,7 +41,12 @@ from music_assistant.providers.lyrion.setup_flow import validate_lms_endpoint
 from pylyrion.lyrion_constants import CONF_ARTWORK_CACHE_BUSTER, ITEM_CACHE_TTL, SEARCH_CACHE_TTL
 
 from . import artwork, browse, client, parsers, sync
-from .constants import ACTION_RESCAN_ARTWORK, BROWSE_PAGE_SIZE
+from .constants import (
+    ACTION_RESCAN_ARTWORK,
+    BROWSE_PAGE_SIZE,
+    CONF_LMS_PASSWORD,
+    CONF_LMS_USERNAME,
+)
 
 
 class LyrionMusicProvider(MusicProvider):
@@ -128,6 +133,8 @@ class LyrionMusicProvider(MusicProvider):
         await validate_lms_endpoint(
             host=host,
             port=port,
+            username=self.get_setup_value(CONF_LMS_USERNAME),
+            password=self.get_setup_value(CONF_LMS_PASSWORD),
             http_session=self.mass.http_session,
             translation_owner=self.translation_owner,
         )

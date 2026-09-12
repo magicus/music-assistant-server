@@ -2,24 +2,25 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from types import SimpleNamespace
+from base64 import b64encode
+from collections.abc import Mapping, Sequence
 from typing import Any, Protocol, cast
 
 from aiohttp import ClientError, ClientTimeout
 from music_assistant_models.errors import ProviderUnavailableError
 
-from music_assistant.constants import CONF_PORT
-from pylyrion.session import build_lms_url as _build_lms_url
-from pylyrion.session import normalize_lms_text_value as _normalize_lms_text_value
+from music_assistant.helpers.throttle_retry import ThrottlerManager
+from music_assistant.providers.lyrion.constants import (
+    CONF_LMS_HOST,
+    CONF_LMS_PASSWORD,
+    CONF_LMS_PORT,
+    CONF_LMS_USERNAME,
+    DEFAULT_LMS_PORT,
+)
+from pylyrion.cometd.constants import RPC_TIMEOUT
+from pylyrion.session import build_lms_url, normalize_lms_text_value
 
-build_lms_url = _build_lms_url
-normalize_lms_text_value = _normalize_lms_text_value
-
-CONF_LMS_HOST = "lms_host"
-CONF_LMS_PORT = CONF_PORT
-DEFAULT_LMS_PORT = 9000
+_RPC_THROTTLER = ThrottlerManager(rate_limit=10, period=1)
 
 
 class _ConfigProvider(Protocol):
@@ -28,15 +29,6 @@ class _ConfigProvider(Protocol):
     mass: Any
 
     def get_setup_value(self, key: str, default: Any = None) -> Any: ...
-
-
-@asynccontextmanager
-async def _null_request_guard() -> AbstractAsyncContextManager[None]:
-    """No-op async guard for LMS RPC calls."""
-    yield
-
-
-_RPC_THROTTLER = SimpleNamespace(acquire=_null_request_guard)
 
 
 def get_configured_host(provider: _ConfigProvider) -> str | None:
@@ -62,6 +54,21 @@ def get_configured_port(
         return default
 
 
+def get_configured_basic_auth(provider: _ConfigProvider) -> dict[str, str] | None:
+    """Return optional HTTP Basic Auth headers for LMS HTTP requests."""
+    username = normalize_lms_text_value(provider.get_setup_value(CONF_LMS_USERNAME))
+    password = normalize_lms_text_value(provider.get_setup_value(CONF_LMS_PASSWORD))
+    if username is None and password is None:
+        return None
+    token = b64encode(f"{username or ''}:{password or ''}".encode()).decode("ascii")
+    return {"Authorization": f"Basic {token}"}
+
+
+def acquire_lms_request_slot() -> object:
+    """Return shared request limiter context for LMS HTTP calls."""
+    return _RPC_THROTTLER.acquire()
+
+
 async def rpc_request(
     provider: _ConfigProvider,
     player_id: str,
@@ -80,17 +87,24 @@ async def rpc_request(
     }
     url = build_lms_url(host, port, "/jsonrpc.js")
 
+    headers = get_configured_basic_auth(provider)
     try:
         async with (
             _RPC_THROTTLER.acquire(),
             provider.mass.http_session.post(
                 url,
                 json=payload,
-                timeout=ClientTimeout(total=10),
+                headers=headers,
+                timeout=ClientTimeout(total=RPC_TIMEOUT),
             ) as response,
         ):
             response.raise_for_status()
-            data = cast("dict[str, Any]", await response.json())
+            data = await response.json()
+            if not isinstance(data, Mapping):
+                raise ProviderUnavailableError(
+                    f"Lyrion JSON-RPC connection request to {host}:{port} "
+                    "returned a non-object JSON payload"
+                )
     except TimeoutError as err:
         raise ProviderUnavailableError(
             "Lyrion server did not respond in time while processing the request"
