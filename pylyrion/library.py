@@ -224,7 +224,7 @@ async def iter_entity_rows(
     item_ids: list[str],
 ) -> AsyncGenerator[Mapping[str, str]]:
     """Yield normalized LMS rows in request order, with optional batch fallback."""
-    ordered_ids = normalize_lookup_ids(item_ids)
+    ordered_ids = _normalize_lookup_ids(item_ids)
     total_items = len(ordered_ids)
     if total_items == 0:
         return
@@ -237,9 +237,9 @@ async def iter_entity_rows(
         return
 
     use_batch = spec.supports_batch_lookup
+    processed_items = 0
     try:
         if use_batch:
-            processed_items = 0
             for chunk in _chunked(ordered_ids, BATCH_LOOKUP_SIZE):
                 chunk_start = processed_items + 1
                 chunk_end = processed_items + len(chunk)
@@ -250,7 +250,7 @@ async def iter_entity_rows(
                 processed_items += len(chunk)
             return
     except ValueError:
-        fallback_start = 0
+        fallback_start = processed_items
     except LyrionRequestError:
         fallback_start = 0 if not use_batch else processed_items
     else:
@@ -262,7 +262,7 @@ async def iter_entity_rows(
             yield raw_item
 
 
-def normalize_lookup_ids(item_ids: list[str]) -> list[str]:
+def _normalize_lookup_ids(item_ids: list[str]) -> list[str]:
     """Deduplicate lookup ids while preserving stable order."""
     return list(dict.fromkeys(item_ids))
 
@@ -296,7 +296,7 @@ async def iter_decoded_entities(
     worker_count: int = 1,
 ) -> AsyncGenerator[DecodedEntityT]:
     """Yield decoded entities by combining pylyrion lookup with caller decode callback."""
-    ordered_ids = normalize_lookup_ids(item_ids)
+    ordered_ids = _normalize_lookup_ids(item_ids)
     if not ordered_ids:
         return
 
@@ -680,7 +680,6 @@ __all__ = [
     "get_simple_browse_page",
     "iter_decoded_entities",
     "iter_entity_rows",
-    "normalize_lookup_ids",
     "normalize_row",
     "search_entities",
 ]

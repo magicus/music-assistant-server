@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from pylyrion.library import ARTIST_SPEC, LyrionLibraryClient, normalize_lookup_ids
+from pylyrion.library import ARTIST_SPEC, LyrionLibraryClient, _normalize_lookup_ids
 from pylyrion.models import LyrionEndpoint
 from pylyrion.session import LyrionSession
 from tests.pylyrion.rpc_test_doubles import FakeResponse
@@ -115,7 +115,7 @@ async def test_library_client_playlist_tracks_and_entity_data() -> None:
 
 def test_normalize_lookup_ids_keeps_stable_order() -> None:
     """Lookup id normalization should deduplicate while preserving first-seen order."""
-    assert normalize_lookup_ids(["a", "a", "b", "a", "c"]) == ["a", "b", "c"]
+    assert _normalize_lookup_ids(["a", "a", "b", "a", "c"]) == ["a", "b", "c"]
 
 
 @pytest.mark.asyncio
@@ -142,3 +142,49 @@ async def test_library_client_iter_decoded_entities() -> None:
         )
     ]
     assert result == ["a1"]
+
+
+@pytest.mark.asyncio
+async def test_iter_entity_rows_incomplete_later_batch_no_replay() -> None:
+    """Fallback should resume from failed batch, not replay already-yielded rows."""
+
+    class _FakeSession:
+        def __init__(self) -> None:
+            self.calls: list[list[str]] = []
+            self.batch_calls = 0
+
+        async def request(self, _player_id: str, command: list[object]) -> dict[str, object]:
+            requested_ids = str(command[-1]).split(":", 1)[1].split(",")
+            self.calls.append(requested_ids)
+            if len(requested_ids) > 1:
+                self.batch_calls += 1
+                if self.batch_calls == 2:
+                    return {
+                        "albums_loop": [
+                            {"id": requested_ids[0], "album": requested_ids[0]},
+                        ]
+                    }
+            return {"albums_loop": [{"id": item_id, "album": item_id} for item_id in requested_ids]}
+
+    session = _FakeSession()
+    item_ids = [f"id{idx}" for idx in range(27)]
+
+    rows = [
+        row
+        async for row in LyrionLibraryClient(session).iter_entity_rows(
+            ARTIST_SPEC.__class__(
+                key="album",
+                command="albums",
+                loop_key="albums_loop",
+                tags="tags:abcdefghijklmnopqrstuvwxyz",
+                id_filter_key="album_id",
+                id_keys=("id", "album_id"),
+                supports_batch_lookup=True,
+            ),
+            item_ids,
+        )
+    ]
+
+    assert [row["id"] for row in rows] == item_ids
+    assert session.calls[:2] == [item_ids[:25], item_ids[25:]]
+    assert session.calls[2:] == [[item_id] for item_id in item_ids[25:]]

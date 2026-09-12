@@ -39,7 +39,6 @@ def _provider(
     provider.get_setup_value = Mock(side_effect=_get_setup_value)
     provider.get_configured_host = Mock(return_value=host)
     provider.get_configured_port = Mock(return_value=port)
-    provider._disabled_batch_lookup_keys = set()
     if rpc_handler is not None:
         transport = FakeRpcTransport(rpc_handler)
         provider.mass.http_session.post = Mock(side_effect=transport.post)
@@ -285,95 +284,6 @@ async def test_get_album_tracks_sorting_and_playlist_tracks(
 
     playlist_tracks = await client.get_playlist_tracks(provider, "pl1")
     assert len(playlist_tracks) == 1
-
-
-def test_count_and_lookup_helpers() -> None:
-    """Small helper functions should cover edge branches."""
-    assert client._format_lookup_progress(1, 0) == "progress: unknown"
-    assert client._format_lookup_progress(1, 1) == "single-item lookup"
-    assert "item 2/4" in client._format_lookup_progress(2, 4)
-
-
-async def test_iter_entity_rows_delegates_to_pylyrion_and_reports_progress(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Entity-row iteration should delegate to pylyrion and keep MA progress updates."""
-    provider = _provider()
-    captured_args: list[tuple[Any, list[str]]] = []
-
-    async def _iter_rows(spec: Any, ids: list[str]):
-        captured_args.append((spec, ids))
-        for item_id in ids:
-            yield {"id": item_id, "album": item_id}
-
-    library = SimpleNamespace(iter_entity_rows=_iter_rows)
-    monkeypatch.setattr(client, "_build_library_client", lambda _provider: library)
-
-    progress_calls: list[tuple[int, int, str | None]] = []
-
-    def _capture_progress(*, phase: str, current: int, total: int, text: str | None = None) -> None:
-        del phase
-        progress_calls.append((current, total, text))
-
-    monkeypatch.setattr(client, "_update_weighted_sync_progress", _capture_progress)
-
-    item_ids = ["id1", "id1", "id2"]
-
-    yielded = [row async for row in client._iter_entity_rows(provider, client.ALBUM_SPEC, item_ids)]
-
-    assert [item["id"] for item in yielded] == ["id1", "id2"]
-    assert captured_args == [(client.PY_ALBUM_SPEC, ["id1", "id2"])]
-    assert progress_calls[-1][0] == 2
-    assert progress_calls[-1][1] == 2
-
-
-async def test_batch_lookup_incomplete_batch_does_not_replay_prior_items(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Incomplete batch responses should only fall back from the first missing item onward."""
-    provider = _provider()
-    item_ids = [f"id{i}" for i in range(client.BATCH_LOOKUP_SIZE + 2)]
-    call_log: list[list[str]] = []
-    batch_calls = 0
-
-    async def _rpc_request(
-        _provider: Any,
-        player_id: str,
-        command: list[Any],
-        *,
-        timeout: int = 0,
-    ) -> dict[str, Any]:
-        del _provider, player_id, timeout
-        nonlocal batch_calls
-        requested_ids = str(command[-1]).split(":", 1)[1].split(",")
-        call_log.append(requested_ids)
-        if len(requested_ids) > 1:
-            batch_calls += 1
-            if batch_calls == 2:
-                return {
-                    client.ALBUM_SPEC.loop_key: [
-                        {"id": requested_ids[0], "album": requested_ids[0]}
-                    ]
-                }
-        return {
-            client.ALBUM_SPEC.loop_key: [
-                {"id": item_id, "album": item_id} for item_id in requested_ids
-            ]
-        }
-
-    monkeypatch.setattr(client, "rpc_request", _rpc_request)
-
-    yielded = [
-        raw_item
-        async for raw_item in client._iter_raw_entities(provider, client.ALBUM_SPEC, item_ids)
-    ]
-
-    assert [item["id"] for item in yielded] == item_ids
-    assert call_log[:2] == [
-        item_ids[: client.BATCH_LOOKUP_SIZE],
-        item_ids[client.BATCH_LOOKUP_SIZE :],
-    ]
-    assert call_log[2:] == [[item_id] for item_id in item_ids[client.BATCH_LOOKUP_SIZE :]]
 
 
 async def test_get_entity_data_and_iter_entities_fast_paths(

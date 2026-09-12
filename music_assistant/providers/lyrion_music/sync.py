@@ -19,8 +19,7 @@ from music_assistant.controllers.tasks import (
     update_current_task_progress_from_index,
     update_current_task_progress_text,
 )
-from pylyrion.library import normalize_lookup_ids
-from pylyrion.library_sync import LibrarySyncHooks, run_library_sync
+from pylyrion.library_sync import LibrarySyncHooks, LyrionLibrarySyncRunner
 
 from . import artwork, parsers
 
@@ -143,6 +142,8 @@ TRACK_SYNC_SPEC = SyncSpec(
     extra_needs_update=_track_needs_update,
     skip_if_new_and_unavailable=True,
 )
+
+PYLYRION_LIBRARY_SYNC = LyrionLibrarySyncRunner()
 
 
 async def sync_library_artists(provider: LyrionMusicProvider) -> set[int]:
@@ -325,7 +326,7 @@ async def _lookup_library_items_for_sync(
     if not provider_item_ids:
         return {}
 
-    unique_item_ids = normalize_lookup_ids(provider_item_ids)
+    unique_item_ids = _normalize_lookup_ids(provider_item_ids)
     result: dict[str, Any] = {}
     getter = getattr(controller, "get_library_items_by_prov_id", None)
     if getter is None:
@@ -490,4 +491,9 @@ async def _sync_library_entities(provider: LyrionMusicProvider, spec: SyncSpec) 
         handled_exceptions=(MediaNotFoundError, ProviderUnavailableError, ValueError),
     )
 
-    return await run_library_sync(hooks)
+    return await PYLYRION_LIBRARY_SYNC.run(hooks)
+
+
+def _normalize_lookup_ids(item_ids: list[str]) -> list[str]:
+    """Deduplicate lookup ids while preserving stable order."""
+    return list(dict.fromkeys(item_ids))

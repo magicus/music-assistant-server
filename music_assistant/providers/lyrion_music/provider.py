@@ -47,7 +47,6 @@ from .constants import ACTION_RESCAN_ARTWORK, BROWSE_PAGE_SIZE, CONF_LMS_PASSWOR
 class LyrionMusicProvider(MusicProvider):
     """Music provider that reads catalog metadata from a Lyrion/LMS server."""
 
-    _disabled_batch_lookup_keys: set[str]
     _unsubscribe_music_sync_completed: Callable[[], None] | None
 
     @property
@@ -116,7 +115,6 @@ class LyrionMusicProvider(MusicProvider):
 
     async def handle_async_init(self) -> None:
         """Validate the configured Lyrion endpoint."""
-        self._disabled_batch_lookup_keys = set()
         self._unsubscribe_music_sync_completed = None
         host = self.get_configured_host()
         port = self.get_configured_port()

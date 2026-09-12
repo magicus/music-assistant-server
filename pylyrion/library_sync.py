@@ -30,7 +30,15 @@ class LibrarySyncHooks:
     handled_exceptions: tuple[type[Exception], ...] = ()
 
 
-async def run_library_sync(hooks: LibrarySyncHooks) -> set[int]:
+class LyrionLibrarySyncRunner:
+    """Run generic library sync flows from configured callback hooks."""
+
+    async def run(self, hooks: LibrarySyncHooks) -> set[int]:
+        """Run one generic library sync pass using callback hooks."""
+        return await _run_library_sync(hooks)
+
+
+async def _run_library_sync(hooks: LibrarySyncHooks) -> set[int]:
     """Run a generic library sync pass using callback hooks."""
     if not hooks.handled_exceptions:
         raise ValueError("LibrarySyncHooks.handled_exceptions may not be empty")
