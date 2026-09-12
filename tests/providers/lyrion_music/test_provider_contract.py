@@ -10,6 +10,7 @@ from music_assistant_models.enums import MediaType
 from music_assistant_models.errors import MediaNotFoundError
 from music_assistant_models.media_items import BrowseFolder
 
+from music_assistant.providers.lyrion_music import browse as lyrion_browse
 from music_assistant.providers.lyrion_music import client as lyrion_client
 from music_assistant.providers.lyrion_music import provider as lyrion_provider_mod
 from music_assistant.providers.lyrion_music import sync as lyrion_sync_mod
@@ -270,7 +271,7 @@ async def test_browse_artist_pagination_navigation_tokens(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Artist browse should emit Next/Previous page folders when paginated."""
-    monkeypatch.setattr(lyrion_provider_mod, "BROWSE_PAGE_SIZE", 2)
+    monkeypatch.setattr(lyrion_browse, "BROWSE_PAGE_SIZE", 2)
 
     original_get_artists_page = lyrion_client.get_artists_page
 
@@ -305,7 +306,7 @@ async def test_browse_tracks_root_pagination_and_invalid_page_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Tracks browse should support paging tokens and reject invalid track-level tokens."""
-    monkeypatch.setattr(lyrion_provider_mod, "BROWSE_PAGE_SIZE", 2)
+    monkeypatch.setattr(lyrion_browse, "BROWSE_PAGE_SIZE", 2)
 
     original_get_tracks_page = lyrion_client.get_tracks_page
 
