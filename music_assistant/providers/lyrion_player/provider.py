@@ -279,11 +279,11 @@ class LyrionPlayerProvider(PlayerProvider):
 
     def get_last_status_seen_at(self, player_id: str) -> float | None:
         """Return the last status-stream timestamp for one player."""
-        return self.lyrion_server.get_last_status_seen_at(player_id)
+        return self.lyrion_server._get_last_status_seen_at(player_id)
 
     def get_cached_status(self, player_id: str) -> dict[str, Any] | None:
         """Return cached status snapshot for one player."""
-        return self.lyrion_server.get_cached_status(player_id)
+        return self.lyrion_server._get_cached_status(player_id)
 
     async def wait_for_status_update(
         self,
@@ -306,7 +306,7 @@ class LyrionPlayerProvider(PlayerProvider):
         expected_state: str = "status update",
     ) -> bool:
         """Verify expected status via stream events and fallback polling."""
-        return await self.lyrion_server.verify_status_expectation(
+        return await self.lyrion_server._verify_status_expectation(
             player_id,
             baseline,
             expectation,

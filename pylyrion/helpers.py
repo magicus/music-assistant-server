@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
-from typing import Any, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
 from pylyrion import artwork, media_parsers
 from pylyrion.media_items import (
@@ -15,6 +15,165 @@ from pylyrion.media_items import (
 )
 
 ArtworkItem = TypeVar("ArtworkItem")
+
+if TYPE_CHECKING:
+    from pylyrion.server_control import LyrionServerControl
+
+
+class LyrionPlayerControl:
+    """Thin per-player control facade bound to one LMS player id."""
+
+    def __init__(self, server_control: LyrionServerControl, player_id: str) -> None:
+        """Store the parent server control and the target player id."""
+        self._server_control = server_control
+        self.player_id = player_id
+
+    async def get_status(self) -> dict[str, Any]:
+        """Return the current status payload for this player."""
+        return await self._server_control.get_player_status(self.player_id)
+
+    def get_last_status_seen_at(self) -> float | None:
+        """Return the last status timestamp for this player."""
+        return self._server_control._get_last_status_seen_at(self.player_id)
+
+    def get_cached_status(self) -> dict[str, Any] | None:
+        """Return the cached status snapshot for this player."""
+        return self._server_control._get_cached_status(self.player_id)
+
+    async def verify_status_expectation(
+        self,
+        baseline: float | None,
+        expectation: Callable[[dict[str, Any]], bool] | None = None,
+        expected_state: str = "status update",
+    ) -> bool:
+        """Verify expected status for this player via the status stream."""
+        return await self._server_control._verify_status_expectation(
+            self.player_id,
+            baseline,
+            expectation,
+            expected_state,
+        )
+
+    async def play(self) -> dict[str, Any]:
+        """Resume playback for this player."""
+        return await self._server_control.play_player(self.player_id)
+
+    async def pause(self) -> dict[str, Any]:
+        """Pause playback for this player."""
+        return await self._server_control.pause_player(self.player_id)
+
+    async def stop(self) -> dict[str, Any]:
+        """Stop playback for this player."""
+        return await self._server_control.stop_player(self.player_id)
+
+    async def set_power(self, powered: bool) -> None:
+        """Set power state for this player."""
+        await self._server_control.player_set_power(self.player_id, powered)
+
+    async def set_volume(self, volume_level: int) -> dict[str, Any]:
+        """Set volume for this player."""
+        return await self._server_control.set_player_volume(self.player_id, volume_level)
+
+    async def set_muted(self, muted: bool) -> dict[str, Any]:
+        """Set mute state for this player."""
+        return await self._server_control.set_player_muted(self.player_id, muted)
+
+    async def next_track(self) -> dict[str, Any]:
+        """Skip to the next queue entry."""
+        return await self._server_control.next_player_track(self.player_id)
+
+    async def previous_track(self) -> dict[str, Any]:
+        """Skip to the previous queue entry."""
+        return await self._server_control.previous_player_track(self.player_id)
+
+    async def seek(self, position: int) -> dict[str, Any]:
+        """Seek this player to the target playback position."""
+        return await self._server_control.seek_player(self.player_id, position)
+
+    async def sync_to(self, leader_player_id: str) -> dict[str, Any]:
+        """Sync this player to a leader player."""
+        return await self._server_control.sync_player_to(self.player_id, leader_player_id)
+
+    async def unsync(self) -> dict[str, Any]:
+        """Remove this player from its sync group."""
+        return await self._server_control.unsync_player(self.player_id)
+
+    async def get_queue_status(self, *, offset: int = 0, limit: int) -> dict[str, Any]:
+        """Return queue info for this player."""
+        return await self._server_control.get_player_queue_status(
+            self.player_id,
+            offset=offset,
+            limit=limit,
+        )
+
+    async def set_queue_index(self, index: int | str) -> dict[str, Any]:
+        """Set the active queue index for this player."""
+        return await self._server_control.set_player_queue_index(self.player_id, index)
+
+    async def set_sync_volume(self, enabled: bool) -> dict[str, Any]:
+        """Enable or disable sync volume for this player."""
+        return await self._server_control.set_player_sync_volume(self.player_id, enabled)
+
+    async def set_repeat_mode(self, repeat_mode: int) -> dict[str, Any]:
+        """Set repeat mode for this player."""
+        return await self._server_control.set_player_repeat_mode(self.player_id, repeat_mode)
+
+    async def set_shuffle_mode(self, shuffle_mode: int) -> dict[str, Any]:
+        """Set shuffle mode for this player."""
+        return await self._server_control.set_player_shuffle_mode(self.player_id, shuffle_mode)
+
+    async def clear_queue(self) -> dict[str, Any]:
+        """Clear the queue for this player."""
+        return await self._server_control.clear_player_queue(self.player_id)
+
+    async def add_track_id_to_queue(
+        self,
+        track_id: str,
+        *,
+        command: str = "add",
+    ) -> dict[str, Any]:
+        """Add or load one track id to this player's queue."""
+        return await self._server_control.add_player_track_id_to_queue(
+            self.player_id,
+            track_id,
+            command=command,
+        )
+
+    async def add_url_to_queue(
+        self,
+        url: str,
+        title: str | None = None,
+        artist: str | None = None,
+        album: str | None = None,
+    ) -> dict[str, Any]:
+        """Queue one URL for this player."""
+        return await self._server_control.add_player_url_to_queue(
+            self.player_id,
+            url,
+            title=title,
+            artist=artist,
+            album=album,
+        )
+
+    async def play_url(self, url: str) -> dict[str, Any]:
+        """Play one URL immediately on this player."""
+        return await self._server_control.play_player_url(self.player_id, url)
+
+    async def append_url(self, url: str) -> dict[str, Any]:
+        """Append one URL to this player's queue."""
+        return await self._server_control.append_player_url(self.player_id, url)
+
+    async def move_queue_item(self, from_index: int, to_index: int) -> dict[str, Any]:
+        """Move one queue item in this player's queue."""
+        return await self._server_control.move_player_queue_item(
+            self.player_id,
+            from_index,
+            to_index,
+        )
+
+    async def delete_queue_item(self, index: int) -> dict[str, Any]:
+        """Delete one queue item from this player's queue."""
+        return await self._server_control.delete_player_queue_item(self.player_id, index)
 
 
 class LyrionMediaParserFacade:
@@ -211,4 +370,5 @@ class LyrionArtworkFacade:
 __all__ = [
     "LyrionArtworkFacade",
     "LyrionMediaParserFacade",
+    "LyrionPlayerControl",
 ]

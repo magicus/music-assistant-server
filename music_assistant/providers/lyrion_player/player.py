@@ -61,6 +61,7 @@ class LyrionPlayer(Player):
         self._attr_available = True
         self._attr_can_group_with = {provider.instance_id}
         self.lyrion_server = provider.lyrion_server
+        self.player_control = self.lyrion_server.get_player_control(player_id)
         self._queue_sync = LyrionQueueSync(self)
         self._on_unload_callbacks.append(
             self.mass.subscribe(
@@ -114,7 +115,7 @@ class LyrionPlayer(Player):
 
         :param media: The media item to play.
         """
-        baseline = self.lyrion_server.get_last_status_seen_at(self.player_id)
+        baseline = self.player_control.get_last_status_seen_at()
         try:
             await self._play_or_enqueue_media(media, command="load")
         except ProviderUnavailableError as err:
@@ -135,7 +136,7 @@ class LyrionPlayer(Player):
 
         :param media: The media item to enqueue.
         """
-        baseline = self.lyrion_server.get_last_status_seen_at(self.player_id)
+        baseline = self.player_control.get_last_status_seen_at()
         try:
             await self._play_or_enqueue_media(media, command="add")
         except ProviderUnavailableError as err:
@@ -145,7 +146,7 @@ class LyrionPlayer(Player):
     async def play(self) -> None:
         """Resume playback."""
         try:
-            await self.lyrion_server.player_play(self.player_id)
+            await self.player_control.play()
         except ProviderUnavailableError as err:
             raise PlayerCommandFailed(f"play failed: {err}") from err
         self._attr_playback_state = PlaybackState.PLAYING
@@ -154,7 +155,7 @@ class LyrionPlayer(Player):
     async def pause(self) -> None:
         """Pause playback."""
         try:
-            await self.lyrion_server.player_pause(self.player_id)
+            await self.player_control.pause()
         except ProviderUnavailableError as err:
             raise PlayerCommandFailed(f"pause failed: {err}") from err
         self._attr_playback_state = PlaybackState.PAUSED
@@ -163,7 +164,7 @@ class LyrionPlayer(Player):
     async def stop(self) -> None:
         """Stop playback."""
         try:
-            await self.lyrion_server.player_stop(self.player_id)
+            await self.player_control.stop()
         except ProviderUnavailableError as err:
             raise PlayerCommandFailed(f"stop failed: {err}") from err
         self._attr_playback_state = PlaybackState.IDLE
@@ -177,7 +178,7 @@ class LyrionPlayer(Player):
         :param powered: True to power on, False to power off.
         """
         try:
-            await self.lyrion_server.player_set_power(self.player_id, powered)
+            await self.player_control.set_power(powered)
         except ProviderUnavailableError as err:
             raise PlayerCommandFailed(f"power failed: {err}") from err
         self._attr_powered = powered
@@ -191,7 +192,7 @@ class LyrionPlayer(Player):
         """
         try:
             await self._ensure_sync_volume_disabled()
-            await self.lyrion_server.player_set_volume(self.player_id, volume_level)
+            await self.player_control.set_volume(volume_level)
         except ProviderUnavailableError as err:
             raise PlayerCommandFailed(f"volume_set failed: {err}") from err
         self._attr_volume_level = max(0, min(100, volume_level))
@@ -201,7 +202,7 @@ class LyrionPlayer(Player):
         """Mute or unmute playback volume."""
         try:
             await self._ensure_sync_volume_disabled()
-            await self.lyrion_server.player_set_muted(self.player_id, muted)
+            await self.player_control.set_muted(muted)
         except ProviderUnavailableError as err:
             raise PlayerCommandFailed(f"volume_mute failed: {err}") from err
         self._attr_volume_muted = muted
@@ -210,14 +211,14 @@ class LyrionPlayer(Player):
     async def next_track(self) -> None:
         """Skip to the next track on the active LMS queue/source."""
         try:
-            await self.lyrion_server.player_next_track(self.player_id)
+            await self.player_control.next_track()
         except ProviderUnavailableError as err:
             raise PlayerCommandFailed(f"next_track failed: {err}") from err
 
     async def previous_track(self) -> None:
         """Skip to the previous track on the active LMS queue/source."""
         try:
-            await self.lyrion_server.player_previous_track(self.player_id)
+            await self.player_control.previous_track()
         except ProviderUnavailableError as err:
             raise PlayerCommandFailed(f"previous_track failed: {err}") from err
 
@@ -225,7 +226,7 @@ class LyrionPlayer(Player):
         """Seek playback position in seconds on the active source."""
         target = max(0, int(position))
         try:
-            await self.lyrion_server.player_seek(self.player_id, target)
+            await self.player_control.seek(target)
         except ProviderUnavailableError as err:
             raise PlayerCommandFailed(f"seek failed: {err}") from err
         self._attr_elapsed_time = float(target)
@@ -238,7 +239,7 @@ class LyrionPlayer(Player):
         player_ids_to_remove: list[str] | None = None,
     ) -> None:
         """Apply member changes through LMS native sync commands."""
-        baseline = self.lyrion_server.get_last_status_seen_at(self.player_id)
+        baseline = self.player_control.get_last_status_seen_at()
         if self.synced_to:
             raise InvalidCommand("Player is synced, cannot set members")
         if not player_ids_to_add and not player_ids_to_remove:
@@ -253,14 +254,14 @@ class LyrionPlayer(Player):
                     continue
                 if member_id not in current_members:
                     continue
-                await self.lyrion_server.unsync_player(member_id)
+                await self.lyrion_server.get_player_control(member_id).unsync()
                 touched_members.add(member_id)
                 current_members.pop(member_id, None)
 
             for member_id in dict.fromkeys(player_ids_to_add or []):
                 if member_id == self.player_id or member_id in current_members:
                     continue
-                await self.lyrion_server.sync_player_to(member_id, self.player_id)
+                await self.lyrion_server.get_player_control(member_id).sync_to(self.player_id)
                 touched_members.add(member_id)
                 current_members[member_id] = None
         except ProviderUnavailableError as err:
@@ -300,7 +301,7 @@ class LyrionPlayer(Player):
         expected_state: str = "status update",
     ) -> None:
         """Wait for expected status and poll LMS retries if stream events stay silent."""
-        await self.lyrion_server.verify_status_expectation(
+        await self.lyrion_server._verify_status_expectation(
             self.player_id,
             baseline,
             expectation=expectation,
@@ -323,9 +324,9 @@ class LyrionPlayer(Player):
             media,
         )
         if command == "load":
-            await self.lyrion_server.play_player_url(self.player_id, stream_url)
+            await self.player_control.play_url(stream_url)
             return
-        await self.lyrion_server.append_player_url(self.player_id, stream_url)
+        await self.player_control.append_url(stream_url)
 
     async def _try_play_lyrion_track_id(
         self,
@@ -343,14 +344,13 @@ class LyrionPlayer(Player):
             return False
 
         try:
-            await self.lyrion_server.add_player_track_id_to_queue(
-                self.player_id,
+            await self.player_control.add_track_id_to_queue(
                 lms_entry.value,
                 command=command,
             )
             if command == "load":
                 # Ensure play_media always starts transport immediately.
-                await self.lyrion_server.play_player(self.player_id)
+                await self.player_control.play()
         except ProviderUnavailableError as err:
             self.logger.warning(
                 "Native LMS queue %s failed for track_id %s, fall back to URL: %s",

@@ -222,18 +222,24 @@ class LyrionServerControl:
         """Send one raw command to a player."""
         return await self._run_player_call(lambda: self._players.send_command(player_id, command))
 
-    def get_last_status_seen_at(self, player_id: str) -> float | None:
+    def _get_last_status_seen_at(self, player_id: str) -> float | None:
         """Return timestamp of last status update for one player."""
         return self._status_stream.get_last_player_status_seen_at(player_id)
 
-    def get_cached_status(self, player_id: str) -> dict[str, Any] | None:
+    def _get_cached_status(self, player_id: str) -> dict[str, Any] | None:
         """Return cached status snapshot for one player."""
         snapshot = self._status_stream.get_player_status_snapshot(player_id)
         if snapshot is None:
             return None
         return dict(snapshot)
 
-    async def verify_status_expectation(
+    def get_player_control(self, player_id: str):
+        """Return a thin per-player facade for one LMS player."""
+        from pylyrion.helpers import LyrionPlayerControl
+
+        return LyrionPlayerControl(self, player_id)
+
+    async def _verify_status_expectation(
         self,
         player_id: str,
         baseline: float | None,
@@ -401,9 +407,9 @@ class LyrionServerControl:
         expected_state: str = "status update",
     ) -> None:
         """Run one player command and verify status expectation."""
-        baseline = self.get_last_status_seen_at(player_id)
+        baseline = self._get_last_status_seen_at(player_id)
         await command()
-        await self.verify_status_expectation(
+        await self._verify_status_expectation(
             player_id,
             baseline,
             expectation=expectation,

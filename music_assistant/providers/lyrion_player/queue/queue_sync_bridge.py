@@ -309,7 +309,7 @@ class LyrionQueueSyncBridge:
     ) -> None:
         """Rebuild LMS queue from the given index onward."""
         if rebuild_from_index <= 0:
-            await self.player.lyrion_server.clear_player_queue(self.player.player_id)
+            await self.player.player_control.clear_queue()
             for entry in source_entries:
                 await self._append_lms_entry(entry)
             return
@@ -345,27 +345,17 @@ class LyrionQueueSyncBridge:
     async def _append_lms_entry(self, entry: _LmsMirrorEntry) -> None:
         """Append one queue entry on LMS."""
         if entry.kind == "track_id":
-            await self.player.lyrion_server.add_player_track_id_to_queue(
-                self.player.player_id,
-                entry.value,
-            )
+            await self.player.player_control.add_track_id_to_queue(entry.value)
             return
         await self._add_url_entry_to_lms(entry)
 
     async def _move_lms_index(self, from_index: int, to_index: int) -> None:
         """Move one LMS queue entry by index."""
-        await self.player.lyrion_server.move_player_queue_item(
-            self.player.player_id,
-            from_index,
-            to_index,
-        )
+        await self.player.player_control.move_queue_item(from_index, to_index)
 
     async def _delete_lms_index(self, index: int) -> None:
         """Delete one LMS queue entry by index."""
-        await self.player.lyrion_server.delete_player_queue_item(
-            self.player.player_id,
-            index,
-        )
+        await self.player.player_control.delete_queue_item(index)
 
     @staticmethod
     def _entries_signature(
@@ -431,8 +421,7 @@ class LyrionQueueSyncBridge:
 
     async def _add_url_entry_to_lms(self, entry: _LmsMirrorEntry) -> None:
         """Add one URL entry to LMS with optional display metadata."""
-        await self.player.lyrion_server.add_player_url_to_queue(
-            self.player.player_id,
+        await self.player.player_control.add_url_to_queue(
             entry.value,
             title=entry.title,
             artist=entry.artist,
