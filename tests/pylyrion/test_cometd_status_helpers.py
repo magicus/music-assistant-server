@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from aiohttp import ClientError
-from pylyrion.errors import LyrionRequestError
 
 from pylyrion.cometd.helpers import (
     _extract_current_track_id,
@@ -20,7 +19,8 @@ from pylyrion.cometd.helpers import (
     _is_invalid_player_payload,
     _same_active_track,
 )
-from tests.pylyrion.cometd_test_helpers import LyrionCometDEventStream
+from pylyrion.errors import LyrionRequestError
+from tests.pylyrion.cometd_test_helpers import LyrionCometDTestStream
 
 
 async def _noop_event_callback(_event: object) -> None:
@@ -57,26 +57,22 @@ class _FakeResponse:
         return self._payload
 
 
-def _build_provider(
+def _build_runtime_context(
     host: str | None = "127.0.0.1",
     port: int | None = 9000,
 ) -> Any:
-    """Create provider stub with configurable endpoint and HTTP transport."""
-    provider = SimpleNamespace()
-    provider.instance_id = "lyrion_player.test"
-    provider.unloading = False
-    provider.logger = MagicMock()
-    provider.players = []
-    provider.mass = SimpleNamespace(
-        create_task=AsyncMock(),
-        http_session=SimpleNamespace(post=MagicMock()),
-        players=SimpleNamespace(get_player=lambda _player_id: None),
-    )
-    provider.get_configured_host = MagicMock(return_value=host)
-    provider.get_configured_port = MagicMock(return_value=port)
-    provider.get_player_status = AsyncMock(return_value={})
-    provider.schedule_players_discovery = MagicMock()
-    return provider
+    """Create runtime context stub with configurable endpoint and transport."""
+    runtime_context = SimpleNamespace()
+    runtime_context.instance_id = "lyrion_player.test"
+    runtime_context.unloading = False
+    runtime_context.logger = MagicMock()
+    runtime_context.players = []
+    runtime_context.http_session = SimpleNamespace(post=MagicMock())
+    runtime_context.get_configured_host = MagicMock(return_value=host)
+    runtime_context.get_configured_port = MagicMock(return_value=port)
+    runtime_context.get_player_status = AsyncMock(return_value={})
+    runtime_context.schedule_players_discovery = MagicMock()
+    return runtime_context
 
 
 def test_status_helpers_parse_payloads_safely() -> None:
@@ -134,17 +130,17 @@ def test_extract_server_player_ids_and_invalid_payload_detection() -> None:
 @pytest.mark.asyncio
 async def test_post_rejects_missing_endpoint_configuration() -> None:
     """CometD POST should fail fast when host/port is not configured."""
-    provider_no_host = _build_provider(host=None, port=9000)
-    stream = LyrionCometDEventStream(
-        cast("Any", provider_no_host),
+    context_no_host = _build_runtime_context(host=None, port=9000)
+    stream = LyrionCometDTestStream(
+        cast("Any", context_no_host),
         _noop_event_callback,
     )
     with pytest.raises(LyrionRequestError, match="host"):
         await stream._post([], timeout=1)
 
-    provider_no_port = _build_provider(host="127.0.0.1", port=None)
-    stream = LyrionCometDEventStream(
-        cast("Any", provider_no_port),
+    context_no_port = _build_runtime_context(host="127.0.0.1", port=None)
+    stream = LyrionCometDTestStream(
+        cast("Any", context_no_port),
         _noop_event_callback,
     )
     with pytest.raises(LyrionRequestError, match="port"):
@@ -154,17 +150,17 @@ async def test_post_rejects_missing_endpoint_configuration() -> None:
 @pytest.mark.asyncio
 async def test_post_normalizes_dict_and_list_payloads() -> None:
     """CometD POST should normalize payloads and filter dict entries."""
-    provider = _build_provider()
-    provider.mass.http_session.post.return_value = _FakeResponse({"channel": "/ok"})
-    stream = LyrionCometDEventStream(
-        cast("Any", provider),
+    runtime_context = _build_runtime_context()
+    runtime_context.http_session.post.return_value = _FakeResponse({"channel": "/ok"})
+    stream = LyrionCometDTestStream(
+        cast("Any", runtime_context),
         _noop_event_callback,
     )
 
     result = await stream._post([{"id": "1"}], timeout=1)
     assert result == [{"channel": "/ok"}]
 
-    provider.mass.http_session.post.return_value = _FakeResponse([{"a": 1}, "skip", {"b": 2}])
+    runtime_context.http_session.post.return_value = _FakeResponse([{"a": 1}, "skip", {"b": 2}])
     result = await stream._post([{"id": "2"}], timeout=1)
     assert result == [{"a": 1}, {"b": 2}]
 
@@ -172,17 +168,17 @@ async def test_post_normalizes_dict_and_list_payloads() -> None:
 @pytest.mark.asyncio
 async def test_post_wraps_transport_and_payload_errors() -> None:
     """CometD POST should wrap transport and payload failures."""
-    provider = _build_provider()
-    provider.mass.http_session.post.return_value = _FakeResponse(
+    runtime_context = _build_runtime_context()
+    runtime_context.http_session.post.return_value = _FakeResponse(
         {}, raise_error=ClientError("http-fail")
     )
-    stream = LyrionCometDEventStream(
-        cast("Any", provider),
+    stream = LyrionCometDTestStream(
+        cast("Any", runtime_context),
         _noop_event_callback,
     )
     with pytest.raises(LyrionRequestError):
         await stream._post([{"id": "1"}], timeout=1)
 
-    provider.mass.http_session.post.return_value = _FakeResponse("invalid")
+    runtime_context.http_session.post.return_value = _FakeResponse("invalid")
     with pytest.raises(LyrionRequestError, match="JSON object or list"):
         await stream._post([{"id": "2"}], timeout=1)

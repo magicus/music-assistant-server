@@ -10,7 +10,7 @@ import pytest
 from pylyrion.library import ARTIST_SPEC, LyrionLibraryClient, normalize_lookup_ids
 from pylyrion.models import LyrionEndpoint
 from pylyrion.session import LyrionSession
-from tests.providers.lyrion.rpc_test_doubles import FakeResponse
+from tests.pylyrion.rpc_test_doubles import FakeResponse
 
 
 def _build_library_client(body: dict[str, object]) -> LyrionLibraryClient:

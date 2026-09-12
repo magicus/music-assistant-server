@@ -11,7 +11,7 @@ from pylyrion.client import LyrionClient
 from pylyrion.models import LyrionEndpoint
 from pylyrion.player import LyrionPlayerClient
 from pylyrion.session import LyrionSession
-from tests.providers.lyrion.rpc_test_doubles import FakeResponse
+from tests.pylyrion.rpc_test_doubles import FakeResponse
 
 
 def _build_player_client() -> LyrionPlayerClient:

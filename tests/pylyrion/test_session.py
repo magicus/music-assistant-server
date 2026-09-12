@@ -20,7 +20,7 @@ from pylyrion.session import (
     build_lms_url,
     normalize_lms_text_value,
 )
-from tests.providers.lyrion.rpc_test_doubles import FakeResponse
+from tests.pylyrion.rpc_test_doubles import FakeResponse
 
 
 def _build_session(host: Any = "127.0.0.1", port: Any = 9000) -> LyrionSession:
