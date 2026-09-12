@@ -8,16 +8,24 @@ from music_assistant_models.enums import PlaybackState, QueueOption, RepeatMode
 from music_assistant_models.errors import ProviderUnavailableError
 
 from music_assistant.providers.lyrion_player.constants import MAX_SYNC_QUEUE_ITEMS
-from music_assistant.providers.lyrion_player.media_mapper import LmsQueueEntry
+from music_assistant.providers.lyrion_player.helpers.queue import QueueSyncEngine, QueueSyncInput
+from music_assistant.providers.lyrion_player.media_mapper import LmsQueueEntry, LyrionMediaMapper
 
 from .queue_models import _LmsMirrorEntry, _LmsQueueSnapshot, _MaQueueSnapshot
 
 if TYPE_CHECKING:
     from music_assistant_models.queue_item import QueueItem
 
+    from music_assistant.providers.lyrion_player.player import LyrionPlayer
+
 
 class LyrionQueueSyncBridge:
     """Protocol-specific queue IO/parsing/mutation helpers for Lyrion."""
+
+    player: LyrionPlayer
+    _lms_model: _LmsQueueSnapshot | None
+    _media_mapper: LyrionMediaMapper
+    _sync_engine: QueueSyncEngine[_LmsMirrorEntry]
 
     async def resolve_ma_uri_to_lms_entry(self, uri: str) -> LmsQueueEntry | None:
         """Resolve one MA URI to LMS-native queue identity when available."""
@@ -53,8 +61,6 @@ class LyrionQueueSyncBridge:
         lms_snapshot: _LmsQueueSnapshot,
     ) -> None:
         """Apply queue item sync from MA source to LMS target."""
-        from music_assistant.providers.lyrion_player.helpers.queue import QueueSyncInput
-
         await self._sync_engine.apply(
             QueueSyncInput(
                 source_entries=ma_snapshot.entries,

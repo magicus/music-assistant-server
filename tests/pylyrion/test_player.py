@@ -41,10 +41,7 @@ async def test_player_client_get_status() -> None:
 
 @pytest.mark.asyncio
 async def test_high_level_client_exposes_player_control() -> None:
-    """
-    The high-level client should expose player helpers through one facade.
-
-    """
+    """The high-level client should expose player helpers through one facade."""
     transport = SimpleNamespace(
         post=MagicMock(return_value=FakeResponse({"result": {"mode": "stop"}}))
     )
@@ -58,7 +55,7 @@ async def test_high_level_client_exposes_player_control() -> None:
 
 
 @pytest.mark.asyncio
-async def test_player_client_transport_methods_dispatch_expected_commands() -> None:
+async def test_player_client_transport_methods_dispatch_expected_commands() -> None:  # noqa: PLR0915
     """High-level transport helpers should dispatch LMS-native command payloads."""
     transport = SimpleNamespace(post=MagicMock(return_value=FakeResponse({"result": {"ok": True}})))
     session = LyrionSession(

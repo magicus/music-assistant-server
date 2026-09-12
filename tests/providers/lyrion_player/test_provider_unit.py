@@ -287,7 +287,9 @@ async def test_provider_status_wrapper_methods_delegate_to_stream() -> None:
     assert await provider.wait_for_status_update("p1", since=0.5, timeout=2)
     provider._status_stream.wait_for_player_status_update.assert_awaited_once_with("p1", 0.5, 2)
 
-    expectation = lambda status: status.get("mode") == "play"
+    def expectation(status: dict[str, object]) -> bool:
+        return status.get("mode") == "play"
+
     assert await provider.verify_status_expectation(
         "p1",
         baseline=1.0,
@@ -471,7 +473,7 @@ async def test_get_player_status_uses_pylyrion_client() -> None:
 
 
 @pytest.mark.asyncio
-async def test_transport_adapter_methods_use_pylyrion_client() -> None:
+async def test_transport_adapter_methods_use_pylyrion_client() -> None:  # noqa: PLR0915
     """Transport adapter helpers should delegate play/pause/stop/power through pylyrion."""
     provider = _build_provider_stub()
     player_client = AsyncMock()

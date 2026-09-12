@@ -127,7 +127,7 @@ async def test_sync_batches_lookup_for_extra_metadata_checks() -> None:
     seen: list[list[str]] = []
 
     async def fake_get_library_items_by_prov_id(
-        provider_instance: str | None = None,
+        _provider_instance: str | None = None,
         provider_item_ids: list[str] | None = None,
         **_: Any,
     ) -> list[Any]:
@@ -151,7 +151,7 @@ async def test_get_playlist_tracks_respects_page_offset(
     captured: dict[str, Any] = {}
 
     async def fake_get_playlist_tracks_page(
-        provider: LyrionMusicProvider,
+        _provider: LyrionMusicProvider,
         playlist_id: str,
         offset: int = 0,
         limit: int = 25,

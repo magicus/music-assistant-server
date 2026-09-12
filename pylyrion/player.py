@@ -13,6 +13,7 @@ class LyrionPlayerClient:
     """Expose player control and status operations."""
 
     def __init__(self, session: LyrionSession) -> None:
+        """Initialize player API wrapper with a transport session."""
         self._session = session
 
     async def get_status(self, player_id: str) -> dict[str, object]:

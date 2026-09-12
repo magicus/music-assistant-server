@@ -397,6 +397,76 @@ class LyrionPlayerProvider(PlayerProvider):
         """
         self._apply_status_update(player, status)
 
+    def get_last_status_seen_at(self, player_id: str) -> float | None:
+        """Return the last status-stream timestamp for one player."""
+        return self.lyrion_server.get_last_status_seen_at(player_id)
+
+    def get_cached_status(self, player_id: str) -> dict[str, Any] | None:
+        """Return cached status snapshot for one player."""
+        return self.lyrion_server.get_cached_status(player_id)
+
+    async def wait_for_status_update(
+        self,
+        player_id: str,
+        since: float | None,
+        timeout: float = COMETD_COMMAND_STATUS_VERIFY_TIMEOUT,
+    ) -> bool:
+        """Wait for a newer status update for one player."""
+        return await self._status_stream.wait_for_player_status_update(
+            player_id,
+            since,
+            timeout,
+        )
+
+    async def verify_status_expectation(
+        self,
+        player_id: str,
+        baseline: float | None,
+        expectation: Callable[[dict[str, Any]], bool] | None = None,
+        expected_state: str = "status update",
+    ) -> bool:
+        """Verify expected status via stream events and fallback polling."""
+        return await self.lyrion_server.verify_status_expectation(
+            player_id,
+            baseline,
+            expectation,
+            expected_state,
+        )
+
+    async def send_player_command(
+        self,
+        player_id: str,
+        command: list[Any],
+    ) -> dict[str, Any]:
+        """
+        Send a command to a specific player.
+
+        :param player_id: LMS player id.
+        :param command: LMS command list.
+        """
+        return await self.lyrion_server.send_player_command(player_id, command)
+
+    def get_configured_host(self) -> str | None:
+        """Return configured host from setup data."""
+        raw_host = self.get_setup_value(CONF_LMS_HOST)
+        if not isinstance(raw_host, str):
+            return None
+        host = raw_host.strip()
+        return host or None
+
+    def get_configured_port(
+        self,
+        default: int | None = DEFAULT_LMS_PORT,
+    ) -> int | None:
+        """Return configured port from setup data."""
+        raw_port = self.get_setup_value(CONF_LMS_PORT, default)
+        if raw_port is None:
+            return None
+        try:
+            return int(cast("int | str", raw_port))
+        except TypeError, ValueError:
+            return default
+
     async def _handle_status_event(self, event: NormalizedPlayerStatusEvent) -> None:
         """Apply one normalized player-status event from pylyrion."""
         player = self.mass.players.get_player(event.player_id)
@@ -526,76 +596,6 @@ class LyrionPlayerProvider(PlayerProvider):
             if related_player := self.mass.players.get_player(related_id):
                 related_player.update_state()
 
-    def get_last_status_seen_at(self, player_id: str) -> float | None:
-        """Return the last status-stream timestamp for one player."""
-        return self.lyrion_server.get_last_status_seen_at(player_id)
-
-    def get_cached_status(self, player_id: str) -> dict[str, Any] | None:
-        """Return cached status snapshot for one player."""
-        return self.lyrion_server.get_cached_status(player_id)
-
-    async def wait_for_status_update(
-        self,
-        player_id: str,
-        since: float | None,
-        timeout: float = COMETD_COMMAND_STATUS_VERIFY_TIMEOUT,
-    ) -> bool:
-        """Wait for a newer status update for one player."""
-        return await self._status_stream.wait_for_player_status_update(
-            player_id,
-            since,
-            timeout,
-        )
-
-    async def verify_status_expectation(
-        self,
-        player_id: str,
-        baseline: float | None,
-        expectation: Callable[[dict[str, Any]], bool] | None = None,
-        expected_state: str = "status update",
-    ) -> bool:
-        """Verify expected status via stream events and fallback polling."""
-        return await self.lyrion_server.verify_status_expectation(
-            player_id,
-            baseline,
-            expectation,
-            expected_state,
-        )
-
-    async def send_player_command(
-        self,
-        player_id: str,
-        command: list[Any],
-    ) -> dict[str, Any]:
-        """
-        Send a command to a specific player.
-
-        :param player_id: LMS player id.
-        :param command: LMS command list.
-        """
-        return await self.lyrion_server.send_player_command(player_id, command)
-
-    def get_configured_host(self) -> str | None:
-        """Return configured host from setup data."""
-        raw_host = self.get_setup_value(CONF_LMS_HOST)
-        if not isinstance(raw_host, str):
-            return None
-        host = raw_host.strip()
-        return host or None
-
-    def get_configured_port(
-        self,
-        default: int | None = DEFAULT_LMS_PORT,
-    ) -> int | None:
-        """Return configured port from setup data."""
-        raw_port = self.get_setup_value(CONF_LMS_PORT, default)
-        if raw_port is None:
-            return None
-        try:
-            return int(cast("int | str", raw_port))
-        except TypeError, ValueError:
-            return default
-
     async def _handle_get_stream_url(
         self,
         request: web.Request,
@@ -693,3 +693,9 @@ class LyrionPlayerProvider(PlayerProvider):
                 "Lyrion dynamic player rediscovery failed: %s",
                 exception,
             )
+
+
+__all__ = [
+    "PLAYERS_BATCH_SIZE",
+    "LyrionPlayerProvider",
+]

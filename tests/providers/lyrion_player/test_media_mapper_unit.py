@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -268,7 +268,7 @@ async def test_resolve_matching_lms_track_id_rejects_non_track_library_items(
     )
 
     class _NotTrack:
-        provider_mappings: list[object] = []
+        provider_mappings: ClassVar[list[object]] = []
 
     mass.music.get_item_by_uri = AsyncMock(return_value=_NotTrack())
     assert await mapper._resolve_matching_lms_track_id("library://track/id") is None

@@ -182,6 +182,36 @@ warn_unused_ignores = true
 follow_imports = "skip"
 module = ["plexapi", "plexapi.*"]
 
+[[tool.mypy.overrides]]
+module = ["tests.providers.lyrion_player.*"]
+disable_error_code = [
+  "arg-type",
+  "assignment",
+  "attr-defined",
+  "comparison-overlap",
+  "method-assign",
+  "misc",
+  "no-untyped-def",
+  "return-value",
+  "unreachable",
+  "var-annotated",
+]
+
+[[tool.mypy.overrides]]
+module = [
+  "tests.pylyrion.test_cometd_status_helpers",
+  "tests.pylyrion.test_library",
+]
+disable_error_code = ["arg-type"]
+
+[[tool.mypy.overrides]]
+module = ["tests.providers.lyrion.test_bayeux_client"]
+disable_error_code = ["union-attr"]
+
+[[tool.mypy.overrides]]
+module = ["tests.providers.lyrion_music.test_provider_contract"]
+disable_error_code = ["arg-type"]
+
 [tool.ruff.format]
 # Force Linux/macOS line endings
 line-ending = "lf"

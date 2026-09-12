@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Scan local network ranges for reachable Lyrion/LMS instances."""
 
 from __future__ import annotations
@@ -7,6 +6,7 @@ import argparse
 import asyncio
 import ipaddress
 import socket
+import sys
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
@@ -130,7 +130,7 @@ def _parse_networks(raw_networks: Sequence[str]) -> tuple[ipaddress.IPv4Network,
         network = ipaddress.ip_network(raw_network, strict=False)
         if not isinstance(network, ipaddress.IPv4Network):
             msg = f"Only IPv4 networks are supported for active scanning: {raw_network}"
-            raise ValueError(msg)
+            raise TypeError(msg)
         parsed.append(network)
     return tuple(parsed)
 
@@ -215,13 +215,13 @@ async def _run(args: argparse.Namespace) -> int:
     try:
         ports = _normalize_ports(args.port)
         explicit_networks = _parse_networks(args.network)
-    except ValueError as err:
-        print(err)
+    except (TypeError, ValueError) as err:
+        sys.stderr.write(f"{err}\n")
         return 2
 
     candidates = _candidate_hosts(args.host, explicit_networks, args.limit_per_network)
     if not candidates:
-        print("No scan candidates found. Pass --network or --host explicitly.")
+        sys.stderr.write("No scan candidates found. Pass --network or --host explicitly.\n")
         return 2
 
     timeout = aiohttp.ClientTimeout(total=args.timeout)
@@ -236,20 +236,24 @@ async def _run(args: argparse.Namespace) -> int:
         results = [result for result in await asyncio.gather(*tasks) if result is not None]
 
     if not results:
-        print("No Lyrion/LMS endpoints detected.")
-        print("Try a narrower network with --network 192.168.x.0/24 or a known host with --host.")
+        sys.stdout.write("No Lyrion/LMS endpoints detected.\n")
+        sys.stdout.write(
+            "Try a narrower network with --network 192.168.x.0/24 or a known host with --host.\n"
+        )
         return 1
 
-    print("Validated Lyrion/LMS endpoints:")
+    sys.stdout.write("Validated Lyrion/LMS endpoints:\n")
     resolved_cache: dict[str, str | None] = {}
     for result in sorted(results, key=lambda item: (item.network, item.host, item.port)):
         if result.host not in resolved_cache:
             resolved_cache[result.host] = await _resolve_host(result.host)
         resolved = resolved_cache[result.host]
         if resolved and resolved != result.host:
-            print(f"- {result.host}:{result.port} (resolved {resolved}, via {result.network})")
+            sys.stdout.write(
+                f"- {result.host}:{result.port} (resolved {resolved}, via {result.network})\n"
+            )
             continue
-        print(f"- {result.host}:{result.port} (via {result.network})")
+        sys.stdout.write(f"- {result.host}:{result.port} (via {result.network})\n")
     return 0
 
 

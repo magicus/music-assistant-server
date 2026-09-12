@@ -559,7 +559,7 @@ async def test_set_members_noop_and_skip_self_or_unknown_members(
 
 @pytest.mark.asyncio
 async def test_sync_queue_and_metadata_wrappers(
-    player: LyrionPlayer, mock_provider: MagicMock
+    player: LyrionPlayer,
 ) -> None:
     """Sync wrappers should delegate to queue-sync and metadata helpers."""
     player._queue_sync.sync_lms_queue_to_ma = AsyncMock(return_value=None)

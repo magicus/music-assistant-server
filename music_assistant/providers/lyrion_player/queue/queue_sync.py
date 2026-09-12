@@ -117,7 +117,6 @@ class LyrionQueueSync(LyrionQueueSyncBridge):
             )
         finally:
             self._syncing_to_lms_queue = False
-
         if self._lms_queue_sync_pending:
             self._lms_queue_sync_pending = False
             await self.sync_lms_queue_to_ma()
@@ -177,3 +176,11 @@ class LyrionQueueSync(LyrionQueueSyncBridge):
             self._ma_queue_sync_pending = False
             self._ma_queue_sync_pending_sync_items = False
             await self.sync_ma_queue_to_lms(sync_items=pending_sync_items)
+
+
+__all__ = [
+    "LyrionQueueSync",
+    "_LmsMirrorEntry",
+    "_LmsQueueSnapshot",
+    "_MaQueueSnapshot",
+]

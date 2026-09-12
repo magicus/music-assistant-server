@@ -139,17 +139,16 @@ def parse_track(provider: LyrionMusicProvider, row: Mapping[str, str]) -> Track:
 
 def _track_from_lyrion(provider: LyrionMusicProvider, lyrion_track: LyrionTrack) -> Track:
     """Map pylyrion intermediate track payload to MA Track."""
-    artists = UniqueList(
-        [
-            ItemMapping(
-                media_type=MediaType.ARTIST,
-                item_id=artist.item_id,
-                provider=provider.instance_id,
-                name=artist.name,
-            )
-            for artist in lyrion_track.artists
-        ]
-    )
+    artists_items: list[Artist | ItemMapping] = [
+        ItemMapping(
+            media_type=MediaType.ARTIST,
+            item_id=artist.item_id,
+            provider=provider.instance_id,
+            name=artist.name,
+        )
+        for artist in lyrion_track.artists
+    ]
+    artists = UniqueList(artists_items)
 
     album_mapping: ItemMapping | None = None
     if lyrion_track.album_name:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from base64 import b64encode
 from collections.abc import Mapping, Sequence
+from contextlib import AbstractAsyncContextManager
 from typing import Any, Protocol, cast
 
 from aiohttp import ClientError, ClientTimeout
@@ -64,9 +65,9 @@ def get_configured_basic_auth(provider: _ConfigProvider) -> dict[str, str] | Non
     return {"Authorization": f"Basic {token}"}
 
 
-def acquire_lms_request_slot() -> object:
+def acquire_lms_request_slot() -> AbstractAsyncContextManager[None]:
     """Return shared request limiter context for LMS HTTP calls."""
-    return _RPC_THROTTLER.acquire()
+    return cast("AbstractAsyncContextManager[None]", _RPC_THROTTLER.acquire())
 
 
 async def rpc_request(
@@ -134,3 +135,14 @@ async def rpc_request(
             f"{command[0] if command else '<unknown>'} must contain a result object"
         )
     return cast("dict[str, Any]", result)
+
+
+__all__ = [
+    "acquire_lms_request_slot",
+    "build_lms_url",
+    "get_configured_basic_auth",
+    "get_configured_host",
+    "get_configured_port",
+    "normalize_lms_text_value",
+    "rpc_request",
+]

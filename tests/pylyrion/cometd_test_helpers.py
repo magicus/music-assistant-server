@@ -24,6 +24,7 @@ class LyrionCometDEventStream(CometDEventStreamCore):
         provider: Any,
         event_callback: LmsPlayerEventCallback,
     ) -> None:
+        """Initialize stream wrapper with provider and callback."""
         super().__init__(
             provider=provider,
             recoverable_errors=(ProviderUnavailableError, LyrionRequestError),

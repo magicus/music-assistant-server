@@ -17,6 +17,7 @@ from music_assistant.providers.lyrion.client import (
     get_configured_basic_auth,
     get_configured_host,
     get_configured_port,
+    normalize_lms_text_value,
 )
 from pylyrion import artwork as pylyrion_artwork
 from pylyrion.cometd.constants import RPC_TIMEOUT
@@ -34,7 +35,7 @@ if TYPE_CHECKING:
     from music_assistant.providers.lyrion_music.provider import LyrionMusicProvider
 
 
-CACHE_CATEGORY_ARTWORK_PROBE = "lyrion_artwork_probe"
+CACHE_CATEGORY_ARTWORK_PROBE = 501
 
 
 async def resolve_image(
@@ -100,7 +101,7 @@ def extract_artwork_url(
     port = get_configured_port(provider, default=None)
     if port is None:
         raise ProviderUnavailableError("Lyrion port is not configured")
-    token = provider.get_setup_value(CONF_ARTWORK_CACHE_BUSTER)
+    token = normalize_lms_text_value(provider.get_setup_value(CONF_ARTWORK_CACHE_BUSTER))
     return pylyrion_artwork.extract_artwork_url(
         row,
         host=host,
@@ -125,7 +126,7 @@ def extract_artist_artwork_url(
         row,
         id_keys=("id", "artist_id", "contributor_id"),
     )
-    token = provider.get_setup_value(CONF_ARTWORK_CACHE_BUSTER)
+    token = normalize_lms_text_value(provider.get_setup_value(CONF_ARTWORK_CACHE_BUSTER))
     return pylyrion_artwork.extract_artist_artwork_url(
         row,
         host=host,
@@ -271,5 +272,5 @@ def append_artwork_cache_buster(
     url: str,
 ) -> str:
     """Append cache-buster token to artwork URLs when configured."""
-    token = provider.get_setup_value(CONF_ARTWORK_CACHE_BUSTER)
+    token = normalize_lms_text_value(provider.get_setup_value(CONF_ARTWORK_CACHE_BUSTER))
     return pylyrion_artwork.append_artwork_cache_buster(url, token)

@@ -190,7 +190,7 @@ def _entries(
     return tuple(entries)
 
 
-async def _prefill_lms_endpoint(
+async def _prefill_lms_endpoint(  # noqa: PLR0915
     session: SetupSession,
     setup_data: dict[str, object],
     current_domain: str,

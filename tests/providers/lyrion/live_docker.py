@@ -60,6 +60,9 @@ COMPOSE_FILE = REPO_ROOT / "tests/providers/lyrion/docker-compose.lms.yml"
 LMS_BUILD_DIR = REPO_ROOT / "build/test/lyrion"
 LMS_CONFIG_DIR = LMS_BUILD_DIR / "config"
 LMS_MUSIC_DIR = LMS_BUILD_DIR / "music"
+DEFAULT_LMS_USERNAME = "lyrion-user"
+DEFAULT_LMS_PASSWORD = "lyrion-password"
+DEFAULT_LMS_PASSWORD_HASH = "68warDCjSmInKKk078r/Ii4ehe8"
 
 
 def _safe_filename(value: str) -> str:
@@ -199,8 +202,8 @@ def _lms_basic_auth_headers(
 def _lms_auth_credentials(
     *,
     auth_enabled: bool = False,
-    username: str = "lyrion-user",
-    password: str = "lyrion-password",
+    username: str = DEFAULT_LMS_USERNAME,
+    password: str = DEFAULT_LMS_PASSWORD,
 ) -> tuple[str | None, str | None]:
     """Return the configured credentials for a protected LMS Docker instance."""
     if not auth_enabled:
@@ -264,12 +267,12 @@ def _wait_for_catalog_ready(
     base_url: str,
     *,
     auth_enabled: bool = False,
-    username: str = "lyrion-user",
-    password: str = "lyrion-password",
+    username: str = DEFAULT_LMS_USERNAME,
+    password: str = DEFAULT_LMS_PASSWORD,
     timeout_s: float = 240.0,
 ) -> None:
     """Wait until expected catalog rows are visible in LMS listings."""
-    username, password = _lms_auth_credentials(
+    auth_username, auth_password = _lms_auth_credentials(
         auth_enabled=auth_enabled,
         username=username,
         password=password,
@@ -281,16 +284,28 @@ def _wait_for_catalog_ready(
     while time.time() < end:
         try:
             artists_rsp = _json_rpc(
-                base_url, ["artists", 0, 1000], username=username, password=password
+                base_url,
+                ["artists", 0, 1000],
+                username=auth_username,
+                password=auth_password,
             )
             albums_rsp = _json_rpc(
-                base_url, ["albums", 0, 1000], username=username, password=password
+                base_url,
+                ["albums", 0, 1000],
+                username=auth_username,
+                password=auth_password,
             )
             tracks_rsp = _json_rpc(
-                base_url, ["titles", 0, 1000], username=username, password=password
+                base_url,
+                ["titles", 0, 1000],
+                username=auth_username,
+                password=auth_password,
             )
             playlists_rsp = _json_rpc(
-                base_url, ["playlists", 0, 200], username=username, password=password
+                base_url,
+                ["playlists", 0, 200],
+                username=auth_username,
+                password=auth_password,
             )
         except URLError, TimeoutError, OSError, ValueError:
             time.sleep(2.0)
@@ -414,8 +429,8 @@ def _write_server_prefs(
     config_dir: Path,
     *,
     auth_enabled: bool = False,
-    username: str = "lyrion-user",
-    password_hash: str = "68warDCjSmInKKk078r/Ii4ehe8",
+    username: str = DEFAULT_LMS_USERNAME,
+    password_hash: str = DEFAULT_LMS_PASSWORD_HASH,
 ) -> None:
     """Write minimum server prefs to skip first-run wizard in tests."""
     prefs_dir = config_dir / "prefs"
@@ -495,8 +510,8 @@ def _bring_up_lms(
     base_url: str,
     *,
     auth_enabled: bool = False,
-    username: str = "lyrion-user",
-    password: str = "lyrion-password",
+    username: str = DEFAULT_LMS_USERNAME,
+    password: str = DEFAULT_LMS_PASSWORD,
 ) -> None:
     """Start LMS container and wait until serverstatus works."""
     compose_cmd = _resolve_compose_cmd()
@@ -542,7 +557,7 @@ def _bring_up_lms(
     end = time.time() + 180.0
     start = time.time()
     next_status_report = time.time() + 5.0
-    username, password = _lms_auth_credentials(
+    auth_username, auth_password = _lms_auth_credentials(
         auth_enabled=auth_enabled,
         username=username,
         password=password,
@@ -565,7 +580,12 @@ def _bring_up_lms(
             raise LiveLmsError(msg)
 
         try:
-            rsp = _json_rpc(base_url, ["serverstatus", 0, 1], username=username, password=password)
+            rsp = _json_rpc(
+                base_url,
+                ["serverstatus", 0, 1],
+                username=auth_username,
+                password=auth_password,
+            )
             if isinstance(rsp.get("result"), dict):
                 _progress("LMS JSON-RPC is ready")
                 _progress(f"waiting for LMS SlimProto endpoint {host}:3483")
@@ -604,11 +624,11 @@ def _trigger_rescan(
     base_url: str,
     *,
     auth_enabled: bool = False,
-    username: str = "lyrion-user",
-    password: str = "lyrion-password",
+    username: str = DEFAULT_LMS_USERNAME,
+    password: str = DEFAULT_LMS_PASSWORD,
 ) -> None:
     """Trigger a library rescan, ignoring unsupported command variants."""
-    username, password = _lms_auth_credentials(
+    auth_username, auth_password = _lms_auth_credentials(
         auth_enabled=auth_enabled,
         username=username,
         password=password,
@@ -616,7 +636,12 @@ def _trigger_rescan(
     _progress("triggering LMS rescan")
     for command in (["rescan"], ["rescan", "full"]):
         try:
-            _json_rpc(base_url, command, username=username, password=password)
+            _json_rpc(
+                base_url,
+                command,
+                username=auth_username,
+                password=auth_password,
+            )
             _progress(f"rescan command accepted: {command}")
             return
         except URLError, TimeoutError, OSError, ValueError:

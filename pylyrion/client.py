@@ -12,6 +12,7 @@ class LyrionClient:
     """Bundle connection, library browsing, and player control."""
 
     def __init__(self, session: LyrionSession) -> None:
+        """Initialize the facade with a shared transport session."""
         self.session = session
         self.library = LyrionLibraryClient(session)
         self.players = LyrionPlayerClient(session)

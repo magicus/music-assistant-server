@@ -41,12 +41,7 @@ from music_assistant.providers.lyrion.setup_flow import validate_lms_endpoint
 from pylyrion.lyrion_constants import CONF_ARTWORK_CACHE_BUSTER, ITEM_CACHE_TTL, SEARCH_CACHE_TTL
 
 from . import artwork, browse, client, parsers, sync
-from .constants import (
-    ACTION_RESCAN_ARTWORK,
-    BROWSE_PAGE_SIZE,
-    CONF_LMS_PASSWORD,
-    CONF_LMS_USERNAME,
-)
+from .constants import ACTION_RESCAN_ARTWORK, BROWSE_PAGE_SIZE, CONF_LMS_PASSWORD, CONF_LMS_USERNAME
 
 
 class LyrionMusicProvider(MusicProvider):
@@ -333,12 +328,12 @@ class LyrionMusicProvider(MusicProvider):
     @use_cache(ITEM_CACHE_TTL, allow_expired_cache=True)
     async def _get_artist_data(self, artist_id: str) -> dict[str, Any]:
         """Get artist payload from LMS."""
-        return await client.get_artist_data(self, artist_id)
+        return dict(await client.get_artist_data(self, artist_id))
 
     @use_cache(ITEM_CACHE_TTL, allow_expired_cache=True)
     async def _get_album_data(self, album_id: str) -> dict[str, Any]:
         """Get album payload from LMS."""
-        return await client.get_album_data(self, album_id)
+        return dict(await client.get_album_data(self, album_id))
 
     async def _sync_library_artists(self) -> set[int]:
         """Sync library artists and refresh rows when artwork differs."""
@@ -363,7 +358,7 @@ class LyrionMusicProvider(MusicProvider):
     @use_cache(ITEM_CACHE_TTL, allow_expired_cache=True)
     async def _get_track_data(self, track_id: str) -> dict[str, Any]:
         """Get track payload from LMS."""
-        return await client.get_track_data(self, track_id)
+        return dict(await client.get_track_data(self, track_id))
 
     def _on_music_sync_completed(self, _event: Any) -> None:
         """Queue artwork backfill tasks when global music sync completes."""
@@ -442,3 +437,10 @@ class LyrionMusicProvider(MusicProvider):
     def _artist_artwork_task_id(self) -> str:
         """Return deterministic task id for artist artwork backfill."""
         return f"{self.instance_id}_artist_artwork_sync"
+
+
+__all__ = [
+    "BROWSE_PAGE_SIZE",
+    "LyrionMusicProvider",
+    "client",
+]

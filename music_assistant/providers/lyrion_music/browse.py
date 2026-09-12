@@ -9,6 +9,7 @@ from urllib.parse import quote, unquote
 from music_assistant_models.media_items import BrowseFolder, ItemMapping, MediaItemType
 
 from . import client
+from .constants import BROWSE_PAGE_SIZE
 
 if TYPE_CHECKING:
     from .provider import LyrionMusicProvider
@@ -85,9 +86,7 @@ def _append_browse_page_nav(
 
 def _get_browse_page_size() -> int:
     """Return browse page size from provider module for test/runtime parity."""
-    from . import provider as provider_mod
-
-    return provider_mod.BROWSE_PAGE_SIZE
+    return BROWSE_PAGE_SIZE
 
 
 def _build_root_browse(path: str, provider_instance: str) -> BrowseItems:

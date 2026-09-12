@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from typing import Any
 from urllib.error import URLError
 from urllib.request import Request, urlopen
@@ -16,19 +17,19 @@ def _json_rpc(base_url: str, player_id: str, command: list[Any]) -> dict[str, An
         "method": "slim.request",
         "params": [player_id, command],
     }
-    request = Request(
+    request = Request(  # noqa: S310
         f"{base_url}/jsonrpc.js",
         data=json.dumps(payload).encode("utf-8"),
         method="POST",
         headers={"Content-Type": "application/json"},
     )
-    with urlopen(request, timeout=10) as response:
+    with urlopen(request, timeout=10) as response:  # noqa: S310
         data = json.loads(response.read().decode("utf-8"))
     if not isinstance(data, dict):
-        raise RuntimeError(f"Unexpected JSON-RPC response payload: {data!r}")
+        raise TypeError(f"Unexpected JSON-RPC response payload: {data!r}")
     result = data.get("result")
     if not isinstance(result, dict):
-        raise RuntimeError(f"Missing JSON-RPC result payload: {data!r}")
+        raise TypeError(f"Missing JSON-RPC result payload: {data!r}")
     return result
 
 
@@ -38,7 +39,7 @@ def _print_snapshot(base_url: str, player_id: str) -> None:
         "serverstatus": _json_rpc(base_url, "", ["serverstatus", 0, 500]),
         "playerstatus": _json_rpc(base_url, player_id, ["status", "-", 1]),
     }
-    print(json.dumps(snapshot, indent=2, sort_keys=True))
+    sys.stdout.write(f"{json.dumps(snapshot, indent=2, sort_keys=True)}\n")
 
 
 def _send_command(base_url: str, player_id: str, action: str, track_id: str | None) -> None:
@@ -50,7 +51,7 @@ def _send_command(base_url: str, player_id: str, action: str, track_id: str | No
         _json_rpc(base_url, player_id, ["play"])
         return
 
-    command_map = {
+    command_map: dict[str, list[Any]] = {
         "play": ["play"],
         "pause": ["pause", 1],
         "stop": ["stop"],

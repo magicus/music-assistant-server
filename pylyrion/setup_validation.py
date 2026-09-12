@@ -23,6 +23,7 @@ class LyrionEndpointValidationError(LyrionError):
         details: str | None = None,
         translation_args: list[str] | None = None,
     ) -> None:
+        """Store structured validation failure details for setup flows."""
         self.error_key = error_key
         self.details = details
         self.translation_args = translation_args

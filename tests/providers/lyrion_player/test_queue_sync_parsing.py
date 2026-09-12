@@ -46,9 +46,9 @@ def test_media_mapper_extracts_url_from_title_when_url_keys_missing() -> None:
 
 
 def test_parse_lms_queue_state_reuses_previous_entry_for_transient_partial_row() -> None:
-    """Parser should reuse previous queue identity when one row is temporarily unparseable."""
+    """Parser should reuse previous queue identity when one row is temporarily unparsable."""
     queue_sync = object.__new__(LyrionQueueSync)
-    queue_sync._media_mapper = _MapperStub()  # type: ignore[assignment]
+    queue_sync._media_mapper = _MapperStub()
     queue_sync._lms_model = _LmsQueueSnapshot(
         entries=(
             _LmsMirrorEntry(kind="url", value="http://queue.local/track-a.mp3"),
@@ -81,7 +81,7 @@ def test_parse_lms_queue_state_reuses_previous_entry_for_transient_partial_row()
 def test_parse_lms_queue_state_returns_none_for_partial_row_after_length_change() -> None:
     """Parser should refuse fallback when queue length changed and identity reuse is unsafe."""
     queue_sync = object.__new__(LyrionQueueSync)
-    queue_sync._media_mapper = _MapperStub()  # type: ignore[assignment]
+    queue_sync._media_mapper = _MapperStub()
     queue_sync._lms_model = _LmsQueueSnapshot(
         entries=(
             _LmsMirrorEntry(kind="url", value="http://queue.local/track-a.mp3"),

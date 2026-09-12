@@ -5,15 +5,11 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
-from typing import Any, AsyncContextManager, cast
+from typing import Any, cast
 
 from aiohttp import ClientError, ClientTimeout
 
-from pylyrion.errors import (
-    LyrionProtocolError,
-    LyrionRequestError,
-    LyrionTimeoutError,
-)
+from pylyrion.errors import LyrionProtocolError, LyrionRequestError, LyrionTimeoutError
 from pylyrion.models import LyrionEndpoint
 
 
@@ -48,7 +44,7 @@ class LyrionSession:
     http_session: Any
     endpoint: LyrionEndpoint
     timeout: int = 10
-    request_guard: Callable[[], AsyncContextManager[None]] | None = None
+    request_guard: Callable[[], AbstractAsyncContextManager[None]] | None = None
     basic_auth_headers: dict[str, str] | None = None
 
     async def request(

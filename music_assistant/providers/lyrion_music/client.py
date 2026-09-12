@@ -23,7 +23,7 @@ from pylyrion.errors import LyrionProtocolError, LyrionRequestError, LyrionTimeo
 from pylyrion.library import ALBUM_SPEC as PY_ALBUM_SPEC
 from pylyrion.library import ARTIST_SPEC as PY_ARTIST_SPEC
 from pylyrion.library import TRACK_SPEC as PY_TRACK_SPEC
-from pylyrion.library import LyrionLibraryClient, normalize_lookup_ids
+from pylyrion.library import LyrionEntitySpec, LyrionLibraryClient, normalize_lookup_ids
 from pylyrion.lyrion_constants import BATCH_LOOKUP_SIZE
 from pylyrion.models import LyrionEndpoint
 from pylyrion.session import LyrionSession
@@ -458,7 +458,7 @@ async def _get_entity_data(
     return dict(row)
 
 
-def _to_py_entity_spec(spec: LmsEntitySpec):
+def _to_py_entity_spec(spec: LmsEntitySpec) -> LyrionEntitySpec:
     """Map MA-side entity spec to the corresponding pylyrion entity spec."""
     if spec.key == "artist":
         return PY_ARTIST_SPEC
@@ -639,9 +639,9 @@ async def _iter_raw_entities(
             return
     except ValueError as err:
         _disable_batch_lookup(provider, spec, err)
-        fallback_start = processed_items if use_batch else 0
+        fallback_start = processed_items
     except ProviderUnavailableError:
-        fallback_start = processed_items if use_batch else 0
+        fallback_start = processed_items
     else:
         fallback_start = 0
 
@@ -820,8 +820,6 @@ def _normalize_lms_row(raw_item: Mapping[str, object]) -> Mapping[str, str]:
     """Normalize one LMS payload row into a string-key/string-value mapping."""
     normalized: dict[str, str] = {}
     for key, value in raw_item.items():
-        if key is None:
-            continue
         text_value = normalize_lms_text_value(value)
         if text_value is None:
             continue

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from music_assistant_models.enums import RepeatMode
+if TYPE_CHECKING:
+    from music_assistant_models.enums import RepeatMode
 
 
 @dataclass(frozen=True)
