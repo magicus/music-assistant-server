@@ -7,12 +7,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from music_assistant.providers.lyrion_player.queue.queue_planner import (
+from music_assistant.providers.lyrion_player.helpers.queue.queue_planner import (
     QueueMutation,
     QueueMutationType,
     QueuePlan,
 )
-from music_assistant.providers.lyrion_player.queue.queue_sync_engine import (
+from music_assistant.providers.lyrion_player.helpers.queue.queue_sync_engine import (
     QueueSyncEngine,
     QueueSyncInput,
 )

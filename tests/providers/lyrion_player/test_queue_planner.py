@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from music_assistant.providers.lyrion_player.queue.queue_planner import (
+from music_assistant.providers.lyrion_player.helpers.queue.queue_planner import (
     QueueDiffPlanner,
     QueueMutation,
     QueueMutationType,
