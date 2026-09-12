@@ -10,13 +10,13 @@ from unittest.mock import AsyncMock, MagicMock
 import aiohttp
 import pytest
 
-from music_assistant.providers.lyrion.cometd.stream_adapter import LyrionCometDEventStream
 from tests.providers.lyrion.scriptable_slimproto_player import ScriptableSlimProtoPlayer
 from tests.providers.lyrion_player.harness_test_support import (
     EndpointRpcClient,
     ProviderStyleRpcClient,
     wait_for_mode,
 )
+from tests.pylyrion.cometd_test_helpers import LyrionCometDEventStream
 
 
 async def _noop_event_callback(_event: object) -> None:

@@ -56,7 +56,6 @@ def _build_provider_stub() -> LyrionPlayerProvider:
     provider._discover_players_task = None
     provider._discover_players_again = False
     provider._unregister_stream_redirect_route = None
-    provider._status_event_adapter = MagicMock()
     provider._unsubscribe_status_events = None
     provider._status_stream = SimpleNamespace(
         start=MagicMock(),
@@ -229,15 +228,12 @@ async def test_handle_get_stream_url_rejects_invalid_input_and_resolution_failur
 
 @pytest.mark.asyncio
 async def test_provider_init_wires_status_adapter_and_stream() -> None:
-    """Constructor should create status adapter and stream after base init."""
+    """Constructor should wire the status stream and subscribe the event handler."""
     with (
         patch(
             "music_assistant.models.player_provider.PlayerProvider.__init__",
             return_value=None,
         ),
-        patch(
-            "music_assistant.providers.lyrion_player.provider.LyrionCometDEventAdapter"
-        ) as mock_adapter_cls,
         patch(
             "music_assistant.providers.lyrion_player.provider.PlayerStatusStream"
         ) as mock_stream_cls,
@@ -245,20 +241,17 @@ async def test_provider_init_wires_status_adapter_and_stream() -> None:
             "music_assistant.providers.lyrion_player.provider.build_cometd_post_messages_callback"
         ) as mock_build_post_callback,
     ):
-        adapter = MagicMock()
-        adapter.handle_event = AsyncMock()
         stream = MagicMock()
         post_callback = AsyncMock()
-        mock_adapter_cls.return_value = adapter
         mock_stream_cls.return_value = stream
         mock_build_post_callback.return_value = post_callback
 
         provider = LyrionPlayerProvider()
 
-    assert provider._status_event_adapter is adapter
     assert provider._status_stream is stream
     mock_stream_cls.assert_called_once()
     assert mock_stream_cls.call_args.kwargs["post_messages"] is post_callback
+    stream.subscribe.assert_called_once_with(provider._handle_status_event)
     assert provider._unsubscribe_status_events is not None
 
 
@@ -331,14 +324,16 @@ async def test_provider_command_and_remove_delegate() -> None:
 
 
 def test_apply_status_update_delegates_to_adapter() -> None:
-    """apply_status_update should pass through untouched payload to adapter."""
+    """apply_status_update should pass through untouched payload to the handler."""
     provider = _build_provider_stub()
     player = MagicMock(spec=LyrionPlayer)
     status = {"mode": "play"}
+    handler = MagicMock()
+    provider._apply_status_update = handler
 
     provider.apply_status_update(player, status)
 
-    provider._status_event_adapter.apply_status.assert_called_once_with(player, status)
+    handler.assert_called_once_with(player, status)
 
 
 @pytest.mark.asyncio

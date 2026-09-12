@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Callable
 from contextlib import suppress
 from typing import Any, cast
@@ -21,8 +22,14 @@ from music_assistant.models.player_provider import PlayerProvider
 from music_assistant.providers.lyrion.setup_flow import validate_lms_endpoint
 from pylyrion.client import LyrionClient
 from pylyrion.cometd.constants import COMETD_COMMAND_STATUS_VERIFY_TIMEOUT
+from pylyrion.cometd.player_status_events import (
+    NormalizedPlayerStatusEvent,
+    PlayerPlaylistChanged,
+    PlayerRepeatChanged,
+    PlayerShuffleChanged,
+    PlayerStatusUpdated,
+)
 from pylyrion.cometd.transport import build_cometd_post_messages_callback
-from pylyrion.cometd_event_adapter import LyrionCometDEventAdapter
 from pylyrion.errors import LyrionRequestError
 from pylyrion.models import LyrionEndpoint
 from pylyrion.player import LyrionPlayerClient
@@ -61,12 +68,6 @@ class LyrionPlayerProvider(PlayerProvider):
         self._unsubscribe_status_events = None
         self._discover_players_task: asyncio.Task[None] | None = None
         self._discover_players_again = False
-        self._status_event_adapter = LyrionCometDEventAdapter(
-            self,
-            mode_map=MODE_MAP,
-            idle_state=PlaybackState.IDLE,
-            is_supported_player=lambda player: isinstance(player, LyrionPlayer),
-        )
         self._status_stream = PlayerStatusStream(
             self,
             post_messages=build_cometd_post_messages_callback(
@@ -80,9 +81,7 @@ class LyrionPlayerProvider(PlayerProvider):
             status_stream=self._status_stream,
             unavailable_error_factory=lambda err: ProviderUnavailableError(str(err)),
         )
-        self._unsubscribe_status_events = self._status_stream.subscribe(
-            self._status_event_adapter.handle_event
-        )
+        self._unsubscribe_status_events = self._status_stream.subscribe(self._handle_status_event)
 
     async def get_config_entries(self) -> tuple[ConfigEntry, ...]:
         """Return Config entries to configure this provider."""
@@ -391,7 +390,136 @@ class LyrionPlayerProvider(PlayerProvider):
         :param player: Target Lyrion player.
         :param status: LMS player status payload.
         """
-        self._status_event_adapter.apply_status(player, status)
+        self._apply_status_update(player, status)
+
+    async def _handle_status_event(self, event: NormalizedPlayerStatusEvent) -> None:
+        """Apply one normalized player-status event from pylyrion."""
+        player = self.mass.players.get_player(event.player_id)
+        if not isinstance(player, LyrionPlayer):
+            return
+
+        if isinstance(event, PlayerStatusUpdated):
+            self._apply_status_update(player, event.status)
+            if event.is_initial:
+                await player.sync_queue_from_lms()
+            return
+
+        if isinstance(event, (PlayerPlaylistChanged, PlayerRepeatChanged, PlayerShuffleChanged)):
+            await player.sync_queue_from_lms()
+
+    def _apply_status_update(self, player: LyrionPlayer, status: dict[str, Any]) -> None:
+        """Apply one normalized player status payload to a MA player."""
+        if (connected := status.get("player_connected")) is not None:
+            player._attr_available = bool(int(connected))
+        else:
+            player._attr_available = True
+
+        mode = str(status.get("mode") or "stop")
+        player._attr_playback_state = MODE_MAP.get(mode, PlaybackState.IDLE)
+
+        if "power" in status:
+            with suppress(TypeError, ValueError):
+                player._attr_powered = bool(int(status["power"]))
+
+        if "mixer volume" in status:
+            with suppress(TypeError, ValueError):
+                player._attr_volume_level = max(
+                    0,
+                    min(100, int(status["mixer volume"])),
+                )
+
+        if "time" in status:
+            with suppress(TypeError, ValueError):
+                player._attr_elapsed_time = float(status["time"])
+                player._attr_elapsed_time_last_updated = time.time()
+
+        previous_group_members = tuple(player.group_members)
+        player._attr_group_members = self._extract_group_members(player.player_id, status)
+
+        player.update_state()
+
+        if previous_group_members != tuple(player.group_members):
+            self._refresh_related_group_players(
+                player,
+                set(previous_group_members),
+                set(player.group_members),
+                status,
+            )
+
+    def _extract_group_members(self, player_id: str, status: dict[str, Any]) -> list[str]:
+        """Extract MA group members from a normalized status payload."""
+        sync_slaves = self._extract_sync_slaves(status)
+        if sync_slaves:
+            members = [member_id for member_id in sync_slaves if member_id != player_id]
+            return [player_id, *members] if members else []
+
+        sync_master = self._extract_sync_master(status)
+        if sync_master and sync_master != player_id:
+            return []
+        return []
+
+    def _extract_sync_master(self, status: dict[str, Any]) -> str | None:
+        """Extract sync-master player id from a normalized status payload."""
+        for key in ("sync_master", "sync_master_id", "sync_master_playerid"):
+            raw_value = status.get(key)
+            if raw_value in (None, "", "-"):
+                continue
+            if isinstance(raw_value, dict):
+                if player_id := raw_value.get("playerid"):
+                    return str(player_id)
+                continue
+            return str(raw_value)
+        return None
+
+    def _extract_sync_slaves(self, status: dict[str, Any]) -> list[str]:
+        """Extract sync-slave player ids from a normalized status payload."""
+        for key in ("sync_slaves", "sync_slaves_loop"):
+            raw_value = status.get(key)
+            if not raw_value:
+                continue
+
+            result: list[str] = []
+            if isinstance(raw_value, str):
+                for part in raw_value.split(","):
+                    value = part.strip()
+                    if value:
+                        result.append(value)
+            elif isinstance(raw_value, list):
+                for item in raw_value:
+                    if isinstance(item, dict):
+                        if player_id := item.get("playerid"):
+                            result.append(str(player_id))
+                    elif item:
+                        result.append(str(item))
+
+            deduped = list(dict.fromkeys(result))
+            if deduped:
+                return deduped
+        return []
+
+    def _refresh_related_group_players(
+        self,
+        player: LyrionPlayer,
+        previous_members: set[str],
+        current_members: set[str],
+        status: dict[str, Any],
+    ) -> None:
+        """Refresh players affected by a group topology change."""
+        related_ids = (previous_members | current_members) - {player.player_id}
+
+        if sync_master := self._extract_sync_master(status):
+            if sync_master != player.player_id:
+                related_ids.add(sync_master)
+
+        for provider_player in self.players:
+            if provider_player.player_id == player.player_id:
+                continue
+            if player.player_id in provider_player.group_members:
+                related_ids.add(provider_player.player_id)
+
+        for related_id in related_ids:
+            if related_player := self.mass.players.get_player(related_id):
+                related_player.update_state()
 
     def get_last_status_seen_at(self, player_id: str) -> float | None:
         """Return the last status-stream timestamp for one player."""

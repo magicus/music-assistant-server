@@ -10,7 +10,6 @@ import pytest
 from aiohttp import ClientError
 from music_assistant_models.errors import ProviderUnavailableError
 
-from music_assistant.providers.lyrion.cometd.stream_adapter import LyrionCometDEventStream
 from pylyrion.cometd.helpers import (
     _extract_current_track_id,
     _extract_server_player_ids,
@@ -21,6 +20,7 @@ from pylyrion.cometd.helpers import (
     _is_invalid_player_payload,
     _same_active_track,
 )
+from tests.pylyrion.cometd_test_helpers import LyrionCometDEventStream
 
 
 async def _noop_event_callback(_event: object) -> None:
