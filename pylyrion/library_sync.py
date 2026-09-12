@@ -141,7 +141,9 @@ async def _flush_pending_extra_checks(
         pending_extra_checks.clear()
         return
 
-    lookup_ids = [hooks.item_id_getter(prov_item) for _, prov_item in pending_extra_checks]
+    lookup_ids = _normalize_lookup_ids(
+        [hooks.item_id_getter(prov_item) for _, prov_item in pending_extra_checks]
+    )
     library_items_by_provider_id = await hooks.lookup_library_items(lookup_ids)
 
     for sync_details, prov_item in pending_extra_checks:
@@ -159,3 +161,8 @@ async def _flush_pending_extra_checks(
             hooks.on_item_failure(prov_item, err, db_id, cur_db_ids)
 
     pending_extra_checks.clear()
+
+
+def _normalize_lookup_ids(item_ids: list[str]) -> list[str]:
+    """Deduplicate lookup ids while preserving stable order."""
+    return list(dict.fromkeys(item_ids))

@@ -326,7 +326,6 @@ async def _lookup_library_items_for_sync(
     if not provider_item_ids:
         return {}
 
-    unique_item_ids = _normalize_lookup_ids(provider_item_ids)
     result: dict[str, Any] = {}
     getter = getattr(controller, "get_library_items_by_prov_id", None)
     if getter is None:
@@ -335,8 +334,8 @@ async def _lookup_library_items_for_sync(
     try:
         library_items = await getter(
             provider_instance=provider.instance_id,
-            provider_item_ids=unique_item_ids,
-            limit=len(unique_item_ids),
+            provider_item_ids=provider_item_ids,
+            limit=len(provider_item_ids),
         )
     except TypeError:
         return result
@@ -345,7 +344,7 @@ async def _lookup_library_items_for_sync(
         for mapping in library_item.provider_mappings:
             if (
                 mapping.provider_instance == provider.instance_id
-                and mapping.item_id in unique_item_ids
+                and mapping.item_id in provider_item_ids
             ):
                 result[mapping.item_id] = library_item
                 break
@@ -492,8 +491,3 @@ async def _sync_library_entities(provider: LyrionMusicProvider, spec: SyncSpec) 
     )
 
     return await PYLYRION_LIBRARY_SYNC.run(hooks)
-
-
-def _normalize_lookup_ids(item_ids: list[str]) -> list[str]:
-    """Deduplicate lookup ids while preserving stable order."""
-    return list(dict.fromkeys(item_ids))

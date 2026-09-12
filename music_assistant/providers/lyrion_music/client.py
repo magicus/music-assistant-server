@@ -467,8 +467,7 @@ async def _iter_entities(
     item_ids: list[str],
 ) -> AsyncGenerator[Artist | Album | Track]:
     """Yield decoded entities via pylyrion lookup + MA decode callback."""
-    ordered_ids = _normalize_lookup_ids(item_ids)
-    if not ordered_ids:
+    if not item_ids:
         return
 
     artwork_worker_count = max(1, ARTWORK_WORKER_COUNT)
@@ -481,7 +480,7 @@ async def _iter_entities(
     library = _build_library_client(provider)
     async for entity in library.iter_decoded_entities(
         _to_py_entity_spec(spec),
-        ordered_ids,
+        item_ids,
         lambda row: _decode_entity(provider, spec, row),
         worker_count=artwork_worker_count,
     ):
@@ -523,8 +522,3 @@ def _update_weighted_sync_progress(
     ratio = max(0.0, min(1.0, current / total))
     progress = int(ratio * 50) if phase == "id_discovery" else 50 + int(ratio * 50)
     update_current_task_progress(min(100, max(0, progress)), text)
-
-
-def _normalize_lookup_ids(item_ids: list[str]) -> list[str]:
-    """Deduplicate lookup ids while preserving stable order."""
-    return list(dict.fromkeys(item_ids))
