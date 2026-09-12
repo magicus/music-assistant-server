@@ -9,17 +9,9 @@ from unittest.mock import MagicMock
 import pytest
 from aiohttp import ClientError
 
-from pylyrion.errors import (
-    LyrionProtocolError,
-    LyrionRequestError,
-    LyrionTimeoutError,
-)
+from pylyrion.errors import LyrionProtocolError, LyrionRequestError, LyrionTimeoutError
 from pylyrion.models import LyrionEndpoint
-from pylyrion.session import (
-    LyrionSession,
-    build_lms_url,
-    normalize_lms_text_value,
-)
+from pylyrion.session import LyrionSession, build_lms_url, normalize_lms_text_value
 from tests.pylyrion.rpc_test_doubles import FakeResponse
 
 

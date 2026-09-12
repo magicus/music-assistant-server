@@ -1,4 +1,4 @@
-"""pylyrion exception types."""
+"""Exception types for pylyrion."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Neutral playerstatus merge and diff events for CometD consumers."""
+"""Neutral player-status merge and diff events for CometD consumers."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Core pylyrion data models."""
+"""Core data models for pylyrion."""
 
 from __future__ import annotations
 

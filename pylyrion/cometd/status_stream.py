@@ -1,4 +1,4 @@
-"""High-level server status stream API with normalized player events."""
+"""High-level server status stream API with normalized player-status events."""
 
 from __future__ import annotations
 

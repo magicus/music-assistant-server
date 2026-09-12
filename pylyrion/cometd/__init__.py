@@ -1,4 +1,4 @@
-"""Public CometD/Bayeux helpers for pylyrion."""
+"""Public CometD/Bayeux API for pylyrion."""
 
 from .bayeux_client import BayeuxClient
 from .helpers import (

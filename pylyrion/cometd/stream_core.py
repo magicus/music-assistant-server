@@ -1,4 +1,4 @@
-"""Core CometD stream runtime independent from MA event classes."""
+"""Core CometD stream runtime independent of integration event classes."""
 
 from __future__ import annotations
 

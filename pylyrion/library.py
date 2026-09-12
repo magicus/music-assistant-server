@@ -1,4 +1,4 @@
-"""Library browsing helpers for pylyrion."""
+"""Library browsing helpers for Lyrion servers."""
 
 from __future__ import annotations
 

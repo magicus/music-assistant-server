@@ -1,4 +1,4 @@
-"""Shared Lyrion constants used across pylyrion and MA provider layers."""
+"""Shared Lyrion constants used across pylyrion integration layers."""
 
 from __future__ import annotations
 

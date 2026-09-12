@@ -1,4 +1,4 @@
-"""Raw player control helpers for pylyrion."""
+"""Raw player control helpers for Lyrion players."""
 
 from __future__ import annotations
 
