@@ -1,78 +1,90 @@
-"""Bridge internal Lyrion CometD events into MA player updates."""
+"""Bridge normalized CometD player events into runtime player updates."""
 
 from __future__ import annotations
 
 import time
+from collections.abc import Callable, Mapping
 from contextlib import suppress
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from music_assistant_models.enums import PlaybackState
-
-from .cometd_events import (
-    LmsPlayerEvent,
-    LmsPlayerPlaylistChangedEvent,
-    LmsPlayerRepeatChangedEvent,
-    LmsPlayerShuffleChangedEvent,
-    LmsPlayerStatusUpdatedEvent,
+from pylyrion.cometd.player_status_events import (
+    NormalizedPlayerStatusEvent,
+    PlayerPlaylistChanged,
+    PlayerRepeatChanged,
+    PlayerShuffleChanged,
+    PlayerStatusUpdated,
 )
-from .player import LyrionPlayer
 
 if TYPE_CHECKING:
-    from .cometd_events import StatusPayload
-    from .provider import LyrionPlayerProvider
+    from pylyrion.cometd.helpers import StatusPayload
 
 
-MODE_MAP = {
-    "play": PlaybackState.PLAYING,
-    "pause": PlaybackState.PAUSED,
-    "stop": PlaybackState.IDLE,
+DEFAULT_MODE_MAP: Mapping[str, object] = {
+    "play": "play",
+    "pause": "pause",
+    "stop": "stop",
 }
 
 
 class LyrionCometDEventAdapter:
-    """Translate normalized LMS events to concrete MA updates."""
+    """Translate normalized LMS events to runtime player updates."""
 
-    def __init__(self, provider: LyrionPlayerProvider) -> None:
+    def __init__(
+        self,
+        provider: Any,
+        *,
+        mode_map: Mapping[str, object] = DEFAULT_MODE_MAP,
+        idle_state: object = "stop",
+        is_supported_player: Callable[[object], bool] | None = None,
+    ) -> None:
         """
         Initialize event adapter.
 
-        :param provider: Owning Lyrion provider instance.
+        :param provider: Owning provider instance.
+        :param mode_map: Mapping from LMS mode values to runtime playback states.
+        :param idle_state: Fallback playback state for unknown LMS mode values.
+        :param is_supported_player: Optional predicate to filter player objects.
         """
         self.provider = provider
+        self._mode_map = mode_map
+        self._idle_state = idle_state
+        self._is_supported_player = is_supported_player
 
-    async def handle_event(self, event: LmsPlayerEvent) -> None:
+    async def handle_event(self, event: NormalizedPlayerStatusEvent) -> None:
         """
-        Apply one internal event to MA state.
+        Apply one normalized event to runtime player state.
 
         :param event: Normalized internal LMS event.
         """
         player = self.provider.mass.players.get_player(event.player_id)
-        if not isinstance(player, LyrionPlayer):
+        if player is None:
+            return
+        if self._is_supported_player is not None and not self._is_supported_player(player):
             return
 
-        if isinstance(event, LmsPlayerStatusUpdatedEvent):
+        if isinstance(event, PlayerStatusUpdated):
             self.apply_status(player, event.status)
             if event.is_initial:
                 await player.sync_queue_from_lms()
 
-        if isinstance(event, LmsPlayerPlaylistChangedEvent):
+        if isinstance(event, PlayerPlaylistChanged):
             await player.sync_queue_from_lms()
 
         if isinstance(
             event,
-            (LmsPlayerRepeatChangedEvent, LmsPlayerShuffleChangedEvent),
+            (PlayerRepeatChanged, PlayerShuffleChanged),
         ):
             await player.sync_queue_from_lms()
 
     def apply_status(
         self,
-        player: LyrionPlayer,
+        player: Any,
         status: StatusPayload,
     ) -> None:
         """
-        Apply one normalized status payload to MA runtime state.
+        Apply one normalized status payload to runtime player state.
 
-        :param player: Target MA player.
+        :param player: Target player.
         :param status: Merged playerstatus payload from LMS CometD stream.
         """
         if _is_invalid_player_status(status):
@@ -86,7 +98,7 @@ class LyrionCometDEventAdapter:
             player._attr_available = True
 
         mode = str(status.get("mode") or "stop")
-        player._attr_playback_state = MODE_MAP.get(mode, PlaybackState.IDLE)
+        player._attr_playback_state = self._mode_map.get(mode, self._idle_state)
 
         if "power" in status:
             with suppress(TypeError, ValueError):
@@ -137,7 +149,7 @@ def _is_invalid_player_status(status: StatusPayload) -> bool:
 
 
 def _extract_group_members(player_id: str, status: StatusPayload) -> list[str]:
-    """Extract MA group_members from LMS sync fields in a status payload."""
+    """Extract runtime group members from LMS sync fields in a status payload."""
     sync_slaves = _extract_sync_slaves(status)
     if sync_slaves:
         members = [member_id for member_id in sync_slaves if member_id != player_id]
@@ -191,8 +203,8 @@ def _extract_sync_slaves(status: StatusPayload) -> list[str]:
 
 
 def _refresh_related_group_players(
-    provider: LyrionPlayerProvider,
-    player: LyrionPlayer,
+    provider: Any,
+    player: Any,
     previous_members: set[str],
     current_members: set[str],
     status: StatusPayload,

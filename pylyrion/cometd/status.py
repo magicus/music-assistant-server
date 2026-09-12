@@ -4,18 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import TYPE_CHECKING
+from typing import Any
 
 from .helpers import StatusPayload, _extract_server_player_ids, _get_int
-
-if TYPE_CHECKING:
-    from music_assistant.providers.lyrion_player.provider import LyrionPlayerProvider
 
 
 class _CometDStatusMixin:
     """Mixin with status cache lifecycle and wait primitives."""
 
-    provider: LyrionPlayerProvider
+    provider: Any
     _pending_player_ids: set[str]
     _subscribed_player_ids: set[str]
     _status_by_player: dict[str, StatusPayload]

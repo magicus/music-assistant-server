@@ -5,9 +5,9 @@ from __future__ import annotations
 import asyncio
 import time
 from contextlib import suppress
-from typing import TYPE_CHECKING
+from typing import Any
 
-from ..constants import (
+from .constants import (
     COMETD_ACTIVE_STATE_TIMEOUT,
     COMETD_EXPECTATION_LOOP_IDLE_INTERVAL,
     COMETD_IMPLICIT_STATUS_BACKOFF,
@@ -24,14 +24,11 @@ from .helpers import (
     _TrackEndExpectation,
 )
 
-if TYPE_CHECKING:
-    from music_assistant.providers.lyrion_player.provider import LyrionPlayerProvider
-
 
 class _CometDRecoveryMixin:
     """Mixin with implicit expectation and stale-session recovery."""
 
-    provider: LyrionPlayerProvider
+    provider: Any
     _task: asyncio.Task[None] | None
     _watchdog_task: asyncio.Task[None] | None
     _client_id: str | None
@@ -126,7 +123,7 @@ class _CometDRecoveryMixin:
         try:
             baseline = self.get_last_player_status_seen_at(player_id)
 
-            def _expectation(status: StatusPayload) -> bool:
+            def _expectation(_status: StatusPayload) -> bool:
                 expectation_obj = self._track_end_expectations.get(player_id)
                 if not isinstance(expectation_obj, _TrackEndExpectation):
                     return True
@@ -261,25 +258,26 @@ class _CometDRecoveryMixin:
             return True
 
         current_timestamp = _get_float(status, "playlist_timestamp")
-        if (
+        return (
             expectation.baseline_playlist_timestamp is not None
             and current_timestamp is not None
             and current_timestamp != expectation.baseline_playlist_timestamp
-        ):
-            return True
-
-        return False
+        )
 
     @staticmethod
     def _requires_activity_expectation(status: StatusPayload) -> bool:
         """Return True if runtime state should keep producing fresh updates."""
         if _get_mode(status) in ("play", "pause"):
             return True
+        sync_master = status.get("sync_master")
+        if isinstance(sync_master, str) and sync_master.strip():
+            return True
+        sync_slaves = status.get("sync_slaves")
+        if isinstance(sync_slaves, str) and sync_slaves.strip():
+            return True
         if _get_int(status, "playlist_tracks") not in (None, 0):
             return True
         return bool(
-            status.get("sync_master")
-            or status.get("sync_master_id")
-            or status.get("sync_slaves")
-            or status.get("sync_slaves_loop")
+            _get_int(status, "playlist_cur_index") not in (None, -1)
+            and _extract_current_track_id(status)
         )

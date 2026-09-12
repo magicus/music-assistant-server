@@ -15,6 +15,7 @@ from music_assistant_models.errors import MediaNotFoundError, ProviderUnavailabl
 
 from music_assistant.providers.lyrion import client as shared_client
 from music_assistant.providers.lyrion_music import client
+from pylyrion.errors import LyrionRequestError
 from tests.providers.lyrion.rpc_test_doubles import FakeResponse, FakeRpcTransport
 
 
@@ -36,6 +37,8 @@ def _provider(
         return default
 
     provider.get_setup_value = Mock(side_effect=_get_setup_value)
+    provider.get_configured_host = Mock(return_value=host)
+    provider.get_configured_port = Mock(return_value=port)
     provider._disabled_batch_lookup_keys = set()
     if rpc_handler is not None:
         transport = FakeRpcTransport(rpc_handler)
@@ -93,12 +96,11 @@ async def test_rpc_request_uses_shared_throttler(monkeypatch: pytest.MonkeyPatch
 
 async def test_get_entity_pages_skip_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
     """Page decoders should skip rows that raise MediaNotFoundError."""
-
-    async def _page(*args: Any, **kwargs: Any) -> tuple[list[dict[str, Any]], bool]:
-        del args, kwargs
-        return ([{"id": "1"}, {"id": "2"}], False)
-
-    monkeypatch.setattr(client, "_get_entity_page", _page)
+    library = Mock()
+    library.get_entity_page = AsyncMock(
+        return_value=SimpleNamespace(items=[{"id": "1"}, {"id": "2"}], has_more=False)
+    )
+    monkeypatch.setattr(client, "_build_library_client", lambda _provider: library)
 
     def _parse_artist(_provider: Any, row: dict[str, Any]) -> str:
         if row["id"] == "2":
@@ -134,20 +136,19 @@ async def test_get_entity_pages_skip_not_found(monkeypatch: pytest.MonkeyPatch) 
 
 async def test_get_simple_pages_name_fallbacks(monkeypatch: pytest.MonkeyPatch) -> None:
     """Playlist/genre pages should support id/name fallback branches."""
-
-    async def _page(*args: Any, **kwargs: Any) -> tuple[list[dict[str, Any]], bool]:
-        del args, kwargs
-        return (
-            [
+    library = Mock()
+    library.get_simple_browse_page = AsyncMock(
+        return_value=SimpleNamespace(
+            items=[
                 {"id": "x1", "playlist": "P1"},
                 {"id": "x2", "name": "P2"},
                 {"id": "x3"},
                 {"playlist": "missing-id"},
             ],
-            True,
+            has_more=True,
         )
-
-    monkeypatch.setattr(client, "_get_simple_browse_page", _page)
+    )
+    monkeypatch.setattr(client, "_build_library_client", lambda _provider: library)
 
     provider = _provider()
     playlists, has_more = await client.get_playlists_page(provider)
@@ -158,11 +159,12 @@ async def test_get_simple_pages_name_fallbacks(monkeypatch: pytest.MonkeyPatch) 
         {"id": "x3", "name": "x3"},
     ]
 
-    async def _genres_page(*args: Any, **kwargs: Any) -> tuple[list[dict[str, Any]], bool]:
-        del args, kwargs
-        return ([{"id": "g1", "genre": "Rock"}, {"id": "g2"}], False)
-
-    monkeypatch.setattr(client, "_get_simple_browse_page", _genres_page)
+    library.get_simple_browse_page = AsyncMock(
+        return_value=SimpleNamespace(
+            items=[{"id": "g1", "genre": "Rock"}, {"id": "g2"}],
+            has_more=False,
+        )
+    )
     genres, has_more = await client.get_genres_page(provider)
     assert has_more is False
     assert genres == [{"id": "g1", "name": "Rock"}, {"id": "g2", "name": "g2"}]
@@ -170,26 +172,79 @@ async def test_get_simple_pages_name_fallbacks(monkeypatch: pytest.MonkeyPatch) 
 
 async def test_get_all_playlists_and_genres_paging(monkeypatch: pytest.MonkeyPatch) -> None:
     """Paged loops should stop on empty page or has_more False."""
-    playlist_pages = [([{"id": "p1", "name": "P1"}], True), ([{"id": "p2", "name": "P2"}], False)]
-    genre_pages = [([{"id": "g1", "name": "G1"}], True), ([], True)]
-
-    async def _playlists(_provider: Any, offset: int = 0, limit: int = 0):
-        del _provider, limit
-        return playlist_pages[0] if offset == 0 else playlist_pages[1]
-
-    async def _genres(_provider: Any, offset: int = 0, limit: int = 0):
-        del _provider, limit
-        return genre_pages[0] if offset == 0 else genre_pages[1]
-
-    monkeypatch.setattr(client, "get_playlists_page", _playlists)
-    monkeypatch.setattr(client, "get_genres_page", _genres)
+    library = Mock()
+    library.get_all_playlists = AsyncMock(return_value=[{"id": "p1", "name": "P1"}])
+    library.get_all_genres = AsyncMock(return_value=[{"id": "g1", "name": "G1"}])
+    monkeypatch.setattr(client, "_build_library_client", lambda _provider: library)
 
     provider = _provider()
     assert await client.get_all_playlists(provider) == [
         {"id": "p1", "name": "P1"},
-        {"id": "p2", "name": "P2"},
     ]
     assert await client.get_all_genres(provider) == [{"id": "g1", "name": "G1"}]
+
+
+async def test_get_playlist_tracks_page_delegates_to_pylyrion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Playlist track paging should use the pylyrion page helper."""
+    library = Mock()
+    library.get_playlist_tracks_page = AsyncMock(
+        return_value=SimpleNamespace(items=[{"id": "t1", "title": "Track 1"}], has_more=False)
+    )
+    monkeypatch.setattr(client, "_build_library_client", lambda _provider: library)
+    monkeypatch.setattr(client.parsers, "parse_track", lambda _provider, row: row["id"])
+
+    provider = _provider()
+    tracks, has_more = await client.get_playlist_tracks_page(provider, "pl1")
+
+    assert tracks == ["t1"]
+    assert has_more is False
+
+
+async def test_get_playlist_tracks_delegates_to_pylyrion(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Playlist track collection should use the pylyrion raw helper."""
+    library = Mock()
+    library.get_playlist_tracks = AsyncMock(return_value=[{"id": "t1", "title": "Track 1"}])
+    monkeypatch.setattr(client, "_build_library_client", lambda _provider: library)
+    monkeypatch.setattr(client.parsers, "parse_track", lambda _provider, row: row["id"])
+
+    provider = _provider()
+    assert await client.get_playlist_tracks(provider, "pl1") == ["t1"]
+
+
+async def test_search_and_entity_data_delegate_to_pylyrion(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Search and raw entity data helpers should use the pylyrion client facade."""
+    library = Mock()
+    library.search_entities = AsyncMock(
+        side_effect=[
+            [{"id": "a1", "artist": "Artist 1"}],
+            [{"id": "al1", "album": "Album 1"}],
+            [{"id": "t1", "title": "Track 1"}],
+        ]
+    )
+    library.get_entity_row = AsyncMock(
+        side_effect=[
+            {"id": "a1", "artist": "Artist 1"},
+            {"id": "al1", "album": "Album 1"},
+            {"id": "t1", "title": "Track 1"},
+        ]
+    )
+    monkeypatch.setattr(client, "_build_library_client", lambda _provider: library)
+
+    monkeypatch.setattr(client.parsers, "parse_artist", lambda _provider, row: row["id"])
+    monkeypatch.setattr(client.parsers, "parse_album", lambda _provider, row: row["id"])
+    monkeypatch.setattr(client.parsers, "parse_track", lambda _provider, row: row["id"])
+
+    provider = _provider()
+
+    assert await client.search_artists(provider, "artist", 5) == ["a1"]
+    assert await client.search_albums(provider, "album", 5) == ["al1"]
+    assert await client.search_tracks(provider, "track", 5) == ["t1"]
+
+    assert await client.get_artist_data(provider, "a1") == {"id": "a1", "artist": "Artist 1"}
+    assert await client.get_album_data(provider, "al1") == {"id": "al1", "album": "Album 1"}
+    assert await client.get_track_data(provider, "t1") == {"id": "t1", "title": "Track 1"}
 
 
 async def test_get_album_tracks_sorting_and_playlist_tracks(
@@ -234,93 +289,42 @@ async def test_get_album_tracks_sorting_and_playlist_tracks(
 
 def test_count_and_lookup_helpers() -> None:
     """Small helper functions should cover edge branches."""
-    assert client._extract_browse_total_count({"count": None}) is None
-    assert client._extract_browse_total_count({"count": "0"}) is None
-    assert client._extract_browse_total_count({"count": "2"}) == 2
-
     assert client._format_lookup_progress(1, 0) == "progress: unknown"
     assert client._format_lookup_progress(1, 1) == "single-item lookup"
     assert "item 2/4" in client._format_lookup_progress(2, 4)
 
-    command = client._create_lookup_command(client.ALBUM_SPEC, ["1", "2"])
-    assert command[-1] == "album_id:1,2"
 
-    with pytest.raises(ValueError, match="requires at least one id"):
-        client._create_lookup_command(client.ALBUM_SPEC, [])
-
-
-def test_split_lookup_reply_and_normalize() -> None:
-    """Lookup response splitter should preserve request order and fail on misses."""
-    result = {
-        "albums_loop": [
-            {"id": "a2", "album": "two"},
-            {"id": "a1", "album": "one"},
-            {"id": "a1", "album": "dup"},
-        ]
-    }
-    split = client._split_lookup_reply(client.ALBUM_SPEC, result, ["a1", "a2"])
-    assert [item["id"] for item in split] == ["a1", "a2"]
-
-    with pytest.raises(ValueError, match="returned incomplete data"):
-        client._split_lookup_reply(client.ALBUM_SPEC, result, ["a1", "missing"])
-
-    provider = _provider()
-    normalized = client._normalize_lookup_ids(provider, client.ALBUM_SPEC, ["a", "a", "b"])
-    assert normalized == ["a", "b"]
-
-
-def test_batch_flags_and_chunking() -> None:
-    """Batch enable/disable state and chunking should behave predictably."""
-    provider = _provider()
-
-    assert client._is_batch_lookup_enabled(provider, client.ALBUM_SPEC) is True
-    assert client._is_batch_lookup_enabled(provider, client.ARTIST_SPEC) is False
-
-    err = ValueError("x")
-    client._disable_batch_lookup(provider, client.ALBUM_SPEC, err)
-    assert client.ALBUM_SPEC.key in provider._disabled_batch_lookup_keys
-    client._disable_batch_lookup(provider, client.ALBUM_SPEC, err)
-
-    chunks = list(client._chunked(["1", "2", "3", "4", "5"], 2))
-    assert chunks == [["1", "2"], ["3", "4"], ["5"]]
-
-
-async def test_batch_lookup_falls_back_from_remaining_suffix_after_transient_failure(
+async def test_iter_entity_rows_delegates_to_pylyrion_and_reports_progress(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Batch lookup should resume with the unprocessed suffix after a transient failure."""
+    """Entity-row iteration should delegate to pylyrion and keep MA progress updates."""
     provider = _provider()
-    item_ids = [f"id{i}" for i in range(client.BATCH_LOOKUP_SIZE + 5)]
-    call_count = 0
+    captured_args: list[tuple[Any, list[str]]] = []
 
-    async def _rpc_request(
-        _provider: Any,
-        player_id: str,
-        command: list[Any],
-        *,
-        timeout: int = 0,
-    ) -> dict[str, Any]:
-        del _provider, player_id, timeout
-        nonlocal call_count
-        call_count += 1
-        requested_ids = str(command[-1]).split(":", 1)[1].split(",")
-        if call_count == 2:
-            raise ProviderUnavailableError("temporary outage")
-        return {
-            client.ALBUM_SPEC.loop_key: [
-                {"id": item_id, "album": item_id} for item_id in requested_ids
-            ]
-        }
+    async def _iter_rows(spec: Any, ids: list[str]):
+        captured_args.append((spec, ids))
+        for item_id in ids:
+            yield {"id": item_id, "album": item_id}
 
-    monkeypatch.setattr(client, "rpc_request", _rpc_request)
+    library = SimpleNamespace(iter_entity_rows=_iter_rows)
+    monkeypatch.setattr(client, "_build_library_client", lambda _provider: library)
 
-    yielded = [
-        raw_item
-        async for raw_item in client._iter_raw_entities(provider, client.ALBUM_SPEC, item_ids)
-    ]
+    progress_calls: list[tuple[int, int, str | None]] = []
 
-    assert [item["id"] for item in yielded] == item_ids
-    assert client.ALBUM_SPEC.key not in provider._disabled_batch_lookup_keys
+    def _capture_progress(*, phase: str, current: int, total: int, text: str | None = None) -> None:
+        del phase
+        progress_calls.append((current, total, text))
+
+    monkeypatch.setattr(client, "_update_weighted_sync_progress", _capture_progress)
+
+    item_ids = ["id1", "id1", "id2"]
+
+    yielded = [row async for row in client._iter_entity_rows(provider, client.ALBUM_SPEC, item_ids)]
+
+    assert [item["id"] for item in yielded] == ["id1", "id2"]
+    assert captured_args == [(client.PY_ALBUM_SPEC, ["id1", "id2"])]
+    assert progress_calls[-1][0] == 2
+    assert progress_calls[-1][1] == 2
 
 
 async def test_get_entity_data_and_iter_entities_fast_paths(
@@ -328,13 +332,24 @@ async def test_get_entity_data_and_iter_entities_fast_paths(
 ) -> None:
     """Single-item and empty-id paths should work without pipeline workers."""
 
-    async def _raw(_provider: Any, _spec: Any, _ids: list[str]):
-        yield {"id": "42"}
+    async def _iter_decoded(
+        _spec: Any,
+        ids: list[str],
+        decode_row: Any,
+        worker_count: int = 1,
+    ):
+        del worker_count
+        for item_id in ids:
+            yield await decode_row({"id": item_id})
 
     async def _decode(_provider: Any, _spec: Any, _raw_item: dict[str, Any]):
         return "decoded"
 
-    monkeypatch.setattr(client, "_iter_raw_entities", _raw)
+    library = SimpleNamespace(
+        get_entity_row=AsyncMock(return_value={"id": "42"}),
+        iter_decoded_entities=_iter_decoded,
+    )
+    monkeypatch.setattr(client, "_build_library_client", lambda _provider: library)
     monkeypatch.setattr(client, "_decode_entity", _decode)
 
     provider = _provider()
@@ -350,104 +365,78 @@ async def test_get_entity_data_and_iter_entities_fast_paths(
 
 async def test_get_entity_data_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
     """Missing entity should raise MediaNotFoundError."""
-
-    async def _empty(_provider: Any, _spec: Any, _ids: list[str]):
-        if False:
-            yield {}
-
-    monkeypatch.setattr(client, "_iter_raw_entities", _empty)
+    library = Mock()
+    library.get_entity_row = AsyncMock(side_effect=LyrionRequestError("Track not found: missing"))
+    monkeypatch.setattr(client, "_build_library_client", lambda _provider: library)
 
     with pytest.raises(MediaNotFoundError):
         await client._get_entity_data(_provider(), client.TRACK_SPEC, "missing")
 
 
-async def test_get_entity_pages_has_more_branches() -> None:
-    """has_more should use count when present and fallback to page size when absent."""
-
-    def _rpc_count(_player_id: str, _command: list[Any]) -> dict[str, Any]:
-        return {"albums_loop": [{"id": "1"}], "count": 2}
-
-    page, has_more = await client._get_entity_page(
-        _provider(rpc_handler=_rpc_count), client.ALBUM_SPEC, 0, 1
-    )
-    assert len(page) == 1
-    assert has_more is True
-
-    def _rpc_entity_no_count(_player_id: str, _command: list[Any]) -> dict[str, Any]:
-        return {"albums_loop": []}
-
-    page, has_more = await client._get_entity_page(
-        _provider(rpc_handler=_rpc_entity_no_count), client.ALBUM_SPEC, 0, 1
-    )
-    assert page == []
-    assert has_more is False
-
-    def _rpc_no_count(_player_id: str, _command: list[Any]) -> dict[str, Any]:
-        return {"playlists_loop": [{"id": "1"}]}
-
-    page, has_more = await client._get_simple_browse_page(
-        _provider(rpc_handler=_rpc_no_count), "playlists", "playlists_loop", 0, 1
-    )
-    assert len(page) == 1
-    assert has_more is True
-
-
-async def test_get_browse_ids_without_count_uses_found_so_far_and_offset_paging(
+async def test_get_entity_pages_has_more_branches(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """_get_browse_ids should use the no-count progress text and advance offset by page size."""
-    observed_offsets: list[int] = []
+    """Album page helper should surface has_more from pylyrion page responses."""
+    library = Mock()
+    library.get_entity_page = AsyncMock(
+        return_value=SimpleNamespace(items=[{"id": "1"}], has_more=True)
+    )
+    monkeypatch.setattr(client, "_build_library_client", lambda _provider: library)
+    monkeypatch.setattr(client.parsers, "parse_album", lambda _provider, row: row["id"])
 
-    first_page = [{"id": f"id{i}"} for i in range(client.BROWSE_PAGE_SIZE)]
-    second_page = [{"id": "id-last"}]
+    page, has_more = await client.get_albums_page(_provider(), offset=0, limit=1)
+    assert page == ["1"]
+    assert has_more is True
 
-    def _rpc(player_id: str, command: list[Any]) -> dict[str, Any]:
-        assert player_id == ""
-        observed_offsets.append(int(command[1]))
-        if int(command[1]) == 0:
-            return {client.ARTIST_SPEC.loop_key: first_page}
-        if int(command[1]) == client.BROWSE_PAGE_SIZE:
-            return {client.ARTIST_SPEC.loop_key: second_page}
-        return {client.ARTIST_SPEC.loop_key: []}
 
-    provider = _provider(rpc_handler=_rpc)
+async def test_get_browse_ids_delegates_to_pylyrion_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_get_browse_ids should delegate id discovery to pylyrion and report completion."""
+    provider = _provider()
+    library = Mock()
+    library.get_artist_ids = AsyncMock(return_value=["id1", "id2"])
+    monkeypatch.setattr(client, "_build_library_client", lambda _provider: library)
 
     progress_texts: list[str] = []
-
-    def _capture_progress(text: str) -> None:
-        progress_texts.append(text)
-
-    monkeypatch.setattr(client, "update_current_task_progress_text", _capture_progress)
+    monkeypatch.setattr(client, "update_current_task_progress_text", progress_texts.append)
     monkeypatch.setattr(client, "_update_weighted_sync_progress", lambda **_: None)
 
     ids = await client._get_browse_ids(provider, client.ARTIST_SPEC)
 
-    assert len(ids) == client.BROWSE_PAGE_SIZE + 1
-    assert observed_offsets == [0, client.BROWSE_PAGE_SIZE]
-    assert any("found so far" in text for text in progress_texts)
+    assert ids == ["id1", "id2"]
+    library.get_artist_ids.assert_awaited_once_with(None)
+    assert any("Fetching number of artists" in text for text in progress_texts)
+    assert any("done (2)" in text for text in progress_texts)
 
 
-async def test_get_entity_page_filter_and_has_more_false() -> None:
-    """_get_entity_page should append filter value and compute has_more=False at total boundary."""
-    captured_commands: list[list[Any]] = []
-
-    def _rpc(player_id: str, command: list[Any]) -> dict[str, Any]:
-        assert player_id == ""
-        captured_commands.append(command)
-        return {"albums_loop": [{"id": "1"}], "count": 3}
-
-    page, has_more = await client._get_entity_page(
-        _provider(rpc_handler=_rpc),
-        client.ALBUM_SPEC,
-        offset=2,
-        limit=5,
-        filter_value="genre_id:g1",
+async def test_get_entity_page_filter_and_has_more_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Album page helper should pass filter value into delegated pylyrion calls."""
+    library = Mock()
+    library.get_entity_page = AsyncMock(
+        return_value=SimpleNamespace(items=[{"id": "1", "album": "A"}], has_more=False)
     )
 
-    assert len(page) == 1
+    monkeypatch.setattr(client, "_build_library_client", lambda _provider: library)
+    monkeypatch.setattr(client.parsers, "parse_album", lambda _provider, row: row["id"])
+
+    page, has_more = await client.get_albums_page(
+        _provider(),
+        filter_value="genre_id:g1",
+        offset=2,
+        limit=5,
+    )
+
+    assert page == ["1"]
     assert has_more is False
-    assert captured_commands
-    assert captured_commands[0][-1] == "genre_id:g1"
+    library.get_entity_page.assert_awaited_once_with(
+        client.PY_ALBUM_SPEC,
+        2,
+        5,
+        filter_value="genre_id:g1",
+    )
 
 
 def test_should_report_lookup_progress_task_domain_gate(monkeypatch: pytest.MonkeyPatch) -> None:

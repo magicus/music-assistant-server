@@ -100,7 +100,7 @@ async def test_validate_lms_endpoint_happy_path() -> None:
             new=AsyncMock(return_value=[object()]),
         ),
         patch(
-            "music_assistant.providers.lyrion.setup_flow.asyncio.open_connection",
+            "pylyrion.setup_validation.asyncio.open_connection",
             new=AsyncMock(return_value=(object(), _FakeWriter())),
         ),
     ):
@@ -123,7 +123,7 @@ async def test_validate_lms_endpoint_accepts_bracketed_ipv6() -> None:
             new=AsyncMock(return_value=[object()]),
         ),
         patch(
-            "music_assistant.providers.lyrion.setup_flow.asyncio.open_connection",
+            "pylyrion.setup_validation.asyncio.open_connection",
             new=AsyncMock(return_value=(object(), _FakeWriter())),
         ) as open_connection_mock,
     ):
@@ -177,7 +177,7 @@ async def test_validate_lms_endpoint_errors() -> None:
             new=AsyncMock(return_value=[object()]),
         ),
         patch(
-            "music_assistant.providers.lyrion.setup_flow.asyncio.open_connection",
+            "pylyrion.setup_validation.asyncio.open_connection",
             new=AsyncMock(return_value=(object(), _FakeWriter())),
         ),
         pytest.raises(SetupFailedError, match="serverstatus_invalid"),
@@ -201,7 +201,7 @@ async def test_validate_lms_endpoint_unreachable_and_not_lyrion() -> None:
             new=AsyncMock(return_value=[object()]),
         ),
         patch(
-            "music_assistant.providers.lyrion.setup_flow.asyncio.open_connection",
+            "pylyrion.setup_validation.asyncio.open_connection",
             new=AsyncMock(side_effect=OSError("no route")),
         ),
         pytest.raises(SetupFailedError, match="endpoint_unreachable"),
@@ -219,7 +219,7 @@ async def test_validate_lms_endpoint_unreachable_and_not_lyrion() -> None:
             new=AsyncMock(return_value=[object()]),
         ),
         patch(
-            "music_assistant.providers.lyrion.setup_flow.asyncio.open_connection",
+            "pylyrion.setup_validation.asyncio.open_connection",
             new=AsyncMock(return_value=(object(), _FakeWriter())),
         ),
         pytest.raises(SetupFailedError, match="serverstatus_invalid"),
@@ -240,7 +240,7 @@ async def test_validate_lms_endpoint_unreachable_and_not_lyrion() -> None:
             new=AsyncMock(return_value=[object()]),
         ),
         patch(
-            "music_assistant.providers.lyrion.setup_flow.asyncio.open_connection",
+            "pylyrion.setup_validation.asyncio.open_connection",
             new=AsyncMock(return_value=(object(), _FakeWriter())),
         ),
         pytest.raises(SetupFailedError, match="endpoint_not_lyrion"),
@@ -299,13 +299,13 @@ async def test_prefill_uses_sibling_provider_when_setting_up() -> None:
     session.context.kind = "setup"
     session.context.instance_id = "lyrion_player--new"
     session.mass.config.get_provider_configs = AsyncMock(
-        side_effect=[[_provider_cfg("lyrion_player--old")], []]
+        side_effect=[[], [_provider_cfg("lyrion_music--old")]]
     )
 
     def _setup_value(instance_id: str, key: str) -> Any:
-        if instance_id == "lyrion_player--old" and key == "lms_host":
+        if instance_id == "lyrion_music--old" and key == "lms_host":
             return "old.local"
-        if instance_id == "lyrion_player--old" and key == "port":
+        if instance_id == "lyrion_music--old" and key == "port":
             return "9003"
         return None
 

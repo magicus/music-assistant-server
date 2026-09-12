@@ -9,13 +9,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
-from aiohttp import ClientError, ClientSession, ClientTimeout
+from aiohttp import ClientSession
 from music_assistant_models.config_entries import ConfigEntry
 from music_assistant_models.enums import ConfigEntryType
 from music_assistant_models.errors import SetupFailedError
 
 from music_assistant.models.setup_flow import SetupFlowError
-from music_assistant.providers.lyrion.client import build_lms_url
+from pylyrion.setup_validation import LyrionEndpointValidationError
+from pylyrion.setup_validation import validate_lms_endpoint as validate_pylyrion_endpoint
 
 if TYPE_CHECKING:
     import logging
@@ -113,85 +114,20 @@ async def validate_lms_endpoint(
     translation_owner: str | None = None,
 ) -> None:
     """Validate a configured LMS endpoint."""
-    host_str = str(host or "").strip()
-    if host_str.startswith("[") and host_str.endswith("]"):
-        host_str = host_str[1:-1]
-    if not host_str:
-        raise SetupFailedError(
-            "host_required",
-            translation_key="host_required",
-            translation_owner=translation_owner,
-        )
-
-    resolved_port = _coerce_port(port)
-    if resolved_port is None:
-        raise SetupFailedError(
-            "invalid_port",
-            translation_key="invalid_port",
-            translation_owner=translation_owner,
-        )
-
-    if not _is_ip_address(host_str):
-        try:
-            await asyncio.get_running_loop().getaddrinfo(
-                host_str,
-                None,
-                type=socket.SOCK_STREAM,
-            )
-        except socket.gaierror as err:
-            msg = f"host_unresolvable: {host_str}"
-            raise SetupFailedError(
-                msg,
-                translation_key="host_unresolvable",
-                translation_owner=translation_owner,
-                translation_args=[host_str],
-            ) from err
-
     try:
-        conn = await asyncio.wait_for(
-            asyncio.open_connection(host_str, resolved_port),
-            timeout=5,
+        await validate_pylyrion_endpoint(
+            host=host,
+            port=port,
+            http_session=http_session,
         )
-        _, writer = conn
-        writer.close()
-        await writer.wait_closed()
-    except (TimeoutError, OSError) as err:
-        msg = f"endpoint_unreachable: {host_str}:{resolved_port}"
+    except LyrionEndpointValidationError as err:
+        msg = err.error_key if err.details is None else f"{err.error_key}: {err.details}"
         raise SetupFailedError(
             msg,
-            translation_key="endpoint_unreachable",
+            translation_key=err.error_key,
             translation_owner=translation_owner,
+            translation_args=err.translation_args,
         ) from err
-
-    payload = {
-        "id": 1,
-        "method": "slim.request",
-        "params": ["", ["serverstatus", 0, 1]],
-    }
-    url = build_lms_url(host_str, resolved_port, "/jsonrpc.js")
-    try:
-        async with http_session.post(
-            url,
-            json=payload,
-            timeout=ClientTimeout(total=5),
-        ) as response:
-            response.raise_for_status()
-            body = await response.json()
-    except (ClientError, TimeoutError, ValueError) as err:
-        msg = f"endpoint_not_lyrion: {host_str}:{resolved_port}"
-        raise SetupFailedError(
-            msg,
-            translation_key="endpoint_not_lyrion",
-            translation_owner=translation_owner,
-        ) from err
-
-    if not isinstance(body, dict) or not isinstance(body.get("result"), dict):
-        msg = f"serverstatus_invalid: {host_str}:{resolved_port}"
-        raise SetupFailedError(
-            msg,
-            translation_key="serverstatus_invalid",
-            translation_owner=translation_owner,
-        )
 
 
 def _entries(

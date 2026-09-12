@@ -472,8 +472,8 @@ async def test_ma_volume_change_disables_lms_sync_volume_before_grouped_volume_c
         provider.mass.config = MagicMock()
         provider.mass.config.create_default_player_config = MagicMock()
         provider.mass.config.get_base_player_config = MagicMock(return_value=MagicMock())
-        provider.get_last_cometd_status_seen_at = MagicMock(return_value=0.0)
-        provider.verify_cometd_status_expectation = AsyncMock(return_value=True)
+        provider.get_last_status_seen_at = MagicMock(return_value=0.0)
+        provider.verify_status_expectation = AsyncMock(return_value=True)
 
         client_by_id = {
             leader_id: rpc_a,
@@ -484,7 +484,18 @@ async def test_ma_volume_change_disables_lms_sync_volume_before_grouped_volume_c
         async def _send_player_command(player_id: str, command: list[object]) -> dict[str, object]:
             return await client_by_id[player_id].send(command)
 
+        async def _set_player_sync_volume(player_id: str, enabled: bool) -> dict[str, object]:
+            value = 1 if enabled else 0
+            return await client_by_id[player_id].send(["playerpref", "syncVolume", value])
+
+        async def _set_player_volume_with_verify(player_id: str, volume: int) -> dict[str, object]:
+            return await client_by_id[player_id].send(["mixer", "volume", volume])
+
         provider.send_player_command = _send_player_command
+        provider.set_player_sync_volume = _set_player_sync_volume
+        provider.set_player_volume_with_verify = _set_player_volume_with_verify
+        provider.player_set_volume = _set_player_volume_with_verify
+        provider.lyrion_server = provider
 
         leader_player = LyrionPlayer(
             provider,

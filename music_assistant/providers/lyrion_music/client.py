@@ -1,12 +1,10 @@
-"""Lyrion client helpers for RPC, paging and raw item retrieval."""
+"""Lyrion client helpers for paging, sync progress and MA model mapping."""
 
 from __future__ import annotations
 
-import asyncio
-from collections.abc import AsyncGenerator, Iterable, Mapping
+from collections.abc import AsyncGenerator, Mapping
 from dataclasses import dataclass
-from time import monotonic
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 from music_assistant_models.errors import MediaNotFoundError, ProviderUnavailableError
 
@@ -15,17 +13,16 @@ from music_assistant.controllers.tasks import (
     update_current_task_progress,
     update_current_task_progress_text,
 )
-from music_assistant.providers.lyrion.client import normalize_lms_text_value, rpc_request
+from pylyrion.errors import LyrionProtocolError, LyrionRequestError, LyrionTimeoutError
+from pylyrion.library import ALBUM_SPEC as PY_ALBUM_SPEC
+from pylyrion.library import ARTIST_SPEC as PY_ARTIST_SPEC
+from pylyrion.library import TRACK_SPEC as PY_TRACK_SPEC
+from pylyrion.library import LyrionLibraryClient, normalize_lookup_ids
+from pylyrion.models import LyrionEndpoint
+from pylyrion.session import LyrionSession
 
 from . import parsers
-from .constants import (
-    ALBUM_TAGS,
-    ARTIST_TAGS,
-    ARTWORK_WORKER_COUNT,
-    BATCH_LOOKUP_SIZE,
-    BROWSE_PAGE_SIZE,
-    TRACK_TAGS,
-)
+from .constants import ARTWORK_WORKER_COUNT, BROWSE_PAGE_SIZE
 
 if TYPE_CHECKING:
     from music_assistant_models.media_items import Album, Artist, Track
@@ -45,7 +42,6 @@ class LmsEntitySpec:
     loop_key: str
     id_filter_key: str
     id_keys: tuple[str, ...]
-    tags: str
     supports_batch_lookup: bool = False
 
 
@@ -55,7 +51,6 @@ ARTIST_SPEC = LmsEntitySpec(
     loop_key="artists_loop",
     id_filter_key="artist_id",
     id_keys=("id", "artist_id", "contributor_id"),
-    tags=ARTIST_TAGS,
     supports_batch_lookup=False,
 )
 
@@ -65,7 +60,6 @@ ALBUM_SPEC = LmsEntitySpec(
     loop_key="albums_loop",
     id_filter_key="album_id",
     id_keys=("id", "album_id"),
-    tags=ALBUM_TAGS,
     supports_batch_lookup=True,
 )
 
@@ -75,7 +69,6 @@ TRACK_SPEC = LmsEntitySpec(
     loop_key="titles_loop",
     id_filter_key="track_id",
     id_keys=("id", "track_id"),
-    tags=TRACK_TAGS,
     supports_batch_lookup=True,
 )
 
@@ -103,19 +96,18 @@ async def get_artists_page(
     limit: int = BROWSE_PAGE_SIZE,
 ) -> tuple[list[Artist], bool]:
     """Return one paginated artist page from LMS plus a has-more flag."""
-    raw_artists, has_more = await _get_entity_page(
-        provider,
-        spec=ARTIST_SPEC,
-        offset=offset,
-        limit=limit,
+    page = await _build_library_client(provider).get_entity_page(
+        PY_ARTIST_SPEC,
+        offset,
+        limit,
     )
     artists: list[Artist] = []
-    for raw_artist in raw_artists:
+    for artist_row in page.items:
         try:
-            artists.append(parsers.parse_artist(provider, _normalize_lms_row(raw_artist)))
+            artists.append(parsers.parse_artist(provider, artist_row))
         except MediaNotFoundError:
             continue
-    return artists, has_more
+    return artists, page.has_more
 
 
 async def get_albums_page(
@@ -125,20 +117,19 @@ async def get_albums_page(
     limit: int = BROWSE_PAGE_SIZE,
 ) -> tuple[list[Album], bool]:
     """Return one paginated album page from LMS plus a has-more flag."""
-    raw_albums, has_more = await _get_entity_page(
-        provider,
-        spec=ALBUM_SPEC,
-        offset=offset,
-        limit=limit,
+    page = await _build_library_client(provider).get_entity_page(
+        PY_ALBUM_SPEC,
+        offset,
+        limit,
         filter_value=filter_value,
     )
     albums: list[Album] = []
-    for raw_album in raw_albums:
+    for album_row in page.items:
         try:
-            albums.append(parsers.parse_album(provider, _normalize_lms_row(raw_album)))
+            albums.append(parsers.parse_album(provider, album_row))
         except MediaNotFoundError:
             continue
-    return albums, has_more
+    return albums, page.has_more
 
 
 async def get_tracks_page(
@@ -148,20 +139,19 @@ async def get_tracks_page(
     limit: int = BROWSE_PAGE_SIZE,
 ) -> tuple[list[Track], bool]:
     """Return one paginated track page from LMS plus a has-more flag."""
-    raw_tracks, has_more = await _get_entity_page(
-        provider,
-        spec=TRACK_SPEC,
-        offset=offset,
-        limit=limit,
+    page = await _build_library_client(provider).get_entity_page(
+        PY_TRACK_SPEC,
+        offset,
+        limit,
         filter_value=filter_value,
     )
     tracks: list[Track] = []
-    for raw_track in raw_tracks:
+    for track_row in page.items:
         try:
-            tracks.append(parsers.parse_track(provider, _normalize_lms_row(raw_track)))
+            tracks.append(parsers.parse_track(provider, track_row))
         except MediaNotFoundError:
             continue
-    return tracks, has_more
+    return tracks, page.has_more
 
 
 async def get_playlists_page(
@@ -170,27 +160,23 @@ async def get_playlists_page(
     limit: int = BROWSE_PAGE_SIZE,
 ) -> tuple[list[dict[str, str]], bool]:
     """Return one paginated playlist page from LMS plus a has-more flag."""
-    raw_playlists, has_more = await _get_simple_browse_page(
-        provider,
-        command="playlists",
-        loop_key="playlists_loop",
-        offset=offset,
-        limit=limit,
+    page = await _build_library_client(provider).get_simple_browse_page(
+        "playlists",
+        "playlists_loop",
+        offset,
+        limit,
     )
     playlists: list[dict[str, str]] = []
-    for raw_playlist in raw_playlists:
-        normalized_playlist = _normalize_lms_row(raw_playlist)
+    for playlist_row in page.items:
         playlist_id = parsers.extract_item_id(
-            normalized_playlist,
+            playlist_row,
             id_keys=("id", "playlist_id"),
         )
         if playlist_id is None:
             continue
-        playlist_name = (
-            normalized_playlist.get("playlist") or normalized_playlist.get("name") or playlist_id
-        )
+        playlist_name = playlist_row.get("playlist") or playlist_row.get("name") or playlist_id
         playlists.append({"id": playlist_id, "name": playlist_name})
-    return playlists, has_more
+    return playlists, page.has_more
 
 
 async def get_genres_page(
@@ -199,34 +185,23 @@ async def get_genres_page(
     limit: int = BROWSE_PAGE_SIZE,
 ) -> tuple[list[dict[str, str]], bool]:
     """Return one paginated genre page from LMS plus a has-more flag."""
-    raw_genres, has_more = await _get_simple_browse_page(
-        provider,
-        command="genres",
-        loop_key="genres_loop",
-        offset=offset,
-        limit=limit,
+    page = await _build_library_client(provider).get_simple_browse_page(
+        "genres",
+        "genres_loop",
+        offset,
+        limit,
     )
     genres: list[dict[str, str]] = []
-    for raw_genre in raw_genres:
-        normalized_genre = _normalize_lms_row(raw_genre)
+    for genre_row in page.items:
         genre_id = parsers.extract_item_id(
-            normalized_genre,
+            genre_row,
             id_keys=("id", "genre_id"),
         )
         if genre_id is None:
             continue
-        genre_name = normalized_genre.get("genre") or normalized_genre.get("name") or genre_id
+        genre_name = genre_row.get("genre") or genre_row.get("name") or genre_id
         genres.append({"id": genre_id, "name": genre_name})
-    return genres, has_more
-
-
-def _normalize_lms_row(raw_item: Mapping[str, object]) -> dict[str, str]:
-    """Normalize one LMS payload row into a string-only mapping."""
-    normalized_item: dict[str, str] = {}
-    for key, value in raw_item.items():
-        if normalized_value := normalize_lms_text_value(value):
-            normalized_item[key] = normalized_value
-    return normalized_item
+    return genres, page.has_more
 
 
 async def iter_library_artists(
@@ -271,17 +246,7 @@ async def get_all_playlists(
     provider: LyrionMusicProvider,
 ) -> list[dict[str, str]]:
     """Return all playlists from LMS as id/name pairs."""
-    playlists: list[dict[str, str]] = []
-    offset = 0
-    while True:
-        page, has_more = await get_playlists_page(provider, offset=offset)
-        if not page:
-            break
-        playlists.extend(page)
-        if not has_more:
-            break
-        offset += BROWSE_PAGE_SIZE
-    return playlists
+    return await _build_library_client(provider).get_all_playlists()
 
 
 async def get_playlist_tracks_page(
@@ -291,53 +256,27 @@ async def get_playlist_tracks_page(
     limit: int = BROWSE_PAGE_SIZE,
 ) -> tuple[list[Track], bool]:
     """Return one paged playlist track response using LMS playlists/tracks."""
-    result = await rpc_request(
-        provider,
-        player_id="",
-        command=[
-            "playlists",
-            "tracks",
-            offset,
-            limit,
-            f"playlist_id:{playlist_id}",
-            TRACK_TAGS,
-        ],
-    )
-    raw_items = cast(
-        "list[Mapping[str, object]]",
-        result.get("playlisttracks_loop", []),
+    page = await _build_library_client(provider).get_playlist_tracks_page(
+        playlist_id,
+        offset=offset,
+        limit=limit,
     )
     tracks: list[Track] = []
-    for raw_track in raw_items:
-        normalized_track = _normalize_lms_row(raw_track)
-        if parsers.extract_item_id(normalized_track, id_keys=("id", "track_id")) is None:
+    for track_row in page.items:
+        if parsers.extract_item_id(track_row, id_keys=("id", "track_id")) is None:
             continue
-        tracks.append(parsers.parse_track(provider, normalized_track))
-
-    expected_total = _extract_browse_total_count(result)
-    if expected_total is not None:
-        has_more = offset + len(raw_items) < expected_total
-    else:
-        has_more = len(raw_items) >= limit
-    return tracks, has_more
+        tracks.append(parsers.parse_track(provider, track_row))
+    return tracks, page.has_more
 
 
 async def get_playlist_tracks(provider: LyrionMusicProvider, playlist_id: str) -> list[Track]:
     """Return all tracks for a playlist id."""
+    track_rows = await _build_library_client(provider).get_playlist_tracks(playlist_id)
     tracks: list[Track] = []
-    offset = 0
-    while True:
-        page, has_more = await get_playlist_tracks_page(
-            provider,
-            playlist_id,
-            offset=offset,
-        )
-        if not page:
-            break
-        tracks.extend(page)
-        if not has_more:
-            break
-        offset += BROWSE_PAGE_SIZE
+    for track_row in track_rows:
+        if parsers.extract_item_id(track_row, id_keys=("id", "track_id")) is None:
+            continue
+        tracks.append(parsers.parse_track(provider, track_row))
     return tracks
 
 
@@ -375,7 +314,7 @@ async def _get_browse_ids(
     spec: LmsEntitySpec,
     filter_value: str | None = None,
 ) -> list[str]:
-    """Return ids for one LMS entity using paged browse requests."""
+    """Return ids for one LMS entity via the shared pylyrion browse client."""
     provider.logger.debug(
         "Lyrion %s id discovery -> command %s (filter: %s)",
         spec.key,
@@ -383,76 +322,18 @@ async def _get_browse_ids(
         filter_value or "none",
     )
     update_current_task_progress_text(f"Fetching number of {spec.key}s from Lyrion...")
-    ids: list[str] = []
-    seen: set[str] = set()
-    expected_total: int | None = None
-    offset = 0
-    page_index = 0
-    while True:
-        page_index += 1
-        command: list[Any] = [
-            spec.command,
-            offset,
-            BROWSE_PAGE_SIZE,
-            spec.tags,
-        ]
-        if filter_value:
-            command.append(filter_value)
-        provider.logger.debug(
-            "Lyrion %s id discovery request -> page %s (offset: %s, limit: %s)",
-            spec.key,
-            page_index,
-            offset,
-            BROWSE_PAGE_SIZE,
-        )
-        request_started = monotonic()
-        result = await rpc_request(provider, player_id="", command=command)
-        request_elapsed_ms = (monotonic() - request_started) * 1000
-        if expected_total is None:
-            expected_total = _extract_browse_total_count(result)
-        raw_items = cast("list[Mapping[str, object]]", result.get(spec.loop_key, []))
-        provider.logger.debug(
-            "Lyrion %s id discovery response <- page %s (%s rows, rpc: %.1f ms)",
-            spec.key,
-            page_index,
-            len(raw_items),
-            request_elapsed_ms,
-        )
-        if not raw_items:
-            break
-        ids_before_page = len(ids)
-        for raw_item in raw_items:
-            normalized_item = _normalize_lms_row(raw_item)
-            if (item_id := parsers.extract_item_id(normalized_item, id_keys=spec.id_keys)) is None:
-                continue
-            if item_id in seen:
-                continue
-            seen.add(item_id)
-            ids.append(item_id)
-        if len(ids) == ids_before_page:
-            provider.logger.warning(
-                "Lyrion %s id discovery stalled at offset %s; received %s rows but no new ids",
-                spec.key,
-                offset,
-                len(raw_items),
-            )
-            break
-        if expected_total:
-            progress_text = f"Getting {spec.key} ids from Lyrion: {len(ids)}/{expected_total}"
-            update_current_task_progress_text(progress_text)
-            _update_weighted_sync_progress(
-                phase="id_discovery",
-                current=len(ids),
-                total=expected_total,
-                text=progress_text,
-            )
+    library = _build_library_client(provider)
+    try:
+        if spec.key == "artist":
+            ids = await library.get_artist_ids(filter_value)
+        elif spec.key == "album":
+            ids = await library.get_album_ids(filter_value)
         else:
-            update_current_task_progress_text(
-                f"Getting {spec.key} ids from Lyrion: {len(ids)} found so far"
-            )
-        if len(raw_items) < BROWSE_PAGE_SIZE:
-            break
-        offset += BROWSE_PAGE_SIZE
+            ids = await library.get_track_ids(filter_value)
+    except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
+        raise ProviderUnavailableError(str(err)) from err
+
+    update_current_task_progress_text(f"Getting {spec.key} ids from Lyrion: done ({len(ids)})")
     provider.logger.debug(
         "Lyrion %s id discovery <- %s ids",
         spec.key,
@@ -467,124 +348,71 @@ async def _get_browse_ids(
     return ids
 
 
-def _extract_browse_total_count(result: Mapping[str, object]) -> int | None:
-    """Extract total item count from an LMS browse response when available."""
-    count = normalize_lms_text_value(result.get("count"))
-    if count is None:
-        return None
-    parsed = parsers.parse_int(count, default=0)
-    return parsed if parsed > 0 else None
-
-
 async def get_all_genres(
     provider: LyrionMusicProvider,
 ) -> list[dict[str, str]]:
     """Return all genres from LMS as id/name pairs."""
-    genres: list[dict[str, str]] = []
-    offset = 0
-    while True:
-        page, has_more = await get_genres_page(provider, offset=offset)
-        if not page:
-            break
-        genres.extend(page)
-        if not has_more:
-            break
-        offset += BROWSE_PAGE_SIZE
-    return genres
+    return await _build_library_client(provider).get_all_genres()
 
 
-async def _get_entity_page(
-    provider: LyrionMusicProvider,
-    spec: LmsEntitySpec,
-    offset: int,
-    limit: int,
-    filter_value: str | None = None,
-) -> tuple[list[Mapping[str, object]], bool]:
-    """Return one paged entity response rowset with has-more metadata."""
-    command: list[Any] = [spec.command, offset, limit, spec.tags]
-    if filter_value:
-        command.append(filter_value)
-    result = await rpc_request(
-        provider,
-        player_id="",
-        command=command,
+def _build_library_session(provider: LyrionMusicProvider) -> LyrionSession:
+    """Create a neutral pylyrion session from MA provider config."""
+    return LyrionSession(
+        http_session=provider.mass.http_session,
+        endpoint=LyrionEndpoint(
+            host=provider.get_configured_host() or "",
+            port=provider.get_configured_port(),
+        ),
     )
-    raw_items = cast("list[Mapping[str, object]]", result.get(spec.loop_key, []))
-    expected_total = _extract_browse_total_count(result)
-    if expected_total is not None:
-        has_more = offset + len(raw_items) < expected_total
-    else:
-        has_more = len(raw_items) >= limit
-    return raw_items, has_more
 
 
-async def _get_simple_browse_page(
-    provider: LyrionMusicProvider,
-    command: str,
-    loop_key: str,
-    offset: int,
-    limit: int,
-) -> tuple[list[Mapping[str, object]], bool]:
-    """Return one paged simple browse response (playlists/genres)."""
-    result = await rpc_request(
-        provider,
-        player_id="",
-        command=[command, offset, limit],
-    )
-    raw_items = cast("list[Mapping[str, object]]", result.get(loop_key, []))
-    expected_total = _extract_browse_total_count(result)
-    if expected_total is not None:
-        has_more = offset + len(raw_items) < expected_total
-    else:
-        has_more = len(raw_items) >= limit
-    return raw_items, has_more
+def _build_library_client(provider: LyrionMusicProvider) -> LyrionLibraryClient:
+    """Create a pylyrion library client from the MA provider config."""
+    return LyrionLibraryClient(_build_library_session(provider))
 
 
 async def search_artists(provider: LyrionMusicProvider, query: str, limit: int) -> list[Artist]:
     """Search artists in LMS."""
-    result = await rpc_request(
-        provider,
-        player_id="",
-        command=["artists", 0, limit, ARTIST_TAGS, f"search:{query}"],
-    )
+    library = _build_library_client(provider)
+    try:
+        result = await library.search_entities(PY_ARTIST_SPEC, query, limit)
+    except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
+        raise ProviderUnavailableError(str(err)) from err
     artists: list[Artist] = []
-    for raw_artist in cast("list[Mapping[str, object]]", result.get("artists_loop", [])):
-        normalized_artist = _normalize_lms_row(raw_artist)
-        if parsers.extract_item_id(normalized_artist) is None:
+    for artist_row in result:
+        if parsers.extract_item_id(artist_row) is None:
             continue
-        artists.append(parsers.parse_artist(provider, normalized_artist))
+        artists.append(parsers.parse_artist(provider, artist_row))
     return artists
 
 
 async def search_albums(provider: LyrionMusicProvider, query: str, limit: int) -> list[Album]:
     """Search albums in LMS."""
-    result = await rpc_request(
-        provider,
-        player_id="",
-        command=["albums", 0, limit, ALBUM_TAGS, f"search:{query}"],
-    )
+    library = _build_library_client(provider)
+    try:
+        result = await library.search_entities(PY_ALBUM_SPEC, query, limit)
+    except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
+        raise ProviderUnavailableError(str(err)) from err
     albums: list[Album] = []
-    for raw_album in cast("list[Mapping[str, object]]", result.get("albums_loop", [])):
-        normalized_album = _normalize_lms_row(raw_album)
-        if parsers.extract_item_id(normalized_album) is None:
+    for album_row in result:
+        if parsers.extract_item_id(album_row) is None:
             continue
-        albums.append(parsers.parse_album(provider, normalized_album))
+        albums.append(parsers.parse_album(provider, album_row))
     return albums
 
 
 async def search_tracks(provider: LyrionMusicProvider, query: str, limit: int) -> list[Track]:
     """Search tracks in LMS."""
-    result = await rpc_request(
-        provider,
-        player_id="",
-        command=["titles", 0, limit, TRACK_TAGS, f"search:{query}"],
-    )
+    library = _build_library_client(provider)
+    try:
+        result = await library.search_entities(PY_TRACK_SPEC, query, limit)
+    except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
+        raise ProviderUnavailableError(str(err)) from err
     tracks: list[Track] = []
-    for raw_track in cast("list[Mapping[str, object]]", result.get("titles_loop", [])):
-        normalized_track = _normalize_lms_row(raw_track)
-        if parsers.extract_item_id(normalized_track) is None:
+    for track_row in result:
+        if parsers.extract_item_id(track_row) is None:
             continue
-        tracks.append(parsers.parse_track(provider, normalized_track))
+        tracks.append(parsers.parse_track(provider, track_row))
     return tracks
 
 
@@ -608,71 +436,27 @@ async def _get_entity_data(
     spec: LmsEntitySpec,
     item_id: str,
 ) -> Mapping[str, str]:
-    """Fetch one raw entity payload by id using the shared lookup flow."""
-    async for raw_item in _iter_raw_entities(provider, spec, [item_id]):
-        return raw_item
-    raise MediaNotFoundError(f"{spec.key.title()} not found: {item_id}")
-
-
-async def _fetch_worker(
-    provider: LyrionMusicProvider,
-    spec: LmsEntitySpec,
-    ordered_ids: list[str],
-    raw_queue: asyncio.Queue[Mapping[str, str] | object],
-    stop_sentinel: object,
-    error_box: list[Exception],
-) -> None:
+    """Fetch one normalized entity row by id using the shared lookup flow."""
+    py_spec = _to_py_entity_spec(spec)
     try:
-        async for raw_item in _iter_raw_entities(provider, spec, ordered_ids):
-            await raw_queue.put(raw_item)
-    except Exception as err:
-        error_box.append(err)
-    finally:
-        await raw_queue.put(stop_sentinel)
+        row = await _build_library_client(provider).get_entity_row(py_spec, item_id)
+    except LyrionRequestError as err:
+        message = str(err)
+        if "not found" in message.lower():
+            raise MediaNotFoundError(f"{spec.key.title()} not found: {item_id}") from err
+        raise ProviderUnavailableError(message) from err
+    except (LyrionProtocolError, LyrionTimeoutError) as err:
+        raise ProviderUnavailableError(str(err)) from err
+    return dict(row)
 
 
-async def _decode_worker(
-    provider: LyrionMusicProvider,
-    spec: LmsEntitySpec,
-    raw_queue: asyncio.Queue[Mapping[str, str] | object],
-    decoded_queue: asyncio.Queue[Artist | Album | Track | object],
-    stop_sentinel: object,
-    artwork_worker_count: int,
-    error_box: list[Exception],
-) -> None:
-    try:
-        while True:
-            payload = await raw_queue.get()
-            if payload is stop_sentinel:
-                break
-            decoded = await _decode_entity(provider, spec, cast("Mapping[str, str]", payload))
-            await decoded_queue.put(decoded)
-    except Exception as err:
-        error_box.append(err)
-    finally:
-        for _ in range(artwork_worker_count):
-            await decoded_queue.put(stop_sentinel)
-
-
-async def _artwork_worker(
-    provider: LyrionMusicProvider,
-    spec: LmsEntitySpec,
-    decoded_queue: asyncio.Queue[Artist | Album | Track | object],
-    output_queue: asyncio.Queue[Artist | Album | Track | object],
-    stop_sentinel: object,
-    error_box: list[Exception],
-) -> None:
-    try:
-        del provider, spec
-        while True:
-            decoded = await decoded_queue.get()
-            if decoded is stop_sentinel:
-                break
-            await output_queue.put(cast("Artist | Album | Track", decoded))
-    except Exception as err:
-        error_box.append(err)
-    finally:
-        await output_queue.put(stop_sentinel)
+def _to_py_entity_spec(spec: LmsEntitySpec):
+    """Map MA-side entity spec to the corresponding pylyrion entity spec."""
+    if spec.key == "artist":
+        return PY_ARTIST_SPEC
+    if spec.key == "album":
+        return PY_ALBUM_SPEC
+    return PY_TRACK_SPEC
 
 
 async def _iter_entities(
@@ -680,23 +464,11 @@ async def _iter_entities(
     spec: LmsEntitySpec,
     item_ids: list[str],
 ) -> AsyncGenerator[Artist | Album | Track]:
-    """Yield decoded entities via a bounded fetch -> decode -> pass-through pipeline."""
-    ordered_ids = _normalize_lookup_ids(provider, spec, item_ids)
+    """Yield decoded entities via pylyrion lookup + MA decode callback."""
+    ordered_ids = normalize_lookup_ids(item_ids)
     if not ordered_ids:
         return
 
-    # For single-item lookups we avoid pipeline overhead and return immediately.
-    if len(ordered_ids) == 1:
-        raw_item = await _get_entity_data(provider, spec, ordered_ids[0])
-        entity = await _decode_entity(provider, spec, raw_item)
-        yield entity
-        return
-
-    raw_queue: asyncio.Queue[Mapping[str, str] | object] = asyncio.Queue(maxsize=2)
-    decoded_queue: asyncio.Queue[Artist | Album | Track | object] = asyncio.Queue(maxsize=2)
-    output_queue: asyncio.Queue[Artist | Album | Track | object] = asyncio.Queue(maxsize=2)
-    stop_sentinel = object()
-    error_box: list[Exception] = []
     artwork_worker_count = max(1, ARTWORK_WORKER_COUNT)
 
     provider.logger.debug(
@@ -704,190 +476,49 @@ async def _iter_entities(
         spec.key,
         artwork_worker_count,
     )
-
-    tasks = [
-        asyncio.create_task(
-            _fetch_worker(
-                provider,
-                spec,
-                ordered_ids,
-                raw_queue,
-                stop_sentinel,
-                error_box,
-            )
-        ),
-        asyncio.create_task(
-            _decode_worker(
-                provider,
-                spec,
-                raw_queue,
-                decoded_queue,
-                stop_sentinel,
-                artwork_worker_count,
-                error_box,
-            )
-        ),
-    ]
-    for _ in range(artwork_worker_count):
-        tasks.append(
-            asyncio.create_task(
-                _artwork_worker(
-                    provider,
-                    spec,
-                    decoded_queue,
-                    output_queue,
-                    stop_sentinel,
-                    error_box,
-                )
-            )
-        )
-    try:
-        completed_workers = 0
-        while True:
-            item = await output_queue.get()
-            if item is stop_sentinel:
-                completed_workers += 1
-                if completed_workers >= artwork_worker_count:
-                    break
-                continue
-            if error_box:
-                raise error_box[0]
-            yield cast("Artist | Album | Track", item)
-
-        if error_box:
-            raise error_box[0]
-    finally:
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+    library = _build_library_client(provider)
+    async for entity in library.iter_decoded_entities(
+        _to_py_entity_spec(spec),
+        ordered_ids,
+        lambda row: _decode_entity(provider, spec, row),
+        worker_count=artwork_worker_count,
+    ):
+        yield entity
 
 
 async def _decode_entity(
     provider: LyrionMusicProvider,
     spec: LmsEntitySpec,
-    raw_item: Mapping[str, str],
+    entity_row: Mapping[str, str],
 ) -> Artist | Album | Track:
-    """Decode one raw LMS item into its MA model."""
+    """Decode one normalized LMS row into its MA model."""
     if spec.key == "artist":
-        return parsers.parse_artist(provider, raw_item)
+        return parsers.parse_artist(provider, entity_row)
     if spec.key == "album":
-        return parsers.parse_album(provider, raw_item)
-    return parsers.parse_track(provider, raw_item)
+        return parsers.parse_album(provider, entity_row)
+    return parsers.parse_track(provider, entity_row)
 
 
-async def _iter_raw_entities(
+async def _iter_entity_rows(
     provider: LyrionMusicProvider,
     spec: LmsEntitySpec,
     item_ids: list[str],
 ) -> AsyncGenerator[Mapping[str, str]]:
-    """Yield raw LMS entities in request order, with optional batch fallback."""
-    total_items = len(item_ids)
-    if len(item_ids) == 1:
-        item_id = item_ids[0]
-        _log_lookup_request(provider, spec, item_id, item_index=1, total_items=total_items)
-        request_started = monotonic()
-        result = await rpc_request(
-            provider,
-            player_id="",
-            command=_create_lookup_command(spec, item_ids),
-        )
-        request_elapsed_ms = (monotonic() - request_started) * 1000
-        for raw_item in _split_lookup_reply(spec, result, item_ids):
-            if _should_report_lookup_progress():
-                fetch_text = f"Fetching {spec.key}s from Lyrion: 1/{total_items}"
-                _update_weighted_sync_progress(
-                    phase="entity_fetch",
-                    current=1,
-                    total=total_items,
-                    text=fetch_text,
-                )
-            _log_lookup_response(
-                provider,
-                spec,
-                raw_item,
-                requested_id=item_id,
-                request_elapsed_ms=request_elapsed_ms,
-            )
-            yield raw_item
+    """Yield normalized LMS rows in request order via pylyrion lookup."""
+    ordered_ids = normalize_lookup_ids(item_ids)
+    total_items = len(ordered_ids)
+    if total_items == 0:
         return
 
-    use_batch = _is_batch_lookup_enabled(provider, spec)
-    if use_batch:
+    if len(ordered_ids) != len(item_ids):
         provider.logger.debug(
-            "Lyrion %s lookup: %s ids in batches of %s",
+            "Lyrion %s lookup deduplicated ids from %s to %s",
             spec.key,
             len(item_ids),
-            BATCH_LOOKUP_SIZE,
-        )
-    else:
-        provider.logger.debug(
-            "Lyrion %s lookup: %s ids using single-item requests",
-            spec.key,
-            len(item_ids),
+            len(ordered_ids),
         )
 
-    try:
-        if use_batch:
-            processed_items = 0
-            for chunk in _chunked(item_ids, BATCH_LOOKUP_SIZE):
-                chunk_start = processed_items + 1
-                chunk_end = processed_items + len(chunk)
-                provider.logger.debug(
-                    "Lyrion %s lookup request -> batch %s-%s/%s (%s ids)",
-                    spec.key,
-                    chunk_start,
-                    chunk_end,
-                    total_items,
-                    len(chunk),
-                )
-                for index_offset, item_id in enumerate(chunk, start=chunk_start):
-                    _log_lookup_request(
-                        provider,
-                        spec,
-                        item_id,
-                        item_index=index_offset,
-                        total_items=total_items,
-                    )
-                request_started = monotonic()
-                result = await rpc_request(
-                    provider,
-                    player_id="",
-                    command=_create_lookup_command(spec, chunk),
-                )
-                request_elapsed_ms = (monotonic() - request_started) * 1000
-                for index_offset, raw_item in enumerate(
-                    _split_lookup_reply(spec, result, chunk),
-                    start=chunk_start,
-                ):
-                    if _should_report_lookup_progress():
-                        fetch_text = (
-                            f"Fetching {spec.key}s from Lyrion: {index_offset}/{total_items}"
-                        )
-                        _update_weighted_sync_progress(
-                            phase="entity_fetch",
-                            current=index_offset,
-                            total=total_items,
-                            text=fetch_text,
-                        )
-                    _log_lookup_response(
-                        provider,
-                        spec,
-                        raw_item,
-                        request_elapsed_ms=request_elapsed_ms,
-                    )
-                    yield raw_item
-                processed_items += len(chunk)
-            return
-    except ValueError as err:
-        _disable_batch_lookup(provider, spec, err)
-        fallback_start = 0
-    except ProviderUnavailableError:
-        fallback_start = processed_items if use_batch else 0
-    else:
-        fallback_start = 0
-
-    for item_index, item_id in enumerate(item_ids[fallback_start:], start=fallback_start + 1):
+    for item_index, item_id in enumerate(ordered_ids, start=1):
         _log_lookup_request(
             provider,
             spec,
@@ -895,30 +526,32 @@ async def _iter_raw_entities(
             item_index=item_index,
             total_items=total_items,
         )
-        request_started = monotonic()
-        result = await rpc_request(
-            provider,
-            player_id="",
-            command=_create_lookup_command(spec, [item_id]),
-        )
-        request_elapsed_ms = (monotonic() - request_started) * 1000
-        for raw_item in _split_lookup_reply(spec, result, [item_id]):
+
+    try:
+        index = 0
+        async for row in _build_library_client(provider).iter_entity_rows(
+            _to_py_entity_spec(spec),
+            ordered_ids,
+        ):
+            index += 1
             if _should_report_lookup_progress():
-                fetch_text = f"Fetching {spec.key}s from Lyrion: {item_index}/{total_items}"
+                fetch_text = f"Fetching {spec.key}s from Lyrion: {index}/{total_items}"
                 _update_weighted_sync_progress(
                     phase="entity_fetch",
-                    current=item_index,
+                    current=index,
                     total=total_items,
                     text=fetch_text,
                 )
+            requested_id = ordered_ids[index - 1] if index <= total_items else None
             _log_lookup_response(
                 provider,
                 spec,
-                raw_item,
-                requested_id=item_id,
-                request_elapsed_ms=request_elapsed_ms,
+                row,
+                requested_id=requested_id,
             )
-            yield raw_item
+            yield row
+    except (LyrionProtocolError, LyrionRequestError, LyrionTimeoutError) as err:
+        raise ProviderUnavailableError(str(err)) from err
 
 
 def _should_report_lookup_progress() -> bool:
@@ -999,94 +632,3 @@ def _format_lookup_progress(item_index: int, total_items: int) -> str:
         return "single-item lookup"
     progress_pct = (item_index / total_items) * 100
     return f"item {item_index}/{total_items}, progress: {progress_pct:.1f}%"
-
-
-def _create_lookup_command(spec: LmsEntitySpec, item_ids: list[str]) -> list[Any]:
-    """Create one LMS command that looks up one or many ids."""
-    if not item_ids:
-        raise ValueError(f"{spec.key} lookup requires at least one id")
-    return [
-        spec.command,
-        0,
-        len(item_ids),
-        spec.tags,
-        f"{spec.id_filter_key}:{','.join(item_ids)}",
-    ]
-
-
-def _split_lookup_reply(
-    spec: LmsEntitySpec,
-    result: Mapping[str, object],
-    expected_ids: list[str],
-) -> list[Mapping[str, str]]:
-    """Map LMS lookup replies back to request order and validate misses."""
-    raw_items = cast("list[Mapping[str, object]]", result.get(spec.loop_key, []))
-    items_by_id: dict[str, Mapping[str, str]] = {}
-    for raw_item in raw_items:
-        normalized_item = _normalize_lms_row(raw_item)
-        item_id = parsers.extract_item_id(normalized_item, id_keys=spec.id_keys)
-        if item_id is None or item_id in items_by_id:
-            continue
-        items_by_id[item_id] = normalized_item
-
-    missing_ids = [item_id for item_id in expected_ids if item_id not in items_by_id]
-    if missing_ids:
-        raise ValueError(
-            f"Lyrion {spec.key} lookup returned incomplete data (missing {len(missing_ids)} ids)"
-        )
-
-    return [items_by_id[item_id] for item_id in expected_ids]
-
-
-def _normalize_lookup_ids(
-    provider: LyrionMusicProvider,
-    spec: LmsEntitySpec,
-    item_ids: list[str],
-) -> list[str]:
-    """Deduplicate ids while preserving order."""
-    ordered_ids = list(dict.fromkeys(item_ids))
-    if len(ordered_ids) != len(item_ids):
-        provider.logger.debug(
-            "Lyrion %s lookup deduplicated ids from %s to %s",
-            spec.key,
-            len(item_ids),
-            len(ordered_ids),
-        )
-    return ordered_ids
-
-
-def _get_disabled_batch_lookup_keys(
-    provider: LyrionMusicProvider,
-) -> set[EntityKey]:
-    """Return entity keys whose batch lookup has been disabled at runtime."""
-    return cast("set[EntityKey]", provider._disabled_batch_lookup_keys)
-
-
-def _is_batch_lookup_enabled(provider: LyrionMusicProvider, spec: LmsEntitySpec) -> bool:
-    """Return True when this entity type may use batch id lookup."""
-    if not spec.supports_batch_lookup:
-        return False
-    return spec.key not in _get_disabled_batch_lookup_keys(provider)
-
-
-def _disable_batch_lookup(
-    provider: LyrionMusicProvider,
-    spec: LmsEntitySpec,
-    err: Exception,
-) -> None:
-    """Disable batch lookup for one entity type after an incompatible response."""
-    disabled = _get_disabled_batch_lookup_keys(provider)
-    if spec.key in disabled:
-        return
-    disabled.add(spec.key)
-    provider.logger.warning(
-        "Disabled Lyrion %s batch lookup after failure: %s. Falling back to single-item requests.",
-        spec.key,
-        err,
-    )
-
-
-def _chunked(item_ids: list[str], chunk_size: int) -> Iterable[list[str]]:
-    """Yield stable chunks from a list of ids."""
-    for offset in range(0, len(item_ids), chunk_size):
-        yield item_ids[offset : offset + chunk_size]

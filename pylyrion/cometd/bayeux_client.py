@@ -1,10 +1,10 @@
-"""Minimal Bayeux protocol helper used by the Lyrion CometD stream."""
+"""Minimal Bayeux protocol helper used by CometD streams."""
 
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 
-from music_assistant_models.errors import ProviderUnavailableError
+from pylyrion.errors import LyrionRequestError
 
 BayeuxMessage = dict[str, object]
 BayeuxSender = Callable[
@@ -95,15 +95,15 @@ class BayeuxClient:
             timeout,
         )
         if not response:
-            raise ProviderUnavailableError("CometD handshake returned no payload")
+            raise LyrionRequestError("CometD handshake returned no payload")
 
         handshake = response[0]
         if not handshake.get("successful"):
-            raise ProviderUnavailableError(f"CometD handshake failed: {handshake}")
+            raise LyrionRequestError(f"CometD handshake failed: {handshake}")
 
         client_id = handshake.get("clientId")
         if not isinstance(client_id, str) or not client_id:
-            raise ProviderUnavailableError("CometD handshake did not return a client id")
+            raise LyrionRequestError("CometD handshake did not return a client id")
         return client_id
 
     async def subscribe_meta(
@@ -125,7 +125,7 @@ class BayeuxClient:
             timeout,
         )
         if not response or not response[0].get("successful", True):
-            raise ProviderUnavailableError(f"CometD channel subscribe failed: {response}")
+            raise LyrionRequestError(f"CometD channel subscribe failed: {response}")
         return response
 
     async def publish(
@@ -148,7 +148,7 @@ class BayeuxClient:
             timeout,
         )
         if not response or not response[0].get("successful", True):
-            raise ProviderUnavailableError(f"CometD publish failed on {channel}: {response}")
+            raise LyrionRequestError(f"CometD publish failed on {channel}: {response}")
         return response
 
     async def connect(

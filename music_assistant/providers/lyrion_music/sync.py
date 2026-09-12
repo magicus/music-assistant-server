@@ -19,6 +19,8 @@ from music_assistant.controllers.tasks import (
     update_current_task_progress_from_index,
     update_current_task_progress_text,
 )
+from pylyrion.library import normalize_lookup_ids
+from pylyrion.library_sync import LibrarySyncHooks, run_library_sync
 
 from . import artwork, parsers
 
@@ -50,11 +52,14 @@ async def _artist_needs_update(
     provider: LyrionMusicProvider,
     sync_details: Any,
     prov_item: Artist,
-    library_item: Any,
+    library_item: Any | None = None,
 ) -> bool:
     """Return True when linked artist artwork metadata has changed."""
-    del provider
-    del sync_details
+    if library_item is None:
+        try:
+            library_item = await provider.mass.music.artists.get_library_item(sync_details.item_id)
+        except MediaNotFoundError:
+            return True
     return parsers.artist_metadata_needs_update(library_item, prov_item)
 
 
@@ -62,11 +67,14 @@ async def _album_needs_update(
     provider: LyrionMusicProvider,
     sync_details: Any,
     prov_item: Album,
-    library_item: Any,
+    library_item: Any | None = None,
 ) -> bool:
     """Return True when linked album artist/artwork metadata has changed."""
-    del provider
-    del sync_details
+    if library_item is None:
+        try:
+            library_item = await provider.mass.music.albums.get_library_item(sync_details.item_id)
+        except MediaNotFoundError:
+            return True
     return parsers.album_metadata_needs_update(library_item, prov_item)
 
 
@@ -309,13 +317,21 @@ async def _lookup_library_items_for_sync(
     if not provider_item_ids:
         return {}
 
-    unique_item_ids = list(dict.fromkeys(provider_item_ids))
-    result: dict[str, Any] = {}
-    for library_item in await controller.get_library_items_by_prov_id(
+    lookup = getattr(controller, "get_library_items_by_prov_id", None)
+    if lookup is None:
+        return {}
+
+    unique_item_ids = normalize_lookup_ids(provider_item_ids)
+    library_items = lookup(
         provider_instance=provider.instance_id,
         provider_item_ids=unique_item_ids,
         limit=len(unique_item_ids),
-    ):
+    )
+    if not hasattr(library_items, "__await__"):
+        return {}
+
+    result: dict[str, Any] = {}
+    for library_item in await library_items:
         for mapping in library_item.provider_mappings:
             if (
                 mapping.provider_instance == provider.instance_id
@@ -379,98 +395,90 @@ async def _sync_single_library_item(
 async def _sync_library_entities(provider: LyrionMusicProvider, spec: SyncSpec) -> set[int]:
     """Sync one media type using shared logic plus entity-specific hooks."""
     provider.logger.debug("Start sync of %s to Music Assistant library.", spec.media_type.value)
-    cur_db_ids: set[int] = set()
-    item_count = 0
     controller = spec.controller_getter(provider)
-    pending_extra_checks: list[tuple[Any, Any]] = []
 
-    async def flush_pending_extra_checks() -> None:
-        if not pending_extra_checks:
-            return
+    async def _iter_items() -> AsyncGenerator[Any]:
+        async for prov_item in spec.iter_items(provider):
+            yield prov_item
 
-        library_items_by_provider_id = await _lookup_library_items_for_sync(
+    async def _get_sync_details(prov_item: Any) -> Any | None:
+        return await controller.get_library_item_sync_details(prov_item.provider_mappings)
+
+    async def _apply_item(
+        prov_item: Any,
+        sync_details: Any | None,
+        needs_update: bool,
+        cur_db_ids: set[int],
+    ) -> None:
+        await _sync_single_library_item(
             provider,
+            spec,
             controller,
-            [prov_item.item_id for _, prov_item in pending_extra_checks],
+            prov_item,
+            sync_details,
+            needs_update,
+            cur_db_ids,
         )
-        for sync_details, prov_item in pending_extra_checks:
-            if not (library_item := library_items_by_provider_id.get(prov_item.item_id)):
-                needs_update = True
-            else:
-                needs_update = await spec.extra_needs_update(
-                    provider,
-                    sync_details,
-                    prov_item,
-                    library_item,
-                )
-            await _sync_single_library_item(
-                provider,
-                spec,
-                controller,
-                prov_item,
-                sync_details,
-                needs_update,
-                cur_db_ids,
-            )
-            if spec.post_item_sync is not None:
-                try:
-                    await spec.post_item_sync(provider, prov_item)
-                except (MediaNotFoundError, ProviderUnavailableError, ValueError) as err:
-                    provider._handle_sync_item_failure(spec.media_type, prov_item.uri, err)
-        pending_extra_checks.clear()
 
-    async for prov_item in spec.iter_items(provider):
-        item_count += 1
-        provider._update_sync_task_item_status(spec.media_type, item_count, prov_item.name)
-        db_id: int | None = None
-        try:
-            sync_details = await controller.get_library_item_sync_details(
-                prov_item.provider_mappings
-            )
-            db_id = sync_details.item_id if sync_details else None
+    async def _lookup_items(provider_item_ids: list[str]) -> dict[str, Any]:
+        return await _lookup_library_items_for_sync(provider, controller, provider_item_ids)
 
-            if spec.skip_if_new_and_unavailable and not sync_details and not prov_item.available:
-                provider.logger.debug(
-                    "Skipping sync of unavailable %s %s",
-                    spec.media_type.value,
-                    prov_item.uri,
-                )
-                continue
+    async def _extra_needs_update(sync_details: Any, prov_item: Any, library_item: Any) -> bool:
+        if spec.extra_needs_update is None:
+            return True
+        return await spec.extra_needs_update(
+            provider,
+            sync_details,
+            prov_item,
+            library_item,
+        )
 
-            needs_update = bool(
-                sync_details and provider._library_item_needs_update(sync_details, prov_item)
-            )
-            if (
-                not needs_update
-                and spec.extra_needs_update is not None
-                and sync_details is not None
-            ):
-                pending_extra_checks.append((sync_details, prov_item))
-                if len(pending_extra_checks) >= 200:
-                    await flush_pending_extra_checks()
-                continue
+    async def _post_sync_item(prov_item: Any) -> None:
+        if spec.post_item_sync is None:
+            return
+        await spec.post_item_sync(provider, prov_item)
 
-            await _sync_single_library_item(
-                provider,
-                spec,
-                controller,
-                prov_item,
-                sync_details,
-                needs_update,
-                cur_db_ids,
-            )
-        except (MediaNotFoundError, ProviderUnavailableError, ValueError) as err:
-            provider._handle_sync_item_failure(spec.media_type, prov_item.uri, err)
-            provider._protect_failed_sync_item(
-                spec.media_type, prov_item.item_id, db_id, cur_db_ids
-            )
-            continue
+    def _on_item_status(item_count: int, item_name: str) -> None:
+        provider._update_sync_task_item_status(spec.media_type, item_count, item_name)
 
-        if spec.post_item_sync is not None:
-            try:
-                await spec.post_item_sync(provider, prov_item)
-            except (MediaNotFoundError, ProviderUnavailableError, ValueError) as err:
-                provider._handle_sync_item_failure(spec.media_type, prov_item.uri, err)
+    def _on_item_failure(
+        prov_item: Any,
+        err: Exception,
+        db_id: int | None,
+        cur_db_ids: set[int],
+    ) -> None:
+        provider._handle_sync_item_failure(spec.media_type, prov_item.uri, err)
+        provider._protect_failed_sync_item(
+            spec.media_type,
+            prov_item.item_id,
+            db_id,
+            cur_db_ids,
+        )
 
-    await flush_pending_extra_checks()
-    return cur_db_ids
+    def _on_post_item_failure(prov_item: Any, err: Exception) -> None:
+        provider._handle_sync_item_failure(spec.media_type, prov_item.uri, err)
+
+    hooks = LibrarySyncHooks(
+        iter_items=_iter_items,
+        get_sync_details=_get_sync_details,
+        apply_item=_apply_item,
+        on_item_status=_on_item_status,
+        on_item_failure=_on_item_failure,
+        on_post_item_failure=_on_post_item_failure,
+        item_id_getter=lambda item: item.item_id,
+        item_name_getter=lambda item: item.name,
+        sync_details_item_id_getter=lambda sync_details: sync_details.item_id,
+        needs_update=lambda sync_details, prov_item: provider._library_item_needs_update(
+            sync_details,
+            prov_item,
+        ),
+        extra_needs_update=_extra_needs_update if spec.extra_needs_update is not None else None,
+        lookup_library_items=_lookup_items if spec.extra_needs_update is not None else None,
+        post_item_sync=_post_sync_item if spec.post_item_sync is not None else None,
+        is_item_available=lambda item: bool(item.available),
+        skip_if_new_and_unavailable=spec.skip_if_new_and_unavailable,
+        pending_batch_size=200,
+        handled_exceptions=(MediaNotFoundError, ProviderUnavailableError, ValueError),
+    )
+
+    return await run_library_sync(hooks)
