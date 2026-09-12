@@ -17,7 +17,6 @@ from music_assistant.providers.lyrion_player.provider import (
     PLAYERS_BATCH_SIZE,
     LyrionPlayerProvider,
 )
-from pylyrion.errors import LyrionTimeoutError
 from pylyrion.server_control import LyrionServerControl
 
 
@@ -306,7 +305,7 @@ async def test_provider_status_wrapper_methods_delegate_to_stream() -> None:
 
 @pytest.mark.asyncio
 async def test_provider_command_and_remove_delegate() -> None:
-    """remove_player and send_player_command should delegate via pylyrion."""
+    """remove_player and raw transport helper should delegate via pylyrion."""
     provider = _build_provider_stub()
     players = cast("Any", provider.mass.players)
     player_client = AsyncMock()
@@ -316,7 +315,7 @@ async def test_provider_command_and_remove_delegate() -> None:
         "music_assistant.providers.lyrion_player.provider.LyrionClient",
         return_value=player_client,
     ):
-        result = await provider.send_player_command("p1", ["stop"])
+        result = await provider._send_player_command("p1", ["stop"])
 
     assert result == {"ok": True}
     player_client.players.send_command.assert_awaited_once_with("p1", ["stop"])
@@ -455,8 +454,8 @@ async def test_discover_players_handles_missing_ids_existing_players_and_paging(
 
 
 @pytest.mark.asyncio
-async def test_get_player_status_uses_pylyrion_client() -> None:
-    """get_player_status should use the pylyrion player client facade."""
+async def test_internal_get_player_status_uses_pylyrion_client() -> None:
+    """Provider should fetch status through pylyrion without exposing the public command API."""
     provider = _build_provider_stub()
     player_client = AsyncMock()
     player_client.players.get_status = AsyncMock(return_value={"mode": "play"})
@@ -465,130 +464,45 @@ async def test_get_player_status_uses_pylyrion_client() -> None:
         "music_assistant.providers.lyrion_player.provider.LyrionClient",
         return_value=player_client,
     ) as client_cls:
-        status = await provider.get_player_status("p1")
+        status = await provider._get_player_status("p1")
 
     assert status == {"mode": "play"}
     client_cls.assert_called_once()
     player_client.players.get_status.assert_awaited_once_with("p1")
 
 
+def test_provider_does_not_expose_pylyrion_passthrough_api() -> None:
+    """MA provider should not expose pylyrion command methods as public verbs."""
+    provider = _build_provider_stub()
+
+    assert not hasattr(provider, "play_player")
+    assert not hasattr(provider, "pause_player")
+    assert not hasattr(provider, "stop_player")
+    assert not hasattr(provider, "set_player_power")
+    assert not hasattr(provider, "sync_player_to")
+    assert not hasattr(provider, "unsync_player")
+    assert not hasattr(provider, "set_player_volume")
+    assert not hasattr(provider, "set_player_muted")
+    assert not hasattr(provider, "next_player_track")
+    assert not hasattr(provider, "send_player_command")
+    assert not hasattr(provider, "get_players_page")
+
+
 @pytest.mark.asyncio
-async def test_transport_adapter_methods_use_pylyrion_client() -> None:  # noqa: PLR0915
-    """Transport adapter helpers should delegate play/pause/stop/power through pylyrion."""
+async def test_internal_send_player_command_uses_pylyrion_transport() -> None:
+    """Only internal raw-command helpers should use the pylyrion transport abstraction."""
     provider = _build_provider_stub()
     player_client = AsyncMock()
-    player_client.players.play = AsyncMock(return_value={})
-    player_client.players.pause = AsyncMock(return_value={})
-    player_client.players.stop = AsyncMock(return_value={})
-    player_client.players.set_power = AsyncMock(return_value={})
-    player_client.players.sync_to = AsyncMock(return_value={})
-    player_client.players.unsync = AsyncMock(return_value={})
-    player_client.players.get_queue_status = AsyncMock(return_value={})
-    player_client.players.set_queue_index = AsyncMock(return_value={})
-    player_client.players.next_track = AsyncMock(return_value={})
-    player_client.players.previous_track = AsyncMock(return_value={})
-    player_client.players.set_volume = AsyncMock(return_value={})
-    player_client.players.set_muted = AsyncMock(return_value={})
-    player_client.players.seek = AsyncMock(return_value={})
-    player_client.players.set_sync_volume = AsyncMock(return_value={})
-    player_client.players.set_repeat_mode = AsyncMock(return_value={})
-    player_client.players.set_shuffle_mode = AsyncMock(return_value={})
-    player_client.players.clear_queue = AsyncMock(return_value={})
-    player_client.players.add_track_id = AsyncMock(return_value={})
-    player_client.players.add_url_to_queue = AsyncMock(return_value={})
-    player_client.players.play_url = AsyncMock(return_value={})
-    player_client.players.add_url = AsyncMock(return_value={})
-    player_client.players.move_queue_item = AsyncMock(return_value={})
-    player_client.players.delete_queue_item = AsyncMock(return_value={})
+    player_client.players.send_command = AsyncMock(return_value={"ok": True})
 
     with patch(
         "music_assistant.providers.lyrion_player.provider.LyrionClient",
         return_value=player_client,
     ):
-        await provider.play_player("p1")
-        await provider.pause_player("p1")
-        await provider.stop_player("p1")
-        await provider.set_player_power("p1", True)
-        await provider.sync_player_to("p2", "p1")
-        await provider.unsync_player("p2")
-        await provider.get_player_queue_status("p1", limit=123)
-        await provider.set_player_queue_index("p1", 9)
-        await provider.next_player_track("p1")
-        await provider.previous_player_track("p1")
-        await provider.set_player_volume("p1", 37)
-        await provider.set_player_muted("p1", True)
-        await provider.seek_player("p1", 12)
-        await provider.set_player_sync_volume("p1", False)
-        await provider.set_player_repeat_mode("p1", 2)
-        await provider.set_player_shuffle_mode("p1", 1)
-        await provider.clear_player_queue("p1")
-        await provider.add_player_track_id_to_queue("p1", "42", command="load")
-        await provider.add_player_url_to_queue(
-            "p1",
-            "http://example/stream",
-            title="Title",
-            artist="Artist",
-            album="Album",
-        )
-        await provider.play_player_url("p1", "http://example/play")
-        await provider.append_player_url("p1", "http://example/add")
-        await provider.move_player_queue_item("p1", 5, 2)
-        await provider.delete_player_queue_item("p1", 4)
+        result = await provider._send_player_command("p1", ["stop"])
 
-    player_client.players.play.assert_awaited_once_with("p1")
-    player_client.players.pause.assert_awaited_once_with("p1")
-    player_client.players.stop.assert_awaited_once_with("p1")
-    player_client.players.set_power.assert_awaited_once_with("p1", True)
-    player_client.players.sync_to.assert_awaited_once_with("p2", "p1")
-    player_client.players.unsync.assert_awaited_once_with("p2")
-    player_client.players.get_queue_status.assert_awaited_once_with(
-        "p1",
-        offset=0,
-        limit=123,
-    )
-    player_client.players.set_queue_index.assert_awaited_once_with("p1", 9)
-    player_client.players.next_track.assert_awaited_once_with("p1")
-    player_client.players.previous_track.assert_awaited_once_with("p1")
-    player_client.players.set_volume.assert_awaited_once_with("p1", 37)
-    player_client.players.set_muted.assert_awaited_once_with("p1", True)
-    player_client.players.seek.assert_awaited_once_with("p1", 12)
-    player_client.players.set_sync_volume.assert_awaited_once_with("p1", False)
-    player_client.players.set_repeat_mode.assert_awaited_once_with("p1", 2)
-    player_client.players.set_shuffle_mode.assert_awaited_once_with("p1", 1)
-    player_client.players.clear_queue.assert_awaited_once_with("p1")
-    player_client.players.add_track_id.assert_awaited_once_with(
-        "p1",
-        "42",
-        command="load",
-    )
-    player_client.players.add_url_to_queue.assert_awaited_once_with(
-        "p1",
-        "http://example/stream",
-        title="Title",
-        artist="Artist",
-        album="Album",
-    )
-    player_client.players.play_url.assert_awaited_once_with("p1", "http://example/play")
-    player_client.players.add_url.assert_awaited_once_with("p1", "http://example/add")
-    player_client.players.move_queue_item.assert_awaited_once_with("p1", 5, 2)
-    player_client.players.delete_queue_item.assert_awaited_once_with("p1", 4)
-
-
-@pytest.mark.asyncio
-async def test_transport_adapter_methods_map_pylyrion_errors() -> None:
-    """Pylyrion transport failures should map to ProviderUnavailableError."""
-    provider = _build_provider_stub()
-    player_client = AsyncMock()
-    player_client.players.play = AsyncMock(side_effect=LyrionTimeoutError("timeout"))
-
-    with (
-        patch(
-            "music_assistant.providers.lyrion_player.provider.LyrionClient",
-            return_value=player_client,
-        ),
-        pytest.raises(ProviderUnavailableError, match="timeout"),
-    ):
-        await provider.play_player("p1")
+    assert result == {"ok": True}
+    player_client.players.send_command.assert_awaited_once_with("p1", ["stop"])
 
 
 def test_get_configured_helpers_handle_invalid_types_and_none_port() -> None:

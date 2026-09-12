@@ -83,7 +83,7 @@ class LyrionPlayerProvider(PlayerProvider):
             recoverable_errors=(ProviderUnavailableError, LyrionRequestError),
             should_stop=lambda: self.unloading,
             logger=cast("Any", getattr(self, "logger", None)),
-            get_player_status=self.get_player_status,
+            get_player_status=self._get_player_status,
             get_initial_player_ids=self._get_registered_player_ids,
             get_current_player_ids=self._get_registered_player_ids,
             schedule_players_discovery=self.schedule_players_discovery,
@@ -260,151 +260,9 @@ class LyrionPlayerProvider(PlayerProvider):
             runtime_players.pop(player_id, None)
         await self.mass.players.unregister(player_id, True)
 
-    async def get_player_status(self, player_id: str) -> dict[str, Any]:
-        """
-        Return runtime status for a player.
-
-        :param player_id: LMS player id.
-        """
+    async def _get_player_status(self, player_id: str) -> dict[str, Any]:
+        """Fetch one player state through the pylyrion facade for internal status use."""
         return await self.lyrion_server.get_player_status(player_id)
-
-    async def play_player(self, player_id: str) -> dict[str, Any]:
-        """Resume playback for one LMS player via pylyrion."""
-        return await self.lyrion_server.play_player(player_id)
-
-    async def pause_player(self, player_id: str) -> dict[str, Any]:
-        """Pause playback for one LMS player via pylyrion."""
-        return await self.lyrion_server.pause_player(player_id)
-
-    async def stop_player(self, player_id: str) -> dict[str, Any]:
-        """Stop playback for one LMS player via pylyrion."""
-        return await self.lyrion_server.stop_player(player_id)
-
-    async def set_player_power(self, player_id: str, powered: bool) -> dict[str, Any]:
-        """Set player power state via pylyrion."""
-        return await self.lyrion_server.set_player_power(player_id, powered)
-
-    async def sync_player_to(
-        self,
-        player_id: str,
-        leader_player_id: str,
-    ) -> dict[str, Any]:
-        """Join one player to an LMS sync leader via pylyrion."""
-        return await self.lyrion_server.sync_player_to(player_id, leader_player_id)
-
-    async def unsync_player(self, player_id: str) -> dict[str, Any]:
-        """Remove one player from LMS sync grouping via pylyrion."""
-        return await self.lyrion_server.unsync_player(player_id)
-
-    async def get_player_queue_status(
-        self,
-        player_id: str,
-        *,
-        offset: int = 0,
-        limit: int,
-    ) -> dict[str, Any]:
-        """Return queue-inclusive LMS status via pylyrion."""
-        return await self.lyrion_server.get_player_queue_status(
-            player_id,
-            offset=offset,
-            limit=limit,
-        )
-
-    async def set_player_queue_index(self, player_id: str, index: int | str) -> dict[str, Any]:
-        """Set active LMS queue index via pylyrion."""
-        return await self.lyrion_server.set_player_queue_index(player_id, index)
-
-    async def next_player_track(self, player_id: str) -> dict[str, Any]:
-        """Skip to next LMS queue entry via pylyrion."""
-        return await self.lyrion_server.next_player_track(player_id)
-
-    async def previous_player_track(self, player_id: str) -> dict[str, Any]:
-        """Skip to previous LMS queue entry via pylyrion."""
-        return await self.lyrion_server.previous_player_track(player_id)
-
-    async def set_player_volume(self, player_id: str, volume_level: int) -> dict[str, Any]:
-        """Set LMS mixer volume via pylyrion."""
-        return await self.lyrion_server.set_player_volume(player_id, volume_level)
-
-    async def set_player_muted(self, player_id: str, muted: bool) -> dict[str, Any]:
-        """Set LMS mixer mute state via pylyrion."""
-        return await self.lyrion_server.set_player_muted(player_id, muted)
-
-    async def seek_player(self, player_id: str, position: int) -> dict[str, Any]:
-        """Seek LMS playback position via pylyrion."""
-        return await self.lyrion_server.seek_player(player_id, position)
-
-    async def set_player_sync_volume(self, player_id: str, enabled: bool) -> dict[str, Any]:
-        """Set LMS syncVolume preference via pylyrion."""
-        return await self.lyrion_server.set_player_sync_volume(player_id, enabled)
-
-    async def set_player_repeat_mode(self, player_id: str, repeat_mode: int) -> dict[str, Any]:
-        """Set LMS repeat mode via pylyrion."""
-        return await self.lyrion_server.set_player_repeat_mode(player_id, repeat_mode)
-
-    async def set_player_shuffle_mode(
-        self,
-        player_id: str,
-        shuffle_mode: int,
-    ) -> dict[str, Any]:
-        """Set LMS shuffle mode via pylyrion."""
-        return await self.lyrion_server.set_player_shuffle_mode(player_id, shuffle_mode)
-
-    async def clear_player_queue(self, player_id: str) -> dict[str, Any]:
-        """Clear LMS queue via pylyrion."""
-        return await self.lyrion_server.clear_player_queue(player_id)
-
-    async def add_player_track_id_to_queue(
-        self,
-        player_id: str,
-        track_id: str,
-        *,
-        command: str = "add",
-    ) -> dict[str, Any]:
-        """Add or load one LMS track_id via pylyrion."""
-        return await self.lyrion_server.add_player_track_id_to_queue(
-            player_id,
-            track_id,
-            command=command,
-        )
-
-    async def add_player_url_to_queue(
-        self,
-        player_id: str,
-        url: str,
-        title: str | None = None,
-        artist: str | None = None,
-        album: str | None = None,
-    ) -> dict[str, Any]:
-        """Add one URL to LMS queue via pylyrion."""
-        return await self.lyrion_server.add_player_url_to_queue(
-            player_id,
-            url,
-            title=title,
-            artist=artist,
-            album=album,
-        )
-
-    async def play_player_url(self, player_id: str, url: str) -> dict[str, Any]:
-        """Start playback of one URL via pylyrion."""
-        return await self.lyrion_server.play_player_url(player_id, url)
-
-    async def append_player_url(self, player_id: str, url: str) -> dict[str, Any]:
-        """Append one URL to LMS queue via pylyrion."""
-        return await self.lyrion_server.append_player_url(player_id, url)
-
-    async def move_player_queue_item(
-        self,
-        player_id: str,
-        from_index: int,
-        to_index: int,
-    ) -> dict[str, Any]:
-        """Move one LMS queue item via pylyrion."""
-        return await self.lyrion_server.move_player_queue_item(player_id, from_index, to_index)
-
-    async def delete_player_queue_item(self, player_id: str, index: int) -> dict[str, Any]:
-        """Delete one LMS queue item via pylyrion."""
-        return await self.lyrion_server.delete_player_queue_item(player_id, index)
 
     def apply_status_update(
         self,
@@ -455,17 +313,12 @@ class LyrionPlayerProvider(PlayerProvider):
             expected_state,
         )
 
-    async def send_player_command(
+    async def _send_player_command(
         self,
         player_id: str,
         command: list[Any],
     ) -> dict[str, Any]:
-        """
-        Send a command to a specific player.
-
-        :param player_id: LMS player id.
-        :param command: LMS command list.
-        """
+        """Send one raw LMS command for internal provider transport use."""
         return await self.lyrion_server.send_player_command(player_id, command)
 
     def get_configured_host(self) -> str | None:

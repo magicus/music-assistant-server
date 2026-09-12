@@ -103,7 +103,7 @@ class LyrionPlayer(Player):
     async def poll(self) -> None:
         """Poll runtime status from LMS when explicitly invoked."""
         try:
-            status = await self.provider.get_player_status(self.player_id)
+            status = await self.provider._get_player_status(self.player_id)
         except ProviderUnavailableError as err:
             raise PlayerCommandFailed(f"Unable to poll player {self.player_id}: {err}") from err
         self.provider.apply_status_update(self, status)

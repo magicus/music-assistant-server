@@ -53,10 +53,6 @@ class LyrionServerControl:
         """Stop playback for one player."""
         return await self._run_player_call(lambda: self._players.stop(player_id))
 
-    async def set_player_power(self, player_id: str, powered: bool) -> dict[str, Any]:
-        """Set player power state."""
-        return await self._run_player_call(lambda: self._players.set_power(player_id, powered))
-
     async def sync_player_to(
         self,
         player_id: str,
@@ -284,7 +280,9 @@ class LyrionServerControl:
         target = 1 if powered else 0
         await self._run_command_with_status_verify(
             player_id,
-            command=lambda: self.set_player_power(player_id, powered),
+            command=lambda: self._run_player_call(
+                lambda: self._players.set_power(player_id, powered)
+            ),
             expectation=lambda status: _get_status_int(status, "power") == target,
             expected_state=f"power={target}",
         )
