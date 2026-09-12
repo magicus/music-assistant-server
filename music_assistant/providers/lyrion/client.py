@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from types import SimpleNamespace
-from typing import Any, AsyncContextManager, Protocol, cast
+from typing import Any, Protocol, cast
 
 from aiohttp import ClientError, ClientTimeout
 from music_assistant_models.errors import ProviderUnavailableError
@@ -31,7 +31,7 @@ class _ConfigProvider(Protocol):
 
 
 @asynccontextmanager
-async def _null_request_guard() -> AsyncContextManager[None]:
+async def _null_request_guard() -> AbstractAsyncContextManager[None]:
     """No-op async guard for LMS RPC calls."""
     yield
 
@@ -58,7 +58,7 @@ def get_configured_port(
         return None
     try:
         return int(cast("int | str", raw_port))
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return default
 
 

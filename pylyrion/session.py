@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
-from typing import Any, AsyncContextManager, cast
+from typing import Any, cast
 
 from aiohttp import ClientError, ClientTimeout
 
@@ -37,7 +37,7 @@ def normalize_lms_text_value(value: object) -> str | None:
 
 
 @asynccontextmanager
-async def _null_request_guard() -> AsyncContextManager[None]:
+async def _null_request_guard() -> AbstractAsyncContextManager[None]:
     yield
 
 
