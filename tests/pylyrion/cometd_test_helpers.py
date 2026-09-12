@@ -17,7 +17,7 @@ from pylyrion.session import build_lms_url
 class LyrionCometDEventStream(CometDEventStreamCore):
     """Test-only bridge from pylyrion events to MA-style callbacks."""
 
-    provider: Any
+    _provider: Any
 
     def __init__(
         self,
@@ -25,12 +25,27 @@ class LyrionCometDEventStream(CometDEventStreamCore):
         event_callback: LmsPlayerEventCallback,
     ) -> None:
         """Initialize stream wrapper with provider and callback."""
+        schedule_players_discovery = getattr(
+            provider,
+            "schedule_players_discovery",
+            lambda: None,
+        )
+
+        def _get_provider_player_ids() -> set[str]:
+            players = getattr(provider, "players", ())
+            return {player.player_id for player in players if getattr(player, "player_id", None)}
+
         super().__init__(
-            provider=provider,
             recoverable_errors=(ProviderUnavailableError, LyrionRequestError),
             should_stop=lambda: provider.unloading,
             logger=provider.logger,
+            get_player_status=provider.get_player_status,
+            get_initial_player_ids=_get_provider_player_ids,
+            get_current_player_ids=_get_provider_player_ids,
+            schedule_players_discovery=schedule_players_discovery,
+            apply_server_player_connection_state=lambda _payload: None,
         )
+        self._provider = provider
         self._event_callback = event_callback
 
     async def _emit_normalized_player_events(
@@ -44,7 +59,7 @@ class LyrionCometDEventStream(CometDEventStreamCore):
         try:
             await self._event_callback(event)
         except MusicAssistantError as err:
-            self.provider.logger.warning(
+            self._provider.logger.warning(
                 "Status event handling failed for %s: %s",
                 getattr(event, "player_id", "unknown"),
                 err,
@@ -55,16 +70,16 @@ class LyrionCometDEventStream(CometDEventStreamCore):
         messages: list[dict[str, object]],
         timeout: int,
     ) -> list[dict[str, object]]:
-        host = self.provider.get_configured_host()
+        host = self._provider.get_configured_host()
         if not host:
             raise ProviderUnavailableError("Lyrion host is not configured")
-        port = self.provider.get_configured_port()
+        port = self._provider.get_configured_port()
         if port is None:
             raise ProviderUnavailableError("Lyrion port is not configured")
 
         url = build_lms_url(host, port, "/cometd")
         try:
-            async with self.provider.mass.http_session.post(
+            async with self._provider.mass.http_session.post(
                 url,
                 json=messages,
                 timeout=ClientTimeout(total=timeout),

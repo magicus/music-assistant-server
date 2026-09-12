@@ -72,12 +72,18 @@ class LyrionPlayerProvider(PlayerProvider):
         self._discover_players_task: asyncio.Task[None] | None = None
         self._discover_players_again = False
         self._status_stream = PlayerStatusStream(
-            self,
             post_messages=build_cometd_post_messages_callback(
                 get_session=self._build_pylyrion_session,
                 unavailable_error_factory=lambda err: ProviderUnavailableError(str(err)),
             ),
             recoverable_errors=(ProviderUnavailableError, LyrionRequestError),
+            should_stop=lambda: self.unloading,
+            logger=cast("Any", getattr(self, "logger", None)),
+            get_player_status=self.get_player_status,
+            get_initial_player_ids=self._get_registered_player_ids,
+            get_current_player_ids=self._get_registered_player_ids,
+            schedule_players_discovery=self.schedule_players_discovery,
+            apply_server_player_connection_state=self._apply_server_player_connection_state,
         )
         self.lyrion_server = LyrionServerControl(
             get_players_client=self._build_pylyrion_player_client,
@@ -680,6 +686,56 @@ class LyrionPlayerProvider(PlayerProvider):
             await self.discover_players()
             if not self._discover_players_again:
                 break
+
+    def _get_registered_player_ids(self) -> set[str]:
+        """Return player ids currently registered by this provider."""
+        return {player.player_id for player in self.players}
+
+    def _apply_server_player_connection_state(
+        self,
+        payload: dict[str, object],
+    ) -> None:
+        """Apply serverstatus connected flags to MA player availability."""
+        players_loop = payload.get("players_loop")
+        if not isinstance(players_loop, list):
+            return
+
+        for player_data in players_loop:
+            if not isinstance(player_data, dict):
+                continue
+
+            raw_player_id = player_data.get("playerid")
+            if not raw_player_id:
+                continue
+            player_id = str(raw_player_id)
+
+            connected = self._parse_int(player_data.get("connected"))
+            if connected is None:
+                continue
+
+            player = self.mass.players.get_player(player_id)
+            if not isinstance(player, LyrionPlayer):
+                continue
+
+            if player.provider.instance_id != self.instance_id:
+                continue
+
+            available = bool(connected)
+            if player.available == available:
+                continue
+
+            player._attr_available = available
+            player.update_state()
+
+    @staticmethod
+    def _parse_int(value: object) -> int | None:
+        """Parse one integer value from serverstatus fields."""
+        if value is None:
+            return None
+        try:
+            return int(cast("int | str", value))
+        except TypeError, ValueError:
+            return None
 
     def _handle_discover_players_done(self, task: asyncio.Task[None]) -> None:
         """Log any discovery task failure and clear task bookkeeping."""

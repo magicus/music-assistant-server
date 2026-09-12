@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any
+from collections.abc import Callable
 
 from .helpers import StatusPayload, _extract_server_player_ids, _get_int
 
@@ -12,7 +12,9 @@ from .helpers import StatusPayload, _extract_server_player_ids, _get_int
 class _CometDStatusMixin:
     """Mixin with status cache lifecycle and wait primitives."""
 
-    provider: Any
+    _get_current_player_ids: Callable[[], set[str]]
+    _schedule_players_discovery: Callable[[], None]
+    _apply_server_player_connection_state: Callable[[dict[str, object]], None]
     _pending_player_ids: set[str]
     _subscribed_player_ids: set[str]
     _status_by_player: dict[str, StatusPayload]
@@ -122,23 +124,23 @@ class _CometDStatusMixin:
         self,
         payload: dict[str, object],
     ) -> None:
-        """Detect server roster changes and trigger provider rediscovery."""
+        """Detect server roster changes and trigger rediscovery callback."""
         self._apply_server_player_connection_state(payload)
+        current_player_ids = self._get_current_player_ids()
 
         player_ids = _extract_server_player_ids(payload)
         if player_ids:
-            current_player_ids = {player.player_id for player in self.provider.players}
             if self._known_server_player_ids is None:
                 self._known_server_player_ids = player_ids
                 self._known_server_player_count = len(player_ids)
                 if player_ids != current_player_ids:
-                    self.provider.schedule_players_discovery()
+                    self._schedule_players_discovery()
                 return
 
             if player_ids != self._known_server_player_ids:
                 self._known_server_player_ids = player_ids
                 self._known_server_player_count = len(player_ids)
-                self.provider.schedule_players_discovery()
+                self._schedule_players_discovery()
             return
 
         player_count = _get_int(payload, "player count")
@@ -147,56 +149,10 @@ class _CometDStatusMixin:
 
         if self._known_server_player_count is None:
             self._known_server_player_count = player_count
-            if player_count != len(self.provider.players):
-                self.provider.schedule_players_discovery()
+            if player_count != len(current_player_ids):
+                self._schedule_players_discovery()
             return
 
         if player_count != self._known_server_player_count:
             self._known_server_player_count = player_count
-            self.provider.schedule_players_discovery()
-
-    def _apply_server_player_connection_state(
-        self,
-        payload: dict[str, object],
-    ) -> None:
-        """Apply connected flags from serverstatus to MA player availability."""
-        players_loop = payload.get("players_loop")
-        if not isinstance(players_loop, list):
-            return
-
-        for player_data in players_loop:
-            if not isinstance(player_data, dict):
-                continue
-
-            raw_player_id = player_data.get("playerid")
-            if not raw_player_id:
-                continue
-            player_id = str(raw_player_id)
-
-            connected = _get_int(player_data, "connected")
-            if connected is None:
-                continue
-
-            player = self.provider.mass.players.get_player(player_id)
-            if player is None:
-                continue
-
-            player_provider = getattr(player, "provider", None)
-            if (
-                player_provider is not None
-                and getattr(player_provider, "instance_id", None) != self.provider.instance_id
-            ):
-                continue
-
-            if not hasattr(player, "_attr_available") or not hasattr(
-                player,
-                "update_state",
-            ):
-                continue
-
-            available = bool(connected)
-            if getattr(player, "_attr_available", None) == available:
-                continue
-
-            player._attr_available = available
-            player.update_state()
+            self._schedule_players_discovery()

@@ -7,7 +7,6 @@ import time
 from collections.abc import Coroutine
 from contextlib import suppress
 from logging import Logger
-from typing import Any
 
 from .constants import (
     COMETD_ACTIVE_STATE_TIMEOUT,
@@ -30,7 +29,6 @@ from .helpers import (
 class _CometDRecoveryMixin:
     """Mixin with implicit expectation and stale-session recovery."""
 
-    provider: Any
     _task: asyncio.Task[None] | None
     _watchdog_task: asyncio.Task[None] | None
     _client_id: str | None

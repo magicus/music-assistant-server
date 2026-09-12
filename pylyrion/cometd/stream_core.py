@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from contextlib import suppress
 from logging import Logger
 from typing import Any
@@ -29,27 +29,37 @@ from pylyrion.cometd.status import _CometDStatusMixin
 class CometDEventStreamCore(_CometDStatusMixin, _CometDRecoveryMixin):
     """Run one CometD session and emit normalized player-status transitions."""
 
-    provider: Any
-
     def __init__(
         self,
-        provider: Any,
         recoverable_errors: tuple[type[Exception], ...],
         should_stop: Callable[[], bool],
         logger: Logger,
+        get_player_status: Callable[[str], Awaitable[StatusPayload]],
+        get_initial_player_ids: Callable[[], set[str]],
+        get_current_player_ids: Callable[[], set[str]],
+        schedule_players_discovery: Callable[[], None],
+        apply_server_player_connection_state: Callable[[dict[str, object]], None],
     ) -> None:
         """
         Initialize CometD stream core.
 
-        :param provider: Provider-like owner object used for status/recovery helpers.
         :param recoverable_errors: Errors that should trigger reconnect/retry behavior.
         :param should_stop: Callback returning True when runtime should stop.
         :param logger: Logger used by CometD runtime internals.
+        :param get_player_status: Fetch one player's JSON-RPC status snapshot.
+        :param get_initial_player_ids: Return player ids to subscribe at session start.
+        :param get_current_player_ids: Return currently tracked runtime player ids.
+        :param schedule_players_discovery: Schedule runtime player rediscovery.
+        :param apply_server_player_connection_state: Apply transport-level connection hints.
         """
-        self.provider = provider
         self._recoverable_errors = recoverable_errors
         self._should_stop = should_stop
         self._logger = logger
+        self._get_player_status = get_player_status
+        self._get_initial_player_ids = get_initial_player_ids
+        self._get_current_player_ids = get_current_player_ids
+        self._schedule_players_discovery = schedule_players_discovery
+        self._apply_server_player_connection_state = apply_server_player_connection_state
         self._bayeux = BayeuxClient(self._post)
         self._task: asyncio.Task[None] | None = None
         self._watchdog_task: asyncio.Task[None] | None = None
@@ -193,7 +203,7 @@ class CometDEventStreamCore(_CometDStatusMixin, _CometDRecoveryMixin):
                 rolling_baseline = self.get_last_player_status_seen_at(player_id)
 
             try:
-                status = await self.provider.get_player_status(player_id)
+                status = await self._get_player_status(player_id)
             except self._recoverable_errors as err:
                 self._logger.warning(
                     "Fallback status poll %s/%s failed for %s (%s): %s",
@@ -261,8 +271,7 @@ class CometDEventStreamCore(_CometDStatusMixin, _CometDRecoveryMixin):
         self._known_server_player_ids = None
         self._known_server_player_count = None
 
-        for player in self.provider.players:
-            self._pending_player_ids.add(player.player_id)
+        self._pending_player_ids.update(self._get_initial_player_ids())
 
         await self._subscribe_server_status()
 
@@ -386,7 +395,7 @@ class CometDEventStreamCore(_CometDStatusMixin, _CometDRecoveryMixin):
             self._status_by_player.pop(player_id, None)
             self.mark_player_removed(player_id)
             await self._emit_normalized_player_events(events)
-            self.provider.schedule_players_discovery()
+            self._schedule_players_discovery()
             return
 
         assert merged is not None

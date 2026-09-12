@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import Any
+from logging import Logger
 
 from pylyrion.cometd.helpers import LmsPlayerEventCallback
 from pylyrion.cometd.player_status_events import NormalizedPlayerStatusEvent
 from pylyrion.cometd.stream_core import CometDEventStreamCore
 
 PostMessagesCallback = Callable[[list[dict[str, object]], int], Awaitable[list[dict[str, object]]]]
+GetPlayerStatusCallback = Callable[[str], Awaitable[dict[str, object]]]
+GetPlayerIdsCallback = Callable[[], set[str]]
+DiscoveryCallback = Callable[[], None]
+ServerStatusCallback = Callable[[dict[str, object]], None]
+StopCallback = Callable[[], bool]
 
 
 class _CometDStatusRuntime(CometDEventStreamCore):
@@ -17,18 +22,28 @@ class _CometDStatusRuntime(CometDEventStreamCore):
 
     def __init__(
         self,
-        provider: Any,
         *,
         post_messages: PostMessagesCallback,
         recoverable_errors: tuple[type[Exception], ...],
         events_callback: Callable[[list[NormalizedPlayerStatusEvent]], Awaitable[None]],
+        should_stop: StopCallback,
+        logger: Logger,
+        get_player_status: GetPlayerStatusCallback,
+        get_initial_player_ids: GetPlayerIdsCallback,
+        get_current_player_ids: GetPlayerIdsCallback,
+        schedule_players_discovery: DiscoveryCallback,
+        apply_server_player_connection_state: ServerStatusCallback,
     ) -> None:
         """Initialize private runtime wiring."""
         super().__init__(
-            provider=provider,
             recoverable_errors=recoverable_errors,
-            should_stop=lambda: provider.unloading,
-            logger=provider.logger,
+            should_stop=should_stop,
+            logger=logger,
+            get_player_status=get_player_status,
+            get_initial_player_ids=get_initial_player_ids,
+            get_current_player_ids=get_current_player_ids,
+            schedule_players_discovery=schedule_players_discovery,
+            apply_server_player_connection_state=apply_server_player_connection_state,
         )
         self._post_messages = post_messages
         self._events_callback = events_callback
@@ -54,26 +69,43 @@ class PlayerStatusStream:
 
     def __init__(
         self,
-        provider: Any,
         *,
         post_messages: PostMessagesCallback,
         recoverable_errors: tuple[type[Exception], ...],
+        should_stop: StopCallback,
+        logger: Logger,
+        get_player_status: GetPlayerStatusCallback,
+        get_initial_player_ids: GetPlayerIdsCallback,
+        get_current_player_ids: GetPlayerIdsCallback,
+        schedule_players_discovery: DiscoveryCallback,
+        apply_server_player_connection_state: ServerStatusCallback,
     ) -> None:
         """
         Initialize high-level status stream.
 
-        :param provider: Provider-like owner object used for status/recovery helpers.
         :param post_messages: Callback used to POST Bayeux messages.
         :param recoverable_errors: Errors that should trigger reconnect/retry behavior.
+        :param should_stop: Callback returning True when runtime should stop.
+        :param logger: Logger used for stream runtime warnings.
+        :param get_player_status: Fetch one player's JSON-RPC status payload.
+        :param get_initial_player_ids: Return initial player ids to subscribe.
+        :param get_current_player_ids: Return current runtime player ids.
+        :param schedule_players_discovery: Schedule player rediscovery.
+        :param apply_server_player_connection_state: Apply serverstatus connection hints.
         """
-        self.provider = provider
-        self._logger = provider.logger
+        self._logger = logger
         self._subscribers: list[LmsPlayerEventCallback] = []
         self._runtime = _CometDStatusRuntime(
-            provider=provider,
             post_messages=post_messages,
             recoverable_errors=recoverable_errors,
             events_callback=self._dispatch_normalized_events,
+            should_stop=should_stop,
+            logger=logger,
+            get_player_status=get_player_status,
+            get_initial_player_ids=get_initial_player_ids,
+            get_current_player_ids=get_current_player_ids,
+            schedule_players_discovery=schedule_players_discovery,
+            apply_server_player_connection_state=apply_server_player_connection_state,
         )
 
     def start(self) -> None:

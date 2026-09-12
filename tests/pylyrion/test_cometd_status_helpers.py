@@ -75,6 +75,7 @@ def _build_provider(
     provider.get_configured_host = MagicMock(return_value=host)
     provider.get_configured_port = MagicMock(return_value=port)
     provider.get_player_status = AsyncMock(return_value={})
+    provider.schedule_players_discovery = MagicMock()
     return provider
 
 
