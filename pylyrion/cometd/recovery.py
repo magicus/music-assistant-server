@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Coroutine
 from contextlib import suppress
+from logging import Logger
 from typing import Any
 
 from .constants import (
@@ -38,6 +40,7 @@ class _CometDRecoveryMixin:
     _status_seen_at: dict[str, float]
     _track_end_expectations: dict[str, object]
     _expectation_recovery_inflight: set[str]
+    _logger: Logger
 
     def get_last_player_status_seen_at(self, player_id: str) -> float | None: ...
 
@@ -56,6 +59,12 @@ class _CometDRecoveryMixin:
     async def _listener_loop(self) -> None: ...
 
     async def _watchdog_loop(self) -> None: ...
+
+    def _create_background_task(
+        self,
+        target: Coroutine[Any, Any, None],
+        task_name: str,
+    ) -> asyncio.Task[None]: ...
 
     def _next_expectation_delay(self) -> float:
         """Compute next loop delay using inverse backoff near track end."""
@@ -153,7 +162,7 @@ class _CometDRecoveryMixin:
         if not stale_player_ids:
             return
 
-        self.provider.logger.warning(
+        self._logger.warning(
             "CometD playerstatus stale for %s",
             ", ".join(stale_player_ids),
         )
@@ -176,7 +185,7 @@ class _CometDRecoveryMixin:
         if client_id is None:
             return
 
-        self.provider.logger.warning(
+        self._logger.warning(
             "Restarting CometD session after stale playerstatus for %s",
             ", ".join(stale_player_ids),
         )
@@ -185,9 +194,15 @@ class _CometDRecoveryMixin:
             self._task.cancel()
             with suppress(asyncio.CancelledError):
                 await self._task
-        self._task = self.provider.mass.create_task(self._listener_loop())
+        self._task = self._create_background_task(
+            self._listener_loop(),
+            task_name="pylyrion-cometd-listener",
+        )
         if self._watchdog_task is None or self._watchdog_task.done():
-            self._watchdog_task = self.provider.mass.create_task(self._watchdog_loop())
+            self._watchdog_task = self._create_background_task(
+                self._watchdog_loop(),
+                task_name="pylyrion-cometd-watchdog",
+            )
 
     async def _refresh_stale_player_subscriptions(
         self,
@@ -203,7 +218,7 @@ class _CometDRecoveryMixin:
         if not stale_player_ids:
             return
 
-        self.provider.logger.warning(
+        self._logger.warning(
             "CometD playerstatus went stale for %s; resubscribing",
             ", ".join(stale_player_ids),
         )

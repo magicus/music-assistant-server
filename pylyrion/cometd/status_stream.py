@@ -27,6 +27,8 @@ class _CometDStatusRuntime(CometDEventStreamCore):
         super().__init__(
             provider=provider,
             recoverable_errors=recoverable_errors,
+            should_stop=lambda: provider.unloading,
+            logger=provider.logger,
         )
         self._post_messages = post_messages
         self._events_callback = events_callback
@@ -65,6 +67,7 @@ class PlayerStatusStream:
         :param recoverable_errors: Errors that should trigger reconnect/retry behavior.
         """
         self.provider = provider
+        self._logger = provider.logger
         self._subscribers: list[LmsPlayerEventCallback] = []
         self._runtime = _CometDStatusRuntime(
             provider=provider,
@@ -147,7 +150,7 @@ class PlayerStatusStream:
                 try:
                     await callback(event)
                 except Exception as err:
-                    self.provider.logger.warning(
+                    self._logger.warning(
                         "Status event handling failed for %s: %s",
                         getattr(event, "player_id", "unknown"),
                         err,

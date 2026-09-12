@@ -28,6 +28,8 @@ class LyrionCometDEventStream(CometDEventStreamCore):
         super().__init__(
             provider=provider,
             recoverable_errors=(ProviderUnavailableError, LyrionRequestError),
+            should_stop=lambda: provider.unloading,
+            logger=provider.logger,
         )
         self._event_callback = event_callback
 

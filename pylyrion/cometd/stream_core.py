@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from contextlib import suppress
+from logging import Logger
 from typing import Any
 
 from pylyrion.cometd.bayeux_client import BayeuxClient
@@ -34,15 +35,21 @@ class CometDEventStreamCore(_CometDStatusMixin, _CometDRecoveryMixin):
         self,
         provider: Any,
         recoverable_errors: tuple[type[Exception], ...],
+        should_stop: Callable[[], bool],
+        logger: Logger,
     ) -> None:
         """
         Initialize CometD stream core.
 
         :param provider: Provider-like owner object used for status/recovery helpers.
         :param recoverable_errors: Errors that should trigger reconnect/retry behavior.
+        :param should_stop: Callback returning True when runtime should stop.
+        :param logger: Logger used by CometD runtime internals.
         """
         self.provider = provider
         self._recoverable_errors = recoverable_errors
+        self._should_stop = should_stop
+        self._logger = logger
         self._bayeux = BayeuxClient(self._post)
         self._task: asyncio.Task[None] | None = None
         self._watchdog_task: asyncio.Task[None] | None = None
@@ -62,15 +69,51 @@ class CometDEventStreamCore(_CometDStatusMixin, _CometDRecoveryMixin):
         """Start background stream/watchdog/expectation tasks."""
         if self._task is not None and not self._task.done():
             if self._watchdog_task is None or self._watchdog_task.done():
-                self._watchdog_task = self.provider.mass.create_task(self._watchdog_loop())
+                self._watchdog_task = self._create_background_task(
+                    self._watchdog_loop(),
+                    task_name="pylyrion-cometd-watchdog",
+                )
             if self._expectation_task is None or self._expectation_task.done():
-                self._expectation_task = self.provider.mass.create_task(self._expectation_loop())
+                self._expectation_task = self._create_background_task(
+                    self._expectation_loop(),
+                    task_name="pylyrion-cometd-expectation",
+                )
             return
-        self._task = self.provider.mass.create_task(self._listener_loop())
+        self._task = self._create_background_task(
+            self._listener_loop(),
+            task_name="pylyrion-cometd-listener",
+        )
         if self._watchdog_task is None or self._watchdog_task.done():
-            self._watchdog_task = self.provider.mass.create_task(self._watchdog_loop())
+            self._watchdog_task = self._create_background_task(
+                self._watchdog_loop(),
+                task_name="pylyrion-cometd-watchdog",
+            )
         if self._expectation_task is None or self._expectation_task.done():
-            self._expectation_task = self.provider.mass.create_task(self._expectation_loop())
+            self._expectation_task = self._create_background_task(
+                self._expectation_loop(),
+                task_name="pylyrion-cometd-expectation",
+            )
+
+    def _create_background_task(
+        self,
+        target: Coroutine[Any, Any, None],
+        task_name: str,
+    ) -> asyncio.Task[None]:
+        """Create one internal background task and surface failures in logs."""
+        task = asyncio.create_task(target, name=task_name)
+        task.add_done_callback(self._handle_background_task_done)
+        return task
+
+    def _handle_background_task_done(self, task: asyncio.Task[None]) -> None:
+        """Log unexpected background task failures."""
+        if task.cancelled():
+            return
+        if err := task.exception():
+            self._logger.warning(
+                "Exception in task %s: %s",
+                task.get_name(),
+                err,
+            )
 
     async def stop(self) -> None:
         """Stop background tasks, disconnect best-effort and clear session state."""
@@ -130,7 +173,7 @@ class CometDEventStreamCore(_CometDStatusMixin, _CometDRecoveryMixin):
             if _is_satisfied(self.get_player_status_snapshot(player_id)):
                 return True
 
-        self.provider.logger.warning(
+        self._logger.warning(
             "No CometD confirmation for %s (%s) within %ss; polling LMS up to %s times",
             player_id,
             expected_state,
@@ -152,7 +195,7 @@ class CometDEventStreamCore(_CometDStatusMixin, _CometDRecoveryMixin):
             try:
                 status = await self.provider.get_player_status(player_id)
             except self._recoverable_errors as err:
-                self.provider.logger.warning(
+                self._logger.warning(
                     "Fallback status poll %s/%s failed for %s (%s): %s",
                     attempt + 1,
                     len(COMETD_COMMAND_STATUS_BACKOFF),
@@ -167,7 +210,7 @@ class CometDEventStreamCore(_CometDStatusMixin, _CometDRecoveryMixin):
             if _is_satisfied(self.get_player_status_snapshot(player_id)):
                 return True
 
-        self.provider.logger.warning(
+        self._logger.warning(
             "No CometD status confirmation for %s (%s) after %s fallback polls",
             player_id,
             expected_state,
@@ -178,35 +221,35 @@ class CometDEventStreamCore(_CometDStatusMixin, _CometDRecoveryMixin):
     async def _listener_loop(self) -> None:
         """Keep one CometD session alive and reconnect on failures."""
         while True:
-            if self.provider.unloading:
+            if self._should_stop():
                 return
             try:
                 await self._run_session()
             except self._recoverable_errors as err:
-                self.provider.logger.debug("CometD listener cycle failed: %s", err)
+                self._logger.debug("CometD listener cycle failed: %s", err)
 
             self._reset_session_state()
-            if self.provider.unloading:
+            if self._should_stop():
                 return
             await asyncio.sleep(COMETD_RETRY_DELAY)
 
     async def _watchdog_loop(self) -> None:
         """Periodically heal stale playerstatus subscriptions."""
         while True:
-            if self.provider.unloading:
+            if self._should_stop():
                 return
             await asyncio.sleep(COMETD_STATUS_WATCHDOG_INTERVAL)
-            if self.provider.unloading:
+            if self._should_stop():
                 return
             await self._run_watchdog_tick()
 
     async def _expectation_loop(self) -> None:
         """Monitor implicit state expectations that should resolve without commands."""
         while True:
-            if self.provider.unloading:
+            if self._should_stop():
                 return
             await asyncio.sleep(self._next_expectation_delay())
-            if self.provider.unloading:
+            if self._should_stop():
                 return
             await self._run_expectation_tick()
 
@@ -226,7 +269,7 @@ class CometDEventStreamCore(_CometDStatusMixin, _CometDRecoveryMixin):
         await self._bayeux.run_connect_loop(
             client_id=client_id,
             connect_timeout=COMETD_CONNECT_TIMEOUT,
-            should_stop=lambda: self.provider.unloading,
+            should_stop=self._should_stop,
             message_handler=self._handle_message,
             pre_connect_hook=self._flush_pending_player_subscriptions,
         )
