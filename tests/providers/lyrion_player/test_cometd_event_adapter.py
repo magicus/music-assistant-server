@@ -30,11 +30,51 @@ MODE_MAP = {
 def _build_adapter(provider: MagicMock) -> LyrionCometDEventAdapter:
     """Build pylyrion adapter configured for MA playback-state semantics."""
     return LyrionCometDEventAdapter(
-        provider,
         mode_map=MODE_MAP,
         idle_state=PlaybackState.IDLE,
-        is_supported_player=lambda player: isinstance(player, LyrionPlayer),
+        is_supported_player=lambda _player: True,
+        get_player=provider.get_runtime_player,
+        iter_players=provider.iter_runtime_players,
+        sync_player_queue=provider.sync_lms_queue_to_ma,
+        update_player_state=lambda runtime_player: runtime_player.update_state(),
     )
+
+
+class _RuntimePlayer:
+    """Test adapter from MA player to pylyrion runtime player protocol."""
+
+    def __init__(self, player: LyrionPlayer) -> None:
+        self.player = player
+
+    @property
+    def player_id(self) -> str:
+        return self.player.player_id
+
+    @property
+    def group_members(self) -> list[str]:
+        return list(self.player.group_members)
+
+    def set_available(self, available: bool) -> None:
+        self.player._attr_available = available
+
+    def set_playback_state(self, playback_state: object) -> None:
+        self.player._attr_playback_state = playback_state
+
+    def set_powered(self, powered: bool) -> None:
+        self.player._attr_powered = powered
+
+    def set_volume_level(self, volume_level: int) -> None:
+        self.player._attr_volume_level = volume_level
+
+    def set_elapsed_time(self, elapsed_time: float, updated_at: float) -> None:
+        self.player._attr_elapsed_time = elapsed_time
+        self.player._attr_elapsed_time_last_updated = updated_at
+
+    def set_group_members(self, group_members: list[str]) -> None:
+        self.player._attr_group_members = group_members
+
+    def update_state(self) -> None:
+        self.player.update_state()
 
 
 def _build_provider_and_players() -> tuple[MagicMock, LyrionPlayer, LyrionPlayer]:
@@ -64,6 +104,24 @@ def _build_provider_and_players() -> tuple[MagicMock, LyrionPlayer, LyrionPlayer
     player_by_id[leader.player_id] = leader
     player_by_id[child.player_id] = child
     provider.players = [leader, child]
+    runtime_by_id: dict[str, _RuntimePlayer] = {
+        leader.player_id: _RuntimePlayer(leader),
+        child.player_id: _RuntimePlayer(child),
+    }
+
+    def _get_runtime_player(player_id: str) -> _RuntimePlayer | None:
+        return runtime_by_id.get(player_id)
+
+    provider.get_runtime_player = MagicMock(side_effect=_get_runtime_player)
+    provider.iter_runtime_players = MagicMock(side_effect=lambda: tuple(runtime_by_id.values()))
+
+    async def _sync_lms_queue_to_ma(player_id: str) -> None:
+        runtime_player = runtime_by_id.get(player_id)
+        if runtime_player is None:
+            return
+        await runtime_player.player.sync_queue_from_lms()
+
+    provider.sync_lms_queue_to_ma = AsyncMock(side_effect=_sync_lms_queue_to_ma)
 
     return provider, leader, child
 
@@ -72,9 +130,11 @@ def test_apply_status_maps_sync_slaves_to_group_members() -> None:
     """Leader status with sync_slaves should surface as MA group_members."""
     provider, leader, _child = _build_provider_and_players()
     adapter = _build_adapter(provider)
+    runtime_leader = provider.get_runtime_player("leader")
+    assert runtime_leader is not None
 
     adapter.apply_status(
-        leader,
+        runtime_leader,
         {
             "mode": "play",
             "sync_slaves": "child",
@@ -88,12 +148,14 @@ def test_apply_status_refreshes_related_players_on_topology_change() -> None:
     """Topology changes should trigger related-player state refresh."""
     provider, leader, child = _build_provider_and_players()
     adapter = _build_adapter(provider)
+    runtime_leader = provider.get_runtime_player("leader")
+    assert runtime_leader is not None
 
     original_child_update_state = child.update_state
     child.update_state = MagicMock(side_effect=original_child_update_state)
 
     adapter.apply_status(
-        leader,
+        runtime_leader,
         {
             "mode": "play",
             "sync_slaves": [{"playerid": "child"}],
@@ -101,7 +163,7 @@ def test_apply_status_refreshes_related_players_on_topology_change() -> None:
     )
 
     adapter.apply_status(
-        leader,
+        runtime_leader,
         {
             "mode": "stop",
         },
@@ -115,9 +177,11 @@ def test_apply_status_invalid_player_marks_unavailable() -> None:
     """Invalid-player payload should mark player unavailable and return early."""
     provider, leader, _child = _build_provider_and_players()
     adapter = _build_adapter(provider)
+    runtime_leader = provider.get_runtime_player("leader")
+    assert runtime_leader is not None
 
     leader._attr_available = True
-    adapter.apply_status(leader, {"error": "invalid player"})
+    adapter.apply_status(runtime_leader, {"error": "invalid player"})
 
     assert leader.available is False
 
@@ -126,9 +190,11 @@ def test_apply_status_maps_runtime_fields_and_clamps_volume() -> None:
     """Normal status payload should map playback, power, volume and elapsed time."""
     provider, leader, _child = _build_provider_and_players()
     adapter = _build_adapter(provider)
+    runtime_leader = provider.get_runtime_player("leader")
+    assert runtime_leader is not None
 
     adapter.apply_status(
-        leader,
+        runtime_leader,
         {
             "mode": "play",
             "player_connected": 1,
@@ -173,7 +239,9 @@ def test_apply_status_unknown_mode_defaults_to_idle() -> None:
     """Unknown LMS modes should map to idle playback state."""
     provider, leader, _child = _build_provider_and_players()
     adapter = _build_adapter(provider)
-    adapter.apply_status(leader, {"mode": "something-odd"})
+    runtime_leader = provider.get_runtime_player("leader")
+    assert runtime_leader is not None
+    adapter.apply_status(runtime_leader, {"mode": "something-odd"})
     assert leader._attr_playback_state == PlaybackState.IDLE
 
 
@@ -221,7 +289,7 @@ async def test_handle_event_ignores_non_lyrion_player() -> None:
     """Adapter should ignore events when target player is absent or wrong type."""
     provider, _leader, _child = _build_provider_and_players()
     adapter = _build_adapter(provider)
-    provider.mass.players.get_player = MagicMock(return_value=object())
+    provider.get_runtime_player = MagicMock(return_value=None)
 
     await adapter.handle_event(
         PlayerStatusUpdated(

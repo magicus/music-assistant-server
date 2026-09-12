@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from collections.abc import Callable
 from contextlib import suppress
 from typing import Any, cast
@@ -23,14 +22,9 @@ from music_assistant.providers.lyrion.client import get_configured_basic_auth
 from music_assistant.providers.lyrion.setup_flow import validate_lms_endpoint
 from pylyrion.client import LyrionClient
 from pylyrion.cometd.constants import COMETD_COMMAND_STATUS_VERIFY_TIMEOUT
-from pylyrion.cometd.player_status_events import (
-    NormalizedPlayerStatusEvent,
-    PlayerPlaylistChanged,
-    PlayerRepeatChanged,
-    PlayerShuffleChanged,
-    PlayerStatusUpdated,
-)
+from pylyrion.cometd.player_status_events import NormalizedPlayerStatusEvent
 from pylyrion.cometd.transport import build_cometd_post_messages_callback
+from pylyrion.cometd_event_adapter import LyrionCometDEventAdapter
 from pylyrion.errors import LyrionRequestError
 from pylyrion.models import LyrionEndpoint
 from pylyrion.player import LyrionPlayerClient
@@ -71,6 +65,16 @@ class LyrionPlayerProvider(PlayerProvider):
         self._unsubscribe_status_events = None
         self._discover_players_task: asyncio.Task[None] | None = None
         self._discover_players_again = False
+        self._runtime_players: dict[str, _ProviderRuntimePlayer] = {}
+        self._event_adapter = LyrionCometDEventAdapter(
+            mode_map=MODE_MAP,
+            idle_state=PlaybackState.IDLE,
+            is_supported_player=lambda _player: True,
+            get_player=self._get_runtime_player,
+            iter_players=self._iter_runtime_players,
+            sync_player_queue=self._sync_lms_queue_to_ma,
+            update_player_state=self._update_runtime_player_state,
+        )
         self._status_stream = PlayerStatusStream(
             post_messages=build_cometd_post_messages_callback(
                 get_session=self._build_pylyrion_session,
@@ -238,10 +242,22 @@ class LyrionPlayerProvider(PlayerProvider):
         for known_player in self.players:
             if known_player.player_id not in seen_player_ids:
                 self._status_stream.mark_player_removed(known_player.player_id)
+                runtime_players = cast(
+                    "dict[str, _ProviderRuntimePlayer] | None",
+                    getattr(self, "_runtime_players", None),
+                )
+                if runtime_players is not None:
+                    runtime_players.pop(known_player.player_id, None)
                 await self.mass.players.unregister(known_player.player_id)
 
     async def remove_player(self, player_id: str) -> None:
         """Remove a player from MA."""
+        runtime_players = cast(
+            "dict[str, _ProviderRuntimePlayer] | None",
+            getattr(self, "_runtime_players", None),
+        )
+        if runtime_players is not None:
+            runtime_players.pop(player_id, None)
         await self.mass.players.unregister(player_id, True)
 
     async def get_player_status(self, player_id: str) -> dict[str, Any]:
@@ -475,132 +491,14 @@ class LyrionPlayerProvider(PlayerProvider):
 
     async def _handle_status_event(self, event: NormalizedPlayerStatusEvent) -> None:
         """Apply one normalized player-status event from pylyrion."""
-        player = self.mass.players.get_player(event.player_id)
-        if not isinstance(player, LyrionPlayer):
-            return
-
-        if isinstance(event, PlayerStatusUpdated):
-            self._apply_status_update(player, event.status)
-            if event.is_initial:
-                await player.sync_queue_from_lms()
-            return
-
-        if isinstance(event, (PlayerPlaylistChanged, PlayerRepeatChanged, PlayerShuffleChanged)):
-            await player.sync_queue_from_lms()
+        await self._event_adapter.handle_event(event)
 
     def _apply_status_update(self, player: LyrionPlayer, status: dict[str, Any]) -> None:
         """Apply one normalized player status payload to a MA player."""
-        if (connected := status.get("player_connected")) is not None:
-            player._attr_available = bool(int(connected))
-        else:
-            player._attr_available = True
-
-        mode = str(status.get("mode") or "stop")
-        player._attr_playback_state = MODE_MAP.get(mode, PlaybackState.IDLE)
-
-        if "power" in status:
-            with suppress(TypeError, ValueError):
-                player._attr_powered = bool(int(status["power"]))
-
-        if "mixer volume" in status:
-            with suppress(TypeError, ValueError):
-                player._attr_volume_level = max(
-                    0,
-                    min(100, int(status["mixer volume"])),
-                )
-
-        if "time" in status:
-            with suppress(TypeError, ValueError):
-                player._attr_elapsed_time = float(status["time"])
-                player._attr_elapsed_time_last_updated = time.time()
-
-        previous_group_members = tuple(player.group_members)
-        player._attr_group_members = self._extract_group_members(player.player_id, status)
-
-        player.update_state()
-
-        if previous_group_members != tuple(player.group_members):
-            self._refresh_related_group_players(
-                player,
-                set(previous_group_members),
-                set(player.group_members),
-                status,
-            )
-
-    def _extract_group_members(self, player_id: str, status: dict[str, Any]) -> list[str]:
-        """Extract MA group members from a normalized status payload."""
-        sync_slaves = self._extract_sync_slaves(status)
-        if sync_slaves:
-            members = [member_id for member_id in sync_slaves if member_id != player_id]
-            return [player_id, *members] if members else []
-
-        sync_master = self._extract_sync_master(status)
-        if sync_master and sync_master != player_id:
-            return []
-        return []
-
-    def _extract_sync_master(self, status: dict[str, Any]) -> str | None:
-        """Extract sync-master player id from a normalized status payload."""
-        for key in ("sync_master", "sync_master_id", "sync_master_playerid"):
-            raw_value = status.get(key)
-            if raw_value in (None, "", "-"):
-                continue
-            if isinstance(raw_value, dict):
-                if player_id := raw_value.get("playerid"):
-                    return str(player_id)
-                continue
-            return str(raw_value)
-        return None
-
-    def _extract_sync_slaves(self, status: dict[str, Any]) -> list[str]:
-        """Extract sync-slave player ids from a normalized status payload."""
-        for key in ("sync_slaves", "sync_slaves_loop"):
-            raw_value = status.get(key)
-            if not raw_value:
-                continue
-
-            result: list[str] = []
-            if isinstance(raw_value, str):
-                for part in raw_value.split(","):
-                    value = part.strip()
-                    if value:
-                        result.append(value)
-            elif isinstance(raw_value, list):
-                for item in raw_value:
-                    if isinstance(item, dict):
-                        if player_id := item.get("playerid"):
-                            result.append(str(player_id))
-                    elif item:
-                        result.append(str(item))
-
-            deduped = list(dict.fromkeys(result))
-            if deduped:
-                return deduped
-        return []
-
-    def _refresh_related_group_players(
-        self,
-        player: LyrionPlayer,
-        previous_members: set[str],
-        current_members: set[str],
-        status: dict[str, Any],
-    ) -> None:
-        """Refresh players affected by a group topology change."""
-        related_ids = (previous_members | current_members) - {player.player_id}
-
-        if sync_master := self._extract_sync_master(status):
-            if sync_master != player.player_id:
-                related_ids.add(sync_master)
-
-        for provider_player in self.players:
-            if provider_player.player_id == player.player_id:
-                continue
-            if player.player_id in provider_player.group_members:
-                related_ids.add(provider_player.player_id)
-
-        for related_id in related_ids:
-            if related_player := self.mass.players.get_player(related_id):
-                related_player.update_state()
+        self._event_adapter.apply_status(
+            self._runtime_player_from_ma(player),
+            status,
+        )
 
     async def _handle_get_stream_url(
         self,
@@ -691,6 +589,49 @@ class LyrionPlayerProvider(PlayerProvider):
         """Return player ids currently registered by this provider."""
         return {player.player_id for player in self.players}
 
+    def _runtime_player_from_ma(
+        self,
+        player: LyrionPlayer,
+    ) -> _ProviderRuntimePlayer:
+        """Return a pylyrion-neutral runtime player wrapper for one MA player."""
+        wrapper = self._runtime_players.get(player.player_id)
+        if wrapper is None:
+            wrapper = _ProviderRuntimePlayer(player)
+            self._runtime_players[player.player_id] = wrapper
+        else:
+            wrapper.player = player
+        return wrapper
+
+    def _get_runtime_player(
+        self,
+        player_id: str,
+    ) -> _ProviderRuntimePlayer | None:
+        """Resolve one runtime player wrapper by MA player id."""
+        player = self.mass.players.get_player(player_id)
+        if not isinstance(player, LyrionPlayer):
+            return None
+        if player.provider.instance_id != self.instance_id:
+            return None
+        return self._runtime_player_from_ma(player)
+
+    def _iter_runtime_players(self) -> tuple[_ProviderRuntimePlayer, ...]:
+        """Iterate pylyrion-neutral wrappers for provider-owned MA players."""
+        return tuple(self._runtime_player_from_ma(player) for player in self.players)
+
+    async def _sync_lms_queue_to_ma(self, player_id: str) -> None:
+        """Run MA queue-mirror sync callback for one player id."""
+        player = self.mass.players.get_player(player_id)
+        if not isinstance(player, LyrionPlayer):
+            return
+        if player.provider.instance_id != self.instance_id:
+            return
+        await player._queue_sync.sync_lms_queue_to_ma()
+
+    @staticmethod
+    def _update_runtime_player_state(player: _ProviderRuntimePlayer) -> None:
+        """Publish state from runtime wrapper back into MA."""
+        player.update_state()
+
     def _apply_server_player_connection_state(
         self,
         payload: dict[str, object],
@@ -755,3 +696,50 @@ __all__ = [
     "PLAYERS_BATCH_SIZE",
     "LyrionPlayerProvider",
 ]
+
+
+class _ProviderRuntimePlayer:
+    """Provider-local adapter from MA player to pylyrion runtime player API."""
+
+    def __init__(self, player: LyrionPlayer) -> None:
+        """Store MA player reference for runtime adaptation."""
+        self.player = player
+
+    @property
+    def player_id(self) -> str:
+        """Return stable runtime player id."""
+        return self.player.player_id
+
+    @property
+    def group_members(self) -> list[str]:
+        """Return current runtime group member ids."""
+        return list(self.player.group_members)
+
+    def set_available(self, available: bool) -> None:
+        """Apply runtime availability state."""
+        self.player._attr_available = available
+
+    def set_playback_state(self, playback_state: object) -> None:
+        """Apply runtime playback state."""
+        self.player._attr_playback_state = cast("PlaybackState", playback_state)
+
+    def set_powered(self, powered: bool) -> None:
+        """Apply runtime powered state."""
+        self.player._attr_powered = powered
+
+    def set_volume_level(self, volume_level: int) -> None:
+        """Apply runtime volume level state."""
+        self.player._attr_volume_level = volume_level
+
+    def set_elapsed_time(self, elapsed_time: float, updated_at: float) -> None:
+        """Apply runtime elapsed-time state."""
+        self.player._attr_elapsed_time = elapsed_time
+        self.player._attr_elapsed_time_last_updated = updated_at
+
+    def set_group_members(self, group_members: list[str]) -> None:
+        """Apply runtime group membership state."""
+        self.player._attr_group_members = group_members
+
+    def update_state(self) -> None:
+        """Publish updated runtime state to MA."""
+        self.player.update_state()
