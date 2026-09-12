@@ -5,12 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 from aiohttp import ClientError, ClientTimeout
-from music_assistant_models.errors import MusicAssistantError, ProviderUnavailableError
 
 from pylyrion.cometd.helpers import LmsPlayerEventCallback
 from pylyrion.cometd.player_status_events import NormalizedPlayerStatusEvent
 from pylyrion.cometd.stream_core import CometDEventStreamCore
-from pylyrion.errors import LyrionRequestError
+from pylyrion.errors import LyrionError, LyrionRequestError
 from pylyrion.session import build_lms_url
 
 
@@ -36,7 +35,7 @@ class LyrionCometDEventStream(CometDEventStreamCore):
             return {player.player_id for player in players if getattr(player, "player_id", None)}
 
         super().__init__(
-            recoverable_errors=(ProviderUnavailableError, LyrionRequestError),
+            recoverable_errors=(LyrionRequestError,),
             should_stop=lambda: provider.unloading,
             logger=provider.logger,
             get_player_status=provider.get_player_status,
@@ -58,7 +57,7 @@ class LyrionCometDEventStream(CometDEventStreamCore):
     async def _emit_event(self, event: object) -> None:
         try:
             await self._event_callback(event)
-        except MusicAssistantError as err:
+        except LyrionError as err:
             self._provider.logger.warning(
                 "Status event handling failed for %s: %s",
                 getattr(event, "player_id", "unknown"),
@@ -72,10 +71,10 @@ class LyrionCometDEventStream(CometDEventStreamCore):
     ) -> list[dict[str, object]]:
         host = self._provider.get_configured_host()
         if not host:
-            raise ProviderUnavailableError("Lyrion host is not configured")
+            raise LyrionRequestError("Lyrion host is not configured")
         port = self._provider.get_configured_port()
         if port is None:
-            raise ProviderUnavailableError("Lyrion port is not configured")
+            raise LyrionRequestError("Lyrion port is not configured")
 
         url = build_lms_url(host, port, "/cometd")
         try:
@@ -87,12 +86,12 @@ class LyrionCometDEventStream(CometDEventStreamCore):
                 response.raise_for_status()
                 payload = await response.json()
         except (ClientError, TimeoutError, ValueError) as err:
-            raise ProviderUnavailableError(
+            raise LyrionRequestError(
                 f"CometD request to {host}:{port} failed: {err}"
             ) from err
 
         if isinstance(payload, dict):
             return [payload]
         if not isinstance(payload, list):
-            raise ProviderUnavailableError("CometD response must be a JSON object or list")
+            raise LyrionRequestError("CometD response must be a JSON object or list")
         return [message for message in payload if isinstance(message, dict)]

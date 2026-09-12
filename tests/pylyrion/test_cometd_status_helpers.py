@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from aiohttp import ClientError
-from music_assistant_models.errors import ProviderUnavailableError
+from pylyrion.errors import LyrionRequestError
 
 from pylyrion.cometd.helpers import (
     _extract_current_track_id,
@@ -139,7 +139,7 @@ async def test_post_rejects_missing_endpoint_configuration() -> None:
         cast("Any", provider_no_host),
         _noop_event_callback,
     )
-    with pytest.raises(ProviderUnavailableError, match="host"):
+    with pytest.raises(LyrionRequestError, match="host"):
         await stream._post([], timeout=1)
 
     provider_no_port = _build_provider(host="127.0.0.1", port=None)
@@ -147,7 +147,7 @@ async def test_post_rejects_missing_endpoint_configuration() -> None:
         cast("Any", provider_no_port),
         _noop_event_callback,
     )
-    with pytest.raises(ProviderUnavailableError, match="port"):
+    with pytest.raises(LyrionRequestError, match="port"):
         await stream._post([], timeout=1)
 
 
@@ -180,9 +180,9 @@ async def test_post_wraps_transport_and_payload_errors() -> None:
         cast("Any", provider),
         _noop_event_callback,
     )
-    with pytest.raises(ProviderUnavailableError):
+    with pytest.raises(LyrionRequestError):
         await stream._post([{"id": "1"}], timeout=1)
 
     provider.mass.http_session.post.return_value = _FakeResponse("invalid")
-    with pytest.raises(ProviderUnavailableError, match="JSON object or list"):
+    with pytest.raises(LyrionRequestError, match="JSON object or list"):
         await stream._post([{"id": "2"}], timeout=1)
